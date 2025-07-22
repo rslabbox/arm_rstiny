@@ -3,7 +3,6 @@
 #![feature(alloc_error_handler)]
 
 extern crate alloc;
-use alloc::vec::Vec;
 use log::info;
 
 mod allocator;
@@ -15,58 +14,8 @@ mod utils;
 #[no_mangle]
 pub extern "C" fn rust_main() -> ! {
     console::log_init();
-    info!("ARM RSTiny2 - Rust Bare Metal OS");
-    info!("================================");
-
-    // 初始化堆内存分配器
-    info!("Initializing heap allocator...");
     allocator::init_heap();
-    info!("Heap allocator initialized successfully!");
-
-    // 测试内存分配 - 创建 Vec
-    info!("\nTesting memory allocation with Vec:");
-
-    let mut numbers: Vec<i32> = Vec::new();
-    info!("Created empty Vec");
-
-    info!("Float Number: {}", 3.14);
-
-    // 向 Vec 中添加元素
-    for i in 1..=10 {
-        numbers.push(i * i);
-        info!("Added {} to Vec, current length: {}", i * i, numbers.len());
-    }
-
-    info!("\nVec contents:");
-    for (index, value) in numbers.iter().enumerate() {
-        info!("  numbers[{}] = {}", index, value);
-    }
-
-    info!("\nVec capacity: {}", numbers.capacity());
-    info!("Vec length: {}", numbers.len());
-
-    // 测试更多内存分配
-    info!("\nCreating another Vec with strings:");
-    let mut strings: Vec<&str> = Vec::new();
-    strings.push("Hello");
-    strings.push("from");
-    strings.push("Rust");
-    strings.push("bare");
-    strings.push("metal");
-    strings.push("OS!");
-
-    print!("Message: ");
-    for (i, s) in strings.iter().enumerate() {
-        if i > 0 {
-            print!(" ");
-        }
-        print!("{}", s);
-    }
-    println!();
-
-    info!("\n=== System running successfully! ===");
-    info!("Memory allocator working correctly!");
-    info!("UART output functioning at 0x0900_0000");
+    info!("ARM RSTiny - Rust Bare Metal OS");
 
     utils::system_shutdown();
 }
