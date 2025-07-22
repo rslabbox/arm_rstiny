@@ -1,0 +1,10 @@
+{
+    "rust-analyzer.cargo.target": "aarch64-unknown-none-softfloat",
+    "rust-analyzer.check.allTargets": false,
+    "rust-analyzer.cargo.extraEnv": {
+        "RUSTFLAGS": "--cfg platform_family=\"aarch64-qemu-virt\""
+    },
+    "rust-analyzer.server.extraEnv": {
+        "CARGO_REGISTRIES_CRATES_IO_PROTOCOL": "sparse"
+    }
+}
