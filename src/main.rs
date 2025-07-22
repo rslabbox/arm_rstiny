@@ -4,6 +4,7 @@
 
 extern crate alloc;
 use alloc::vec::Vec;
+use log::{error, info};
 use core::{arch::asm, panic::PanicInfo};
 
 mod allocator;
@@ -14,36 +15,37 @@ core::arch::global_asm!(include_str!("boot.s"));
 
 #[no_mangle]
 pub extern "C" fn rust_main() -> ! {
-    println!("ARM RSTiny2 - Rust Bare Metal OS");
-    println!("================================");
+    console::log_init();
+    info!("ARM RSTiny2 - Rust Bare Metal OS");
+    info!("================================");
 
     // 初始化堆内存分配器
-    println!("Initializing heap allocator...");
+    info!("Initializing heap allocator...");
     allocator::init_heap();
-    println!("Heap allocator initialized successfully!");
+    info!("Heap allocator initialized successfully!");
 
     // 测试内存分配 - 创建 Vec
-    println!("\nTesting memory allocation with Vec:");
+    info!("\nTesting memory allocation with Vec:");
 
     let mut numbers: Vec<i32> = Vec::new();
-    println!("Created empty Vec");
+    info!("Created empty Vec");
 
     // 向 Vec 中添加元素
     for i in 1..=10 {
         numbers.push(i * i);
-        println!("Added {} to Vec, current length: {}", i * i, numbers.len());
+        info!("Added {} to Vec, current length: {}", i * i, numbers.len());
     }
 
-    println!("\nVec contents:");
+    info!("\nVec contents:");
     for (index, value) in numbers.iter().enumerate() {
-        println!("  numbers[{}] = {}", index, value);
+        info!("  numbers[{}] = {}", index, value);
     }
 
-    println!("\nVec capacity: {}", numbers.capacity());
-    println!("Vec length: {}", numbers.len());
+    info!("\nVec capacity: {}", numbers.capacity());
+    info!("Vec length: {}", numbers.len());
 
     // 测试更多内存分配
-    println!("\nCreating another Vec with strings:");
+    info!("\nCreating another Vec with strings:");
     let mut strings: Vec<&str> = Vec::new();
     strings.push("Hello");
     strings.push("from");
@@ -61,9 +63,9 @@ pub extern "C" fn rust_main() -> ! {
     }
     println!();
 
-    println!("\n=== System running successfully! ===");
-    println!("Memory allocator working correctly!");
-    println!("UART output functioning at 0x0900_0000");
+    info!("\n=== System running successfully! ===");
+    info!("Memory allocator working correctly!");
+    info!("UART output functioning at 0x0900_0000");
 
     // 进入无限循环
     system_shutdown();
@@ -71,7 +73,7 @@ pub extern "C" fn rust_main() -> ! {
 
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
-    println!("PANIC: {}", info);
+    error!("PANIC: {}", info);
     loop {
         core::hint::spin_loop();
     }
@@ -80,7 +82,7 @@ fn panic(info: &PanicInfo) -> ! {
 const PSCI_SYSTEM_OFF: usize = 0x84000008;
 #[inline]
 fn system_shutdown() -> ! {
-    println!("Shutting down system...");
+    info!("Shutting down system...");
     unsafe {
         asm!("hvc #0", in("x0") PSCI_SYSTEM_OFF, in("x1") 0, in("x2") 0, in("x3") 0);
     }

@@ -1,5 +1,6 @@
 use core::alloc::Layout;
 use linked_list_allocator::LockedHeap;
+use log::info;
 
 #[global_allocator]
 static ALLOCATOR: LockedHeap = LockedHeap::empty();
@@ -15,7 +16,7 @@ pub fn init_heap() {
         let heap_end = &__heap_end as *const u8 as usize;
         let heap_size = heap_end - heap_start;
 
-        crate::println!(
+        info!(
             "Heap: 0x{:x} - 0x{:x} (size: {} bytes)",
             heap_start,
             heap_end,

@@ -6,6 +6,7 @@ MODE := debug
 TARGET = aarch64-unknown-none-softfloat
 BINARY = target/$(TARGET)/$(MODE)/$(PROJECT_NAME)
 KERNEL_BIN = $(PROJECT_NAME).bin
+LOG := info
 
 ifeq ($(MODE), release)
 	MODE_ARG := --release
@@ -22,6 +23,8 @@ QEMU_ARGS = -machine virt \
 
 # 编译选项
 CARGO_FLAGS = $(MODE_ARG) --target $(TARGET)
+
+export LOG
 
 .PHONY: all build run clean help install-target
 

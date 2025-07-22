@@ -23,9 +23,6 @@ clear_bss:
     b clear_bss
 clear_bss_done:
 
-    mov x8, #97
-    mov x9, #0x09000000 //串口地址，需要变化
-    str x8, [x9]
     // 跳转到 Rust main 函数
     bl rust_main
     
