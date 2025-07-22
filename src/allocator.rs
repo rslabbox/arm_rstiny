@@ -5,9 +5,9 @@ use log::info;
 #[global_allocator]
 static ALLOCATOR: LockedHeap = LockedHeap::empty();
 
-extern "C" {
-    static __heap_start: u8;
-    static __heap_end: u8;
+unsafe extern "C" {
+    unsafe static __heap_start: u8;
+    unsafe static __heap_end: u8;
 }
 
 pub fn init_heap() {
@@ -17,10 +17,10 @@ pub fn init_heap() {
         let heap_size = heap_end - heap_start;
 
         info!(
-            "Heap: 0x{:x} - 0x{:x} (size: {} bytes)",
+            "Heap: 0x{:x} - 0x{:x} (size: {} MB)",
             heap_start,
             heap_end,
-            heap_size
+            heap_size / (1024 * 1024)
         );
 
         ALLOCATOR.lock().init(heap_start as *mut u8, heap_size);

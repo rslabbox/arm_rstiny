@@ -8,6 +8,14 @@ _start:
     mov x8, #10
     str x8, [x9]
 
+    msr daifset, #2   // 关闭所有中断
+
+    adrp    x0, exception_vector_base
+    add     x0, x0, :lo12:exception_vector_base
+    msr     vbar_el1, x0
+    dsb     sy      // 确保所有内存访问完成
+    isb             // 确保所有指令都执行完成
+
     // 设置栈指针
     ldr x0, =__stack_end
     mov sp, x0
@@ -23,10 +31,8 @@ clear_bss:
     b clear_bss
 clear_bss_done:
 
-    // 跳转到 Rust main 函数
     bl rust_main
     
-    // 如果 main 返回，进入无限循环
 halt:
     wfe
     b halt

@@ -1,4 +1,4 @@
-# ARM RSTiny2 - Rust Bare Metal OS Makefile
+# ARM RSTiny - Rust Bare Metal OS Makefile
 
 # 项目配置
 PROJECT_NAME = arm_rstiny
@@ -15,7 +15,7 @@ endif
 # QEMU 配置
 QEMU = qemu-system-aarch64
 QEMU_ARGS = -machine virt \
-            -cpu cortex-a53 \
+            -cpu cortex-a72 \
             -smp 1 \
             -m 128M \
             -nographic \
@@ -71,7 +71,7 @@ check-deps:
 
 # 显示帮助信息
 help:
-	@echo "ARM RSTiny2 - Rust Bare Metal OS"
+	@echo "ARM RSTiny - Rust Bare Metal OS"
 	@echo "================================="
 	@echo ""
 	@echo "Available targets:"

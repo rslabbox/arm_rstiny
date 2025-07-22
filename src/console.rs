@@ -3,8 +3,8 @@ use core::fmt;
 use core::fmt::Write;
 use kspin::SpinNoIrq;
 use log::{Level, LevelFilter, Log, Metadata, Record};
+use crate::config::PL011_UART_BASE;
 
-static PL011_UART_BASE: usize = 0x0900_0000; // Base address for PL011 UART, as per the configuration.
 static UART: SpinNoIrq<Pl011Uart> = SpinNoIrq::new(Pl011Uart::new(PL011_UART_BASE as *mut u8));
 
 /// Writes a byte to the console.

@@ -4,14 +4,13 @@
 
 extern crate alloc;
 use alloc::vec::Vec;
-use log::{error, info};
-use core::{arch::asm, panic::PanicInfo};
+use log::info;
 
 mod allocator;
 mod console;
+mod config;
+mod utils;
 
-// 引入汇编启动代码
-core::arch::global_asm!(include_str!("boot.s"));
 
 #[no_mangle]
 pub extern "C" fn rust_main() -> ! {
@@ -29,6 +28,8 @@ pub extern "C" fn rust_main() -> ! {
 
     let mut numbers: Vec<i32> = Vec::new();
     info!("Created empty Vec");
+
+    info!("Float Number: {}", 3.14);
 
     // 向 Vec 中添加元素
     for i in 1..=10 {
@@ -67,27 +68,6 @@ pub extern "C" fn rust_main() -> ! {
     info!("Memory allocator working correctly!");
     info!("UART output functioning at 0x0900_0000");
 
-    // 进入无限循环
-    system_shutdown();
+    utils::system_shutdown();
 }
 
-#[panic_handler]
-fn panic(info: &PanicInfo) -> ! {
-    error!("PANIC: {}", info);
-    loop {
-        core::hint::spin_loop();
-    }
-}
-
-const PSCI_SYSTEM_OFF: usize = 0x84000008;
-#[inline]
-fn system_shutdown() -> ! {
-    info!("Shutting down system...");
-    unsafe {
-        asm!("hvc #0", in("x0") PSCI_SYSTEM_OFF, in("x1") 0, in("x2") 0, in("x3") 0);
-    }
-
-    loop {
-        core::hint::spin_loop();
-    }
-}
