@@ -1,7 +1,7 @@
 # ARM RSTiny2 - Rust Bare Metal OS Makefile
 
 # 项目配置
-PROJECT_NAME = arm_rstiny2
+PROJECT_NAME = arm_rstiny
 MODE := debug
 TARGET = aarch64-unknown-none-softfloat
 BINARY = target/$(TARGET)/$(MODE)/$(PROJECT_NAME)
