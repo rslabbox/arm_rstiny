@@ -7,6 +7,7 @@ TARGET = aarch64-unknown-none-softfloat
 BINARY = target/$(TARGET)/$(MODE)/$(PROJECT_NAME)
 KERNEL_BIN = $(PROJECT_NAME).bin
 LOG := info
+DISK_IMG := test.img
 
 ifeq ($(MODE), release)
 	MODE_ARG := --release
@@ -14,12 +15,12 @@ endif
 
 # QEMU 配置
 QEMU = qemu-system-aarch64
-QEMU_ARGS = -machine virt \
-            -cpu cortex-a72 \
-            -smp 1 \
-            -m 128M \
-            -nographic \
-            -kernel $(BINARY)
+QEMU_ARGS = -M virt -cpu cortex-a72 -m 4G \
+			-nographic  -kernel $(BINARY) \
+			-device virtio-blk-device,drive=test \
+			-drive file=test.img,if=none,id=test,format=raw,cache=none \
+			-device virtio-net-device,netdev=net0 \
+			-netdev user,id=net0
 
 # 编译选项
 CARGO_FLAGS = $(MODE_ARG) --target $(TARGET)
@@ -60,6 +61,11 @@ clean:
 install-target:
 	@echo "Installing Rust target: $(TARGET)"
 	rustup target add $(TARGET)
+
+disk_img:
+	@printf "    $(GREEN_C)Creating$(END_C) FAT32 disk image \"$(DISK_IMG)\" ...\n"
+	@dd if=/dev/zero of=$(DISK_IMG) bs=1M count=64
+	@mkfs.fat -F 32 $(DISK_IMG)
 
 # 检查依赖
 check-deps:
