@@ -6,17 +6,18 @@ extern crate alloc;
 use log::info;
 
 mod allocator;
-mod console;
 mod config;
+mod console;
 mod utils;
 
-
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn rust_main() -> ! {
+    // 初始化控制台和日志系统
     console::log_init();
+
+    // 初始化堆分配器
     allocator::init_heap();
     info!("ARM RSTiny - Rust Bare Metal OS");
 
     utils::system_shutdown();
 }
-
