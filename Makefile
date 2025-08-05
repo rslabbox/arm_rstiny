@@ -20,7 +20,7 @@ QEMU = qemu-system-aarch64
 QEMU_ARGS = -M virt -cpu cortex-a72 -m 4G \
 			-nographic  -kernel $(kernel_elf) \
 			-device virtio-blk-device,drive=test \
-			-drive file=test.img,if=none,id=test,format=raw,cache=none \
+			-drive file=$(DISK_IMG),if=none,id=test,format=raw,cache=none \
 			-device virtio-net-device,netdev=net0 \
 			-netdev user,id=net0
 

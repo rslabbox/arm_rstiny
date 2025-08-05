@@ -2,4 +2,4 @@
 target = "aarch64-unknown-none-softfloat"
 
 [target.aarch64-unknown-none-softfloat]
-rustflags = ["-C", "link-arg=-Tlinker.ld", "-C", "target-cpu=cortex-a53"]
+rustflags = ["-C", "link-arg=-Tlink.lds", "-C", "target-cpu=cortex-a72"]
