@@ -8,7 +8,7 @@ use log::info;
 mod allocator;
 mod config;
 mod console;
-mod utils;
+mod arch;
 
 #[unsafe(no_mangle)]
 pub extern "C" fn rust_main() -> ! {
@@ -19,5 +19,5 @@ pub extern "C" fn rust_main() -> ! {
     allocator::init_heap();
     info!("ARM RSTiny - Rust Bare Metal OS");
 
-    utils::system_shutdown();
+    arch::system_shutdown();
 }
