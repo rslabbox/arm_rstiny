@@ -1,7 +1,7 @@
 use core::arch::global_asm;
 
-use cortex_a::registers::{ESR_EL1, VBAR_EL1};
-use tock_registers::interfaces::{Readable, Writeable};
+use aarch64_cpu::registers::{ESR_EL1, VBAR_EL1};
+use aarch64_cpu::registers::{Readable, Writeable};
 
 use super::TrapFrame;
 

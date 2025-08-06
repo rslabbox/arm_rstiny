@@ -1,5 +1,3 @@
-use core::fmt;
-
 use memory_addr::PhysAddr;
 
 use crate::{
@@ -160,22 +158,5 @@ impl PageTableEntry {
     pub fn new_table(paddr: PhysAddr) -> Self {
         let attr = DescriptorAttr::NON_BLOCK | DescriptorAttr::VALID;
         Self(attr.bits() | (paddr.as_usize() & Self::PHYS_ADDR_MASK) as u64)
-    }
-    pub fn paddr(&self) -> PhysAddr {
-        PhysAddr::from_usize(self.0 as usize & Self::PHYS_ADDR_MASK)
-    }
-    pub fn flags(&self) -> MemFlags {
-        DescriptorAttr::from_bits_truncate(self.0).into()
-    }
-}
-
-impl fmt::Debug for PageTableEntry {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let mut f = f.debug_struct("PageTableEntry");
-        f.field("raw", &self.0)
-            .field("paddr", &self.paddr())
-            .field("attr", &DescriptorAttr::from_bits_truncate(self.0))
-            .field("flags", &self.flags())
-            .finish()
     }
 }

@@ -1,6 +1,6 @@
-use cortex_a::{asm, asm::barrier, registers::*};
+use aarch64_cpu::{asm, asm::barrier, registers::*};
 use memory_addr::PhysAddr;
-use tock_registers::interfaces::{ReadWriteable, Readable, Writeable};
+use aarch64_cpu::registers::{ReadWriteable, Readable, Writeable};
 
 use crate::arch::PageTableEntry;
 use crate::arch::instructions;
@@ -77,7 +77,7 @@ unsafe fn init_mmu() {
         + TCR_EL1::IRGN1::WriteBack_ReadAlloc_WriteAlloc_Cacheable
         + TCR_EL1::T1SZ.val(16);
     TCR_EL1.write(TCR_EL1::IPS::Bits_40 + tcr_flags0 + tcr_flags1);
-    unsafe { barrier::isb(barrier::SY) };
+    barrier::isb(barrier::SY);
 
     // Set both TTBR0 and TTBR1
     #[allow(static_mut_refs)]
@@ -90,7 +90,7 @@ unsafe fn init_mmu() {
 
     // Enable the MMU and turn on I-cache and D-cache
     SCTLR_EL1.modify(SCTLR_EL1::M::Enable + SCTLR_EL1::C::Cacheable + SCTLR_EL1::I::Cacheable);
-    unsafe { barrier::isb(barrier::SY) };
+    barrier::isb(barrier::SY);
 }
 
 #[allow(static_mut_refs)]
