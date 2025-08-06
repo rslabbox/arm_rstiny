@@ -1,12 +1,11 @@
 mod address;
-mod frame_allocator;
 mod heap_allocator;
 // mod memory_set;
 mod uaccess;
 
 pub mod paging;
 
-pub use address::{PhysAddr, VirtAddr};
+pub use address::{PhysAddr};
 
 pub const PAGE_SIZE: usize = 0x1000;
 
@@ -22,9 +21,4 @@ bitflags::bitflags! {
 
 pub fn init_heap_early() {
     heap_allocator::init_heap();
-}
-
-pub fn init() {
-    frame_allocator::init_frame_allocator();
-    // memory_set::init_kernel_aspace();
 }

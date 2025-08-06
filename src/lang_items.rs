@@ -1,5 +1,7 @@
-use crate::drivers::misc::shutdown;
+// use crate::drivers::misc::shutdown;
 use core::panic::PanicInfo;
+
+use crate::utils::shutdown;
 
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
