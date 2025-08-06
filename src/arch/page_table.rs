@@ -2,8 +2,7 @@ use core::fmt;
 
 use memory_addr::PhysAddr;
 
-use crate::config::PA_MAX_BITS;
-use crate::mm::{MemFlags,  PAGE_SIZE};
+use crate::{config::PA_MAX_BITS, utils::heap_allocator::{MemFlags, PAGE_SIZE}};
 
 bitflags::bitflags! {
     /// Memory attribute fields in the VMSAv8-64 translation table format descriptors.

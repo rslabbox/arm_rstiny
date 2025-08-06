@@ -1,5 +1,5 @@
-#![cfg_attr(not(test), no_std)]
-#![cfg_attr(not(test), no_main)]
+#![no_std]
+#![no_main]
 #![feature(alloc_error_handler)]
 #![feature(get_mut_unchecked)]
 
@@ -10,14 +10,10 @@ extern crate alloc;
 #[macro_use]
 extern crate log;
 
-#[macro_use]
-mod logging;
+use utils::logging;
 
 mod arch;
 mod config;
-mod mm;
-mod platform;
-mod lang_items;
 mod utils;
 mod test;
 
@@ -36,7 +32,7 @@ fn clear_bss() {
 pub fn rust_main() -> ! {
     clear_bss();
 
-    mm::heap_allocator::init_heap();
+    utils::heap_allocator::init_heap();
     logging::log_init();
     info!("Logging is enabled.");
 
