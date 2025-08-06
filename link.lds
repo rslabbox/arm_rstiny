@@ -49,7 +49,7 @@ SECTIONS
 
     . = ALIGN(64);
     __heap_start = .;
-    . += 0x1000000; /* 16MB VirtIO */
+    . += 0x1000000; /* 16MB */
     __heap_end = .;
 
     /* 确保整个镜像结束时也是4K对齐 */

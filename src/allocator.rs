@@ -16,14 +16,14 @@ pub fn init_heap() {
         let heap_end = &__heap_end as *const u8 as usize;
         let heap_size = heap_end - heap_start;
 
+        ALLOCATOR.lock().init(heap_start as *mut u8, heap_size);
+
         info!(
             "Heap: 0x{:x} - 0x{:x} (size: {} MB)",
             heap_start,
             heap_end,
             heap_size / (1024 * 1024)
         );
-
-        ALLOCATOR.lock().init(heap_start as *mut u8, heap_size);
     }
 }
 
