@@ -2,10 +2,10 @@ use cortex_a::{asm, asm::barrier, registers::*};
 use memory_addr::PhysAddr;
 use tock_registers::interfaces::{ReadWriteable, Readable, Writeable};
 
-use super::heap_allocator::MemFlags;
 use crate::arch::PageTableEntry;
 use crate::arch::instructions;
 use crate::config::BOOT_KERNEL_STACK_SIZE;
+use crate::utils::heap_allocator::MemFlags;
 
 #[unsafe(link_section = ".bss.stack")]
 static mut BOOT_STACK: [u8; BOOT_KERNEL_STACK_SIZE] = [0; BOOT_KERNEL_STACK_SIZE];

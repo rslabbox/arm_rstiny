@@ -11,12 +11,13 @@ xmas-elf = "0.8"
 bit_field = "0.10"
 tock-registers = { version = "0.7", default-features = false, features = ["register_types"] }
 memoffset = { version = "0.6", features = ["unstable_const"] }
-buddy_system_allocator = { version = "0.8", default-features = false }
+buddy_system_allocator = { version = "0.11", default-features = false }
 cortex-a = "7.2"
 arm_pl011 = "0.1"
 kspin = "0.1"
 memory_addr = "0.4"
-
+linked_list_allocator = "0.10"
+talc = "4.4.3"
 
 [profile.dev]
 panic = "abort"

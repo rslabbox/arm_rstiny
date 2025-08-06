@@ -14,8 +14,8 @@ use utils::logging;
 
 mod arch;
 mod config;
-mod utils;
 mod test;
+mod utils;
 
 fn clear_bss() {
     unsafe extern "C" {

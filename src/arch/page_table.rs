@@ -2,7 +2,10 @@ use core::fmt;
 
 use memory_addr::PhysAddr;
 
-use crate::{config::PA_MAX_BITS, utils::heap_allocator::{MemFlags, PAGE_SIZE}};
+use crate::{
+    config::PA_MAX_BITS,
+    utils::heap_allocator::{MemFlags, PAGE_SIZE},
+};
 
 bitflags::bitflags! {
     /// Memory attribute fields in the VMSAv8-64 translation table format descriptors.
@@ -62,7 +65,7 @@ enum MemType {
 }
 
 impl DescriptorAttr {
-    const ATTR_INDEX_MASK: u64 = 0b111_00;
+    const ATTR_INDEX_MASK: u64 = 0b1_1100;
 
     const fn from_mem_type(mem_type: MemType) -> Self {
         let mut bits = (mem_type as u64) << 2;
@@ -139,7 +142,7 @@ impl From<MemFlags> for DescriptorAttr {
 pub struct PageTableEntry(u64);
 
 impl PageTableEntry {
-    const PHYS_ADDR_MASK: usize = (1 << PA_MAX_BITS) - 1 & !(PAGE_SIZE - 1);
+    const PHYS_ADDR_MASK: usize = ((1 << PA_MAX_BITS) - 1) & !(PAGE_SIZE - 1);
 
     pub const fn empty() -> Self {
         Self(0)

@@ -1,10 +1,6 @@
-use buddy_system_allocator::Heap;
-use kspin::SpinNoIrq;
-use core::alloc::{GlobalAlloc, Layout};
-use core::mem::size_of;
-use core::ptr::NonNull;
+use core::alloc::Layout;
+use linked_list_allocator::LockedHeap;
 
-use crate::config::KERNEL_HEAP_SIZE;
 use crate::println;
 
 pub const PAGE_SIZE: usize = 0x1000;
@@ -19,49 +15,31 @@ bitflags::bitflags! {
     }
 }
 
-struct LockedHeap(SpinNoIrq<Heap<32>>);
-
-impl LockedHeap {
-    pub const fn empty() -> Self {
-        LockedHeap(SpinNoIrq::new(Heap::<32>::new()))
-    }
-
-    pub fn init(&self, start: usize, size: usize) {
-        unsafe { self.0.lock().init(start, size) };
-    }
-}
-
-unsafe impl GlobalAlloc for LockedHeap {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        self.0
-            .lock()
-            .alloc(layout)
-            .ok()
-            .map_or(core::ptr::null_mut(), |allocation| allocation.as_ptr())
-    }
-
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        self.0.lock().dealloc(unsafe { NonNull::new_unchecked(ptr) }, layout)
-    }
-}
-#[cfg_attr(not(test), global_allocator)]
+#[global_allocator]
 static HEAP_ALLOCATOR: LockedHeap = LockedHeap::empty();
 
-#[cfg_attr(not(test), alloc_error_handler)]
+#[alloc_error_handler]
 pub fn handle_alloc_error(layout: Layout) -> ! {
     panic!("Heap allocation error, layout = {:?}", layout);
 }
 
-static mut HEAP_SPACE: [u64; KERNEL_HEAP_SIZE / size_of::<u64>()] =
-    [0; KERNEL_HEAP_SIZE / size_of::<u64>()];
+unsafe extern "C" {
+    unsafe static __heap_start: u8;
+    unsafe static __heap_end: u8;
+}
 
 pub fn init_heap() {
-    #[allow(static_mut_refs)]
-    let heap_start = unsafe { HEAP_SPACE.as_ptr() as usize };
-    println!(
-        "Initializing kernel heap at: [{:#x}, {:#x})",
-        heap_start,
-        heap_start + KERNEL_HEAP_SIZE
-    );
-    HEAP_ALLOCATOR.init(heap_start, KERNEL_HEAP_SIZE);
+    unsafe {
+        let heap_start = &__heap_start as *const u8 as usize;
+        let heap_end = &__heap_end as *const u8 as usize;
+        let heap_size = heap_end - heap_start;
+
+        println!(
+            "Initializing kernel heap at: ({:#x}, {:#x}), size: {}MB",
+            heap_start,
+            heap_end,
+            heap_size / (1024 * 1024)
+        );
+        HEAP_ALLOCATOR.lock().init(heap_start as *mut u8, heap_size);
+    }
 }

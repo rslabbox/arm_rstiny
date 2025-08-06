@@ -123,7 +123,7 @@ impl AllocatorTestSuite {
                 if passed {
                     // Test clear
                     vec.clear();
-                    if vec.len() != 0 {
+                    if !vec.is_empty() {
                         passed = false;
                         error_msg = Some("Vec clear operation failed");
                     }
@@ -281,7 +281,7 @@ impl AllocatorTestSuite {
 
         // Test zero-size Vec
         let empty_vec: Vec<u32> = Vec::new();
-        if empty_vec.len() != 0 {
+        if !empty_vec.is_empty() {
             passed = false;
             error_msg = Some("Zero-size Vec failed");
         }
@@ -289,7 +289,7 @@ impl AllocatorTestSuite {
         if passed {
             // Test empty string
             let empty_string = String::new();
-            if empty_string.len() != 0 {
+            if !empty_string.is_empty() {
                 passed = false;
                 error_msg = Some("Empty string failed");
             }
@@ -297,7 +297,7 @@ impl AllocatorTestSuite {
             if passed {
                 // Test zero-size array
                 let zero_array: Vec<u8> = vec![];
-                if zero_array.len() != 0 {
+                if !zero_array.is_empty() {
                     passed = false;
                     error_msg = Some("Zero-size array failed");
                 }
