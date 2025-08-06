@@ -1,23 +1,46 @@
 #![no_std]
 #![no_main]
 #![feature(alloc_error_handler)]
+#![feature(get_mut_unchecked)]
+
+use crate::utils::shutdown;
 
 extern crate alloc;
-use log::info;
 
-mod allocator;
-mod config;
-mod console;
+#[macro_use]
+extern crate log;
+
+use utils::logging;
+
 mod arch;
+mod config;
+mod test;
+mod utils;
+
+fn clear_bss() {
+    unsafe extern "C" {
+        unsafe fn sbss();
+        unsafe fn ebss();
+    }
+    unsafe {
+        core::slice::from_raw_parts_mut(sbss as usize as *mut u8, ebss as usize - sbss as usize)
+            .fill(0);
+    }
+}
 
 #[unsafe(no_mangle)]
-pub extern "C" fn rust_main() -> ! {
-    // 初始化控制台和日志系统
-    console::log_init();
+pub fn rust_main() -> ! {
+    clear_bss();
 
-    // 初始化堆分配器
-    allocator::init_heap();
-    info!("ARM RSTiny - Rust Bare Metal OS");
+    utils::heap_allocator::init_heap();
+    logging::log_init();
+    info!("Logging is enabled.");
 
-    arch::system_shutdown();
+    arch::trap::init();
+
+    info!("Start OK");
+
+    test::run_allocator_tests();
+
+    shutdown();
 }

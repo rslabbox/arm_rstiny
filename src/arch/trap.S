@@ -1,11 +1,10 @@
-
 .macro SAVE_REGS
     sub     sp, sp, 34 * 8
-    stp     x0, x1,   [sp, 2 * 0]
-    stp     x2, x3,   [sp, 2 * 8]
-    stp     x4, x5,   [sp, 4 * 8]
-    stp     x6, x7,   [sp, 6 * 8]
-    stp     x8, x9,   [sp, 8 * 8]
+    stp     x0, x1, [sp]
+    stp     x2, x3, [sp, 2 * 8]
+    stp     x4, x5, [sp, 4 * 8]
+    stp     x6, x7, [sp, 6 * 8]
+    stp     x8, x9, [sp, 8 * 8]
     stp     x10, x11, [sp, 10 * 8]
     stp     x12, x13, [sp, 12 * 8]
     stp     x14, x15, [sp, 14 * 8]
@@ -20,13 +19,13 @@
     mrs     x9, sp_el0
     mrs     x10, elr_el1
     mrs     x11, spsr_el1
-    stp     x30, x9,  [sp, 30 * 8]
+    stp     x30, x9, [sp, 30 * 8]
     stp     x10, x11, [sp, 32 * 8]
 .endm
 
 .macro RESTORE_REGS
     ldp     x10, x11, [sp, 32 * 8]
-    ldp     x30, x9,  [sp, 30 * 8]
+    ldp     x30, x9, [sp, 30 * 8]
     msr     sp_el0, x9
     msr     elr_el1, x10
     msr     spsr_el1, x11
@@ -41,11 +40,11 @@
     ldp     x14, x15, [sp, 14 * 8]
     ldp     x12, x13, [sp, 12 * 8]
     ldp     x10, x11, [sp, 10 * 8]
-    ldp     x8, x9,   [sp, 8 * 8]
-    ldp     x6, x7,   [sp, 6 * 8]
-    ldp     x4, x5,   [sp, 4 * 8]
-    ldp     x2, x3,   [sp, 2 * 8]
-    ldp     x0, x1,   [sp, 0 * 8]
+    ldp     x8, x9, [sp, 8 * 8]
+    ldp     x6, x7, [sp, 6 * 8]
+    ldp     x4, x5, [sp, 4 * 8]
+    ldp     x2, x3, [sp, 2 * 8]
+    ldp     x0, x1, [sp]
     add     sp, sp, 34 * 8
 .endm
 
@@ -78,11 +77,6 @@
 .section .text
 .p2align 11
 .global exception_vector_base
-
-.extern invalid_exception
-.extern handle_sync_exception
-.extern handle_irq_exception
-
 exception_vector_base:
     // current EL, with SP_EL0
     INVALID_EXCP 0 0
@@ -111,4 +105,3 @@ exception_vector_base:
 .Lexception_return:
     RESTORE_REGS
     eret
-
