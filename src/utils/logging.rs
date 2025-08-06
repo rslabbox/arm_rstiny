@@ -1,30 +1,14 @@
-use crate::config::PL011_UART_BASE;
-use arm_pl011::Pl011Uart;
 use core::fmt::Write;
 use core::fmt::{self, Display};
-use kspin::SpinNoIrq;
 use log::{Level, LevelFilter, Log, Metadata, Record};
 
-static UART: SpinNoIrq<Pl011Uart> = SpinNoIrq::new(Pl011Uart::new(PL011_UART_BASE as *mut u8));
-
-/// Writes a byte to the console.
-pub fn console_putchar(c: usize) {
-    let mut uart = UART.lock();
-    match c as u8 {
-        b'\n' => {
-            uart.putchar(b'\r');
-            uart.putchar(b'\n');
-        }
-        c => uart.putchar(c),
-    }
-}
 
 pub struct SimpleLogger;
 
 impl Write for SimpleLogger {
     fn write_str(&mut self, s: &str) -> fmt::Result {
         for c in s.chars() {
-            console_putchar(c as usize);
+            super::console::console_putchar(c as usize);
         }
         Ok(())
     }
