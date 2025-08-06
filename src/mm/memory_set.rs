@@ -9,18 +9,18 @@ use crate::config::{MMIO_REGIONS, PHYS_MEMORY_END};
 use crate::mm::{PhysAddr, VirtAddr};
 use crate::sync::LazyInit;
 
-extern "C" {
-    fn stext();
-    fn etext();
-    fn srodata();
-    fn erodata();
-    fn sdata();
-    fn edata();
-    fn sbss();
-    fn ebss();
-    fn boot_stack();
-    fn boot_stack_top();
-    fn ekernel();
+unsafe extern "C" {
+    unsafe fn stext();
+    unsafe fn etext();
+    unsafe fn srodata();
+    unsafe fn erodata();
+    unsafe fn sdata();
+    unsafe fn edata();
+    unsafe fn sbss();
+    unsafe fn ebss();
+    unsafe fn boot_stack();
+    unsafe fn boot_stack_top();
+    unsafe fn ekernel();
 }
 
 static KERNEL_ASPACE: LazyInit<MemorySet> = LazyInit::new();

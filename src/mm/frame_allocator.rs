@@ -1,6 +1,6 @@
 use alloc::vec::Vec;
 
-use super::{address::virt_to_phys, PhysAddr, PAGE_SIZE};
+use super::{PAGE_SIZE, PhysAddr, address::virt_to_phys};
 use crate::config::PHYS_MEMORY_END;
 use crate::sync::SpinNoIrqLock;
 use crate::utils::allocator::FreeListAllocator;
@@ -52,11 +52,10 @@ impl Drop for PhysFrame {
             .dealloc(self.start_paddr.as_usize() / PAGE_SIZE);
     }
 }
-
+unsafe extern "C" {
+    unsafe fn ekernel();
+}
 pub fn init_frame_allocator() {
-    extern "C" {
-        fn ekernel();
-    }
     let start_paddr = PhysAddr::new(virt_to_phys(ekernel as usize)).align_up();
     let end_paddr = PhysAddr::new(PHYS_MEMORY_END).align_down();
     println!(

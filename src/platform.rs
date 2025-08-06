@@ -6,13 +6,13 @@ use crate::arch::PageTableEntry;
 use crate::config::BOOT_KERNEL_STACK_SIZE;
 use crate::mm::{paging::GenericPTE, MemFlags, PhysAddr};
 
-#[link_section = ".bss.stack"]
+#[unsafe(link_section = ".bss.stack")]
 static mut BOOT_STACK: [u8; BOOT_KERNEL_STACK_SIZE] = [0; BOOT_KERNEL_STACK_SIZE];
 
-#[link_section = ".data.boot_page_table"]
+#[unsafe(link_section = ".data.boot_page_table")]
 static mut BOOT_PT_L0: [PageTableEntry; 512] = [PageTableEntry::empty(); 512];
 
-#[link_section = ".data.boot_page_table"]
+#[unsafe(link_section = ".data.boot_page_table")]
 static mut BOOT_PT_L1: [PageTableEntry; 512] = [PageTableEntry::empty(); 512];
 
 unsafe fn switch_to_el1() {
@@ -47,7 +47,8 @@ unsafe fn switch_to_el1() {
                 + SPSR_EL2::I::Masked
                 + SPSR_EL2::F::Masked,
         );
-        SP_EL1.set(BOOT_STACK.as_ptr_range().end as u64);
+        #[allow(static_mut_refs)]
+        SP_EL1.set(unsafe {  BOOT_STACK.as_ptr_range().end } as u64);
         ELR_EL2.set(LR.get());
         asm::eret();
     }
@@ -78,7 +79,8 @@ unsafe fn init_mmu() {
     barrier::isb(barrier::SY);
 
     // Set both TTBR0 and TTBR1
-    let root_paddr = PhysAddr::new(BOOT_PT_L0.as_ptr() as _).as_usize() as _;
+    #[allow(static_mut_refs)]
+    let root_paddr = PhysAddr::new(unsafe { BOOT_PT_L0.as_ptr() } as _).as_usize() as _;
     TTBR0_EL1.set(root_paddr);
     TTBR1_EL1.set(root_paddr);
 
@@ -90,6 +92,7 @@ unsafe fn init_mmu() {
     barrier::isb(barrier::SY);
 }
 
+#[allow(static_mut_refs)]
 unsafe fn init_boot_page_table() {
     // 0x0000_0000_0000 ~ 0x0080_0000_0000, table
     BOOT_PT_L0[0] = PageTableEntry::new_table(PhysAddr::new(BOOT_PT_L1.as_ptr() as usize));
@@ -108,8 +111,8 @@ unsafe fn init_boot_page_table() {
 }
 
 #[unsafe(naked)]
-#[no_mangle]
-#[link_section = ".text.boot"]
+#[unsafe(no_mangle)]
+#[unsafe(link_section = ".text.boot")]
 unsafe extern "C" fn _start() -> ! {
     // PC = 0x4008_0000
     core::arch::naked_asm!("

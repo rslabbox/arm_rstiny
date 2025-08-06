@@ -1,14 +1,12 @@
 #![cfg_attr(not(test), no_std)]
 #![cfg_attr(not(test), no_main)]
-#![feature(asm_const, naked_functions)]
-#![feature(panic_info_message, alloc_error_handler)]
-#![feature(const_refs_to_cell)]
-#![feature(const_maybe_uninit_zeroed)]
+#![feature(alloc_error_handler)]
 #![feature(get_mut_unchecked)]
 
+use crate::drivers::misc::shutdown;
+
 extern crate alloc;
-#[macro_use]
-extern crate cfg_if;
+
 #[macro_use]
 extern crate log;
 
@@ -19,18 +17,17 @@ mod arch;
 mod config;
 mod drivers;
 mod mm;
-// mod percpu;
 mod platform;
 mod sync;
-// mod task;
 mod lang_items;
 mod timer;
 mod utils;
+mod test;
 
 fn clear_bss() {
-    extern "C" {
-        fn sbss();
-        fn ebss();
+    unsafe extern "C" {
+        unsafe fn sbss();
+        unsafe fn ebss();
     }
     unsafe {
         core::slice::from_raw_parts_mut(sbss as usize as *mut u8, ebss as usize - sbss as usize)
@@ -51,14 +48,14 @@ NN   NN  iii  mmm  mm  mm  bbbbbb    OOOO0    SSSSS
            /____/ \____/  /____/ /____/
 ";
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub fn rust_main() -> ! {
     clear_bss();
     drivers::init_early();
     println!("{}", LOGO);
 
     mm::init_heap_early();
-    logging::init();
+    logging::log_init();
     info!("Logging is enabled.");
 
     arch::init();
@@ -70,5 +67,7 @@ pub fn rust_main() -> ! {
 
     info!("Start OK");
 
-    loop {}
+    test::run_allocator_tests();
+
+    shutdown();
 }

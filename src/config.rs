@@ -1,5 +1,6 @@
 pub use crate::arch::config::*;
 
+pub const PL011_UART_BASE: usize = 0x0900_0000;
 pub const KERNEL_BASE_PADDR: usize = 0x4008_0000;
 pub const KERNEL_BASE_VADDR: usize = 0xffff_0000_4008_0000;
 pub const PHYS_MEMORY_BASE: usize = 0x4000_0000;

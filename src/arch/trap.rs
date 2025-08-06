@@ -1,17 +1,16 @@
 use core::arch::global_asm;
 
-use cortex_a::registers::{ESR_EL1, FAR_EL1, VBAR_EL1};
+use cortex_a::registers::{ESR_EL1, VBAR_EL1};
 use tock_registers::interfaces::{Readable, Writeable};
 
 use super::TrapFrame;
 
 global_asm!(include_str!("trap.S"));
-
+unsafe extern "C" {
+    unsafe fn exception_vector_base();
+}
 pub fn init() {
-    extern "C" {
-        fn exception_vector_base();
-    }
-    VBAR_EL1.set(exception_vector_base as usize as _);
+    // VBAR_EL1.set(exception_vector_base as usize as _);
 }
 
 #[repr(u8)]
@@ -34,7 +33,7 @@ enum TrapSource {
     LowerAArch32 = 3,
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 fn invalid_exception(tf: &mut TrapFrame, kind: TrapKind, source: TrapSource) {
     panic!(
         "Invalid exception {:?} from {:?}:\n{:#x?}",
@@ -42,7 +41,7 @@ fn invalid_exception(tf: &mut TrapFrame, kind: TrapKind, source: TrapSource) {
     );
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 fn handle_sync_exception(tf: &mut TrapFrame) {
     let esr = ESR_EL1.extract();
     trace!(
@@ -55,7 +54,7 @@ fn handle_sync_exception(tf: &mut TrapFrame) {
     );
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 fn handle_irq_exception(_tf: &mut TrapFrame) {
     trace!("IRQ");
 }

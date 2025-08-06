@@ -1,30 +1,54 @@
-use core::fmt::{self, Write};
+use crate::config::PL011_UART_BASE;
+use arm_pl011::Pl011Uart;
+use core::fmt::Write;
+use core::fmt::{self, Display};
+use kspin::SpinNoIrq;
+use log::{Level, LevelFilter, Log, Metadata, Record};
 
-use log::{self, Level, LevelFilter, Log, Metadata, Record};
+static UART: SpinNoIrq<Pl011Uart> = SpinNoIrq::new(Pl011Uart::new(PL011_UART_BASE as *mut u8));
 
-use crate::drivers::uart::console_putchar;
-use crate::sync::Mutex;
+/// Writes a byte to the console.
+pub fn console_putchar(c: usize) {
+    let mut uart = UART.lock();
+    match c as u8 {
+        b'\n' => {
+            uart.putchar(b'\r');
+            uart.putchar(b'\n');
+        }
+        c => uart.putchar(c),
+    }
+}
 
-struct Stdout;
+pub struct SimpleLogger;
 
-static PRINT_LOCK: Mutex<()> = Mutex::new(());
-
-impl Write for Stdout {
+impl Write for SimpleLogger {
     fn write_str(&mut self, s: &str) -> fmt::Result {
         for c in s.chars() {
-            match c {
-                '\n' => {
-                    console_putchar(b'\r');
-                    console_putchar(b'\n');
-                }
-                _ => console_putchar(c as u8),
-            }
+            console_putchar(c as usize);
         }
         Ok(())
     }
 }
 
-pub fn init() {
+// 实现 print! 和 println! 宏
+#[macro_export]
+macro_rules! print {
+    ($($arg:tt)*) => {
+        $crate::logging::_print(format_args!($($arg)*))
+    };
+}
+
+#[macro_export]
+macro_rules! println {
+    () => ($crate::print!("\n"));
+    ($($arg:tt)*) => ($crate::print!("{}\n", format_args!($($arg)*)));
+}
+
+pub fn _print(args: fmt::Arguments) {
+    SimpleLogger.write_fmt(args).unwrap();
+}
+
+pub fn log_init() {
     static LOGGER: SimpleLogger = SimpleLogger;
     log::set_logger(&LOGGER).unwrap();
     log::set_max_level(match option_env!("LOG") {
@@ -37,54 +61,25 @@ pub fn init() {
     });
 }
 
-pub fn print(args: fmt::Arguments) {
-    let _locked = PRINT_LOCK.lock();
-    Stdout.write_fmt(args).unwrap();
-}
-
-#[macro_export]
-macro_rules! print {
-    ($fmt: literal $(, $($arg: tt)+)?) => {
-        $crate::logging::print(format_args!($fmt $(, $($arg)+)?));
-    }
-}
-
-#[macro_export]
-macro_rules! println {
-    () => { print!("\n") };
-    ($fmt: literal $(, $($arg: tt)+)?) => {
-        $crate::logging::print(format_args!(concat!($fmt, "\n") $(, $($arg)+)?));
-    }
-}
-
-macro_rules! with_color {
-    ($color_code:expr, $($arg:tt)*) => {{
-        format_args!("\u{1B}[{}m{}\u{1B}[m", $color_code as u8, format_args!($($arg)*))
-    }};
-}
-
 #[repr(u8)]
-#[allow(dead_code)]
-enum ColorCode {
-    Black = 30,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ColorCode {
     Red = 31,
     Green = 32,
     Yellow = 33,
-    Blue = 34,
-    Magenta = 35,
     Cyan = 36,
-    White = 37,
     BrightBlack = 90,
     BrightRed = 91,
     BrightGreen = 92,
     BrightYellow = 93,
-    BrightBlue = 94,
-    BrightMagenta = 95,
     BrightCyan = 96,
-    BrightWhite = 97,
 }
 
-struct SimpleLogger;
+impl Display for ColorCode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "\u{1B}[{}m", *self as u8)
+    }
+}
 
 impl Log for SimpleLogger {
     fn enabled(&self, _metadata: &Metadata) -> bool {
@@ -97,29 +92,24 @@ impl Log for SimpleLogger {
         }
 
         let level = record.level();
-        let target = record.target();
-        let level_color = match level {
-            Level::Error => ColorCode::BrightRed,
-            Level::Warn => ColorCode::BrightYellow,
-            Level::Info => ColorCode::BrightGreen,
-            Level::Debug => ColorCode::BrightCyan,
-            Level::Trace => ColorCode::BrightBlack,
-        };
-        let args_color = match level {
-            Level::Error => ColorCode::Red,
-            Level::Warn => ColorCode::Yellow,
-            Level::Info => ColorCode::Green,
-            Level::Debug => ColorCode::Cyan,
-            Level::Trace => ColorCode::BrightBlack,
+        let file = record.file().unwrap_or("none");
+        let line = record.line().unwrap_or(0);
+        let args = record.args();
+        let color_reset = "\u{1B}[0m";
+
+        // 获取对应级别的颜色
+        let (level_color, args_color) = match level {
+            Level::Error => (ColorCode::BrightRed, ColorCode::Red),
+            Level::Warn => (ColorCode::BrightYellow, ColorCode::Yellow),
+            Level::Info => (ColorCode::BrightGreen, ColorCode::Green),
+            Level::Debug => (ColorCode::BrightCyan, ColorCode::Cyan),
+            Level::Trace => (ColorCode::BrightBlack, ColorCode::BrightBlack),
         };
 
-        print(with_color!(
-            ColorCode::White,
-            "[{} {} {}\n",
-            with_color!(level_color, "{:<5}", level),
-            with_color!(ColorCode::White, "{}]", target),
-            with_color!(args_color, "{}", record.args()),
-        ));
+        // 彩色输出格式：[级别 文件:行号] 消息
+        println!(
+            "[{level_color}{level}{color_reset} {file}:{line}] {args_color}{args}{color_reset}",
+        );
     }
 
     fn flush(&self) {}
