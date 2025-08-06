@@ -1,7 +1,9 @@
 use core::fmt;
 
-use crate::mm::paging::{GenericPTE};
-use crate::mm::{MemFlags, PhysAddr, PAGE_SIZE};
+use memory_addr::PhysAddr;
+
+use crate::config::PA_MAX_BITS;
+use crate::mm::{MemFlags,  PAGE_SIZE};
 
 bitflags::bitflags! {
     /// Memory attribute fields in the VMSAv8-64 translation table format descriptors.
@@ -138,29 +140,29 @@ impl From<MemFlags> for DescriptorAttr {
 pub struct PageTableEntry(u64);
 
 impl PageTableEntry {
-    const PHYS_ADDR_MASK: usize = PhysAddr::MAX & !(PAGE_SIZE - 1);
+    const PHYS_ADDR_MASK: usize = (1 << PA_MAX_BITS) - 1 & !(PAGE_SIZE - 1);
 
     pub const fn empty() -> Self {
         Self(0)
     }
 }
 
-impl GenericPTE for PageTableEntry {
-    fn new_page(paddr: PhysAddr, flags: MemFlags, is_block: bool) -> Self {
+impl PageTableEntry {
+    pub fn new_page(paddr: PhysAddr, flags: MemFlags, is_block: bool) -> Self {
         let mut attr = DescriptorAttr::from(flags) | DescriptorAttr::AF;
         if !is_block {
             attr |= DescriptorAttr::NON_BLOCK;
         }
         Self(attr.bits() | (paddr.as_usize() & Self::PHYS_ADDR_MASK) as u64)
     }
-    fn new_table(paddr: PhysAddr) -> Self {
+    pub fn new_table(paddr: PhysAddr) -> Self {
         let attr = DescriptorAttr::NON_BLOCK | DescriptorAttr::VALID;
         Self(attr.bits() | (paddr.as_usize() & Self::PHYS_ADDR_MASK) as u64)
     }
-    fn paddr(&self) -> PhysAddr {
-        PhysAddr::new(self.0 as usize & Self::PHYS_ADDR_MASK)
+    pub fn paddr(&self) -> PhysAddr {
+        PhysAddr::from_usize(self.0 as usize & Self::PHYS_ADDR_MASK)
     }
-    fn flags(&self) -> MemFlags {
+    pub fn flags(&self) -> MemFlags {
         DescriptorAttr::from_bits_truncate(self.0).into()
     }
 }

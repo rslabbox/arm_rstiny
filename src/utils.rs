@@ -1,10 +1,3 @@
-#![allow(dead_code)]
-
-pub mod allocator;
-pub mod irq_handler;
-// pub mod ratio;
-// pub mod timer_list;
-
 use core::arch::asm;
 
 const PSCI_SYSTEM_OFF: u32 = 0x8400_0008;
@@ -28,4 +21,3 @@ pub fn shutdown() -> ! {
     psci_hvc_call(PSCI_SYSTEM_OFF, 0, 0, 0);
     unreachable!("It should shutdown!")
 }
-

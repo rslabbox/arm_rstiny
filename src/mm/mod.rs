@@ -1,11 +1,6 @@
-mod address;
-mod heap_allocator;
-// mod memory_set;
-mod uaccess;
+pub mod heap_allocator;
 
-pub mod paging;
-
-pub use address::{PhysAddr};
+// pub mod paging;
 
 pub const PAGE_SIZE: usize = 0x1000;
 
@@ -17,8 +12,4 @@ bitflags::bitflags! {
         const USER          = 1 << 3;
         const DEVICE        = 1 << 4;
     }
-}
-
-pub fn init_heap_early() {
-    heap_allocator::init_heap();
 }

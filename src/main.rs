@@ -36,7 +36,7 @@ fn clear_bss() {
 pub fn rust_main() -> ! {
     clear_bss();
 
-    mm::init_heap_early();
+    mm::heap_allocator::init_heap();
     logging::log_init();
     info!("Logging is enabled.");
 

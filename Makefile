@@ -18,7 +18,7 @@ endif
 # QEMU 配置
 QEMU = qemu-system-aarch64
 QEMU_ARGS = -M virt -cpu cortex-a72 -m 4G \
-			-nographic  -kernel $(kernel_elf) \
+			-nographic  -kernel $(kernel_bin) \
 			-device virtio-blk-device,drive=test \
 			-drive file=$(DISK_IMG),if=none,id=test,format=raw,cache=none \
 			-device virtio-net-device,netdev=net0 \
