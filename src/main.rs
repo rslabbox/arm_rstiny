@@ -51,16 +51,13 @@ NN   NN  iii  mmm  mm  mm  bbbbbb    OOOO0    SSSSS
 #[unsafe(no_mangle)]
 pub fn rust_main() -> ! {
     clear_bss();
-    drivers::init_early();
     println!("{}", LOGO);
 
     mm::init_heap_early();
     logging::log_init();
     info!("Logging is enabled.");
 
-    arch::init();
     arch::init_percpu();
-    // percpu::init_percpu_early();
 
     mm::init();
     drivers::init();

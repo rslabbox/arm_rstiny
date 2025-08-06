@@ -1,12 +1,12 @@
 use alloc::vec::Vec;
+use kspin::SpinNoIrq;
 
 use super::{PAGE_SIZE, PhysAddr, address::virt_to_phys};
 use crate::config::PHYS_MEMORY_END;
-use crate::sync::SpinNoIrqLock;
 use crate::utils::allocator::FreeListAllocator;
 
-static FRAME_ALLOCATOR: SpinNoIrqLock<FreeListAllocator> =
-    SpinNoIrqLock::new(FreeListAllocator::empty());
+static FRAME_ALLOCATOR: SpinNoIrq<FreeListAllocator> =
+    SpinNoIrq::new(FreeListAllocator::empty());
 
 #[derive(Debug)]
 pub struct PhysFrame {
@@ -20,29 +20,29 @@ impl PhysFrame {
         })
     }
 
-    pub fn alloc_zero() -> Option<Self> {
-        let mut f = Self::alloc()?;
-        f.zero();
-        Some(f)
-    }
+    // pub fn alloc_zero() -> Option<Self> {
+    //     let mut f = Self::alloc()?;
+    //     f.zero();
+    //     Some(f)
+    // }
 
-    pub fn start_paddr(&self) -> PhysAddr {
-        self.start_paddr
-    }
+    // pub fn start_paddr(&self) -> PhysAddr {
+    //     self.start_paddr
+    // }
 
-    pub fn zero(&mut self) {
-        unsafe { core::ptr::write_bytes(self.start_paddr.into_kvaddr().as_mut_ptr(), 0, PAGE_SIZE) }
-    }
+    // pub fn zero(&mut self) {
+    //     unsafe { core::ptr::write_bytes(self.start_paddr.into_kvaddr().as_mut_ptr(), 0, PAGE_SIZE) }
+    // }
 
-    pub fn as_slice(&self) -> &[u8] {
-        unsafe { core::slice::from_raw_parts(self.start_paddr.into_kvaddr().as_ptr(), PAGE_SIZE) }
-    }
+    // pub fn as_slice(&self) -> &[u8] {
+    //     unsafe { core::slice::from_raw_parts(self.start_paddr.into_kvaddr().as_ptr(), PAGE_SIZE) }
+    // }
 
-    pub fn as_slice_mut(&mut self) -> &mut [u8] {
-        unsafe {
-            core::slice::from_raw_parts_mut(self.start_paddr.into_kvaddr().as_mut_ptr(), PAGE_SIZE)
-        }
-    }
+    // pub fn as_slice_mut(&mut self) -> &mut [u8] {
+    //     unsafe {
+    //         core::slice::from_raw_parts_mut(self.start_paddr.into_kvaddr().as_mut_ptr(), PAGE_SIZE)
+    //     }
+    // }
 }
 
 impl Drop for PhysFrame {

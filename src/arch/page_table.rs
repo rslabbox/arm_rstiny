@@ -1,6 +1,6 @@
 use core::fmt;
 
-use crate::mm::paging::{GenericPTE, PageTableImpl, PageTableLevels4};
+use crate::mm::paging::{GenericPTE};
 use crate::mm::{MemFlags, PhysAddr, PAGE_SIZE};
 
 bitflags::bitflags! {
@@ -163,18 +163,18 @@ impl GenericPTE for PageTableEntry {
     fn flags(&self) -> MemFlags {
         DescriptorAttr::from_bits_truncate(self.0).into()
     }
-    fn is_unused(&self) -> bool {
-        self.0 == 0
-    }
-    fn is_present(&self) -> bool {
-        DescriptorAttr::from_bits_truncate(self.0).contains(DescriptorAttr::VALID)
-    }
-    fn is_block(&self) -> bool {
-        !DescriptorAttr::from_bits_truncate(self.0).contains(DescriptorAttr::NON_BLOCK)
-    }
-    fn clear(&mut self) {
-        self.0 = 0
-    }
+    // fn is_unused(&self) -> bool {
+    //     self.0 == 0
+    // }
+    // fn is_present(&self) -> bool {
+    //     DescriptorAttr::from_bits_truncate(self.0).contains(DescriptorAttr::VALID)
+    // }
+    // fn is_block(&self) -> bool {
+    //     !DescriptorAttr::from_bits_truncate(self.0).contains(DescriptorAttr::NON_BLOCK)
+    // }
+    // fn clear(&mut self) {
+    //     self.0 = 0
+    // }
 }
 
 impl fmt::Debug for PageTableEntry {
@@ -187,5 +187,3 @@ impl fmt::Debug for PageTableEntry {
             .finish()
     }
 }
-
-pub type PageTable = PageTableImpl<PageTableLevels4, PageTableEntry>;

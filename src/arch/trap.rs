@@ -10,7 +10,7 @@ unsafe extern "C" {
     unsafe fn exception_vector_base();
 }
 pub fn init() {
-    // VBAR_EL1.set(exception_vector_base as usize as _);
+    VBAR_EL1.set(exception_vector_base as usize as _);
 }
 
 #[repr(u8)]

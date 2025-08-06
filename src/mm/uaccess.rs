@@ -13,12 +13,12 @@ const fn uaccess_ok(vaddr: usize, size: usize) -> bool {
 
 unsafe fn copy_from_user<T>(kdst: *mut T, usrc: *const T, len: usize) {
     assert!(uaccess_ok(usrc as usize, len * size_of::<T>()));
-    kdst.copy_from_nonoverlapping(usrc, len);
+    unsafe { kdst.copy_from_nonoverlapping(usrc, len) };
 }
 
 unsafe fn copy_to_user<T>(udst: *mut T, ksrc: *const T, len: usize) {
     assert!(uaccess_ok(udst as usize, len * size_of::<T>()));
-    udst.copy_from_nonoverlapping(ksrc, len);
+    unsafe { udst.copy_from_nonoverlapping(ksrc, len) };
 }
 
 unsafe fn copy_from_user_str(kdst: *mut u8, usrc: *const u8, max_len: usize) -> usize {
@@ -28,16 +28,16 @@ unsafe fn copy_from_user_str(kdst: *mut u8, usrc: *const u8, max_len: usize) -> 
     let mut usrc = usrc;
     while len < max_len {
         assert!((usrc as usize) < USER_ASPACE_BASE + USER_ASPACE_SIZE);
-        let c = usrc.read();
+        let c = unsafe { usrc.read() };
         if c == b'\0' {
             break;
         }
-        kdst.write(c);
+        unsafe { kdst.write(c) };
         len += 1;
-        kdst = kdst.add(1);
-        usrc = usrc.add(1);
+        kdst = unsafe { kdst.add(1) };
+        usrc = unsafe { usrc.add(1) };
     }
-    kdst.write(b'\0');
+    unsafe { kdst.write(b'\0') };
     len
 }
 
@@ -96,7 +96,7 @@ impl<T, P: Policy> UserPtr<T, P> {
 
     pub unsafe fn add(&self, count: usize) -> Self {
         Self {
-            ptr: self.ptr.add(count),
+            ptr: unsafe { self.ptr.add(count) },
             _phantom: PhantomData,
         }
     }

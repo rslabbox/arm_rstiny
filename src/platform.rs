@@ -1,10 +1,10 @@
 use cortex_a::{asm, asm::barrier, registers::*};
 use tock_registers::interfaces::{ReadWriteable, Readable, Writeable};
 
-use crate::arch::instructions;
 use crate::arch::PageTableEntry;
+use crate::arch::instructions;
 use crate::config::BOOT_KERNEL_STACK_SIZE;
-use crate::mm::{paging::GenericPTE, MemFlags, PhysAddr};
+use crate::mm::{MemFlags, PhysAddr, paging::GenericPTE};
 
 #[unsafe(link_section = ".bss.stack")]
 static mut BOOT_STACK: [u8; BOOT_KERNEL_STACK_SIZE] = [0; BOOT_KERNEL_STACK_SIZE];
@@ -48,7 +48,7 @@ unsafe fn switch_to_el1() {
                 + SPSR_EL2::F::Masked,
         );
         #[allow(static_mut_refs)]
-        SP_EL1.set(unsafe {  BOOT_STACK.as_ptr_range().end } as u64);
+        SP_EL1.set(unsafe { BOOT_STACK.as_ptr_range().end } as u64);
         ELR_EL2.set(LR.get());
         asm::eret();
     }
@@ -76,7 +76,7 @@ unsafe fn init_mmu() {
         + TCR_EL1::IRGN1::WriteBack_ReadAlloc_WriteAlloc_Cacheable
         + TCR_EL1::T1SZ.val(16);
     TCR_EL1.write(TCR_EL1::IPS::Bits_40 + tcr_flags0 + tcr_flags1);
-    barrier::isb(barrier::SY);
+    unsafe { barrier::isb(barrier::SY) };
 
     // Set both TTBR0 and TTBR1
     #[allow(static_mut_refs)]
@@ -89,25 +89,31 @@ unsafe fn init_mmu() {
 
     // Enable the MMU and turn on I-cache and D-cache
     SCTLR_EL1.modify(SCTLR_EL1::M::Enable + SCTLR_EL1::C::Cacheable + SCTLR_EL1::I::Cacheable);
-    barrier::isb(barrier::SY);
+    unsafe { barrier::isb(barrier::SY) };
 }
 
 #[allow(static_mut_refs)]
 unsafe fn init_boot_page_table() {
     // 0x0000_0000_0000 ~ 0x0080_0000_0000, table
-    BOOT_PT_L0[0] = PageTableEntry::new_table(PhysAddr::new(BOOT_PT_L1.as_ptr() as usize));
+    unsafe {
+        BOOT_PT_L0[0] = PageTableEntry::new_table(PhysAddr::new(BOOT_PT_L1.as_ptr() as usize));
+    }
     // 0x0000_0000_0000..0x0000_4000_0000, 1G block, device memory
-    BOOT_PT_L1[0] = PageTableEntry::new_page(
-        PhysAddr::new(0),
-        MemFlags::READ | MemFlags::WRITE | MemFlags::DEVICE,
-        true,
-    );
+    unsafe {
+        BOOT_PT_L1[0] = PageTableEntry::new_page(
+            PhysAddr::new(0),
+            MemFlags::READ | MemFlags::WRITE | MemFlags::DEVICE,
+            true,
+        );
+    }
     // 0x0000_4000_0000..0x0000_8000_0000, 1G block, normal memory
-    BOOT_PT_L1[1] = PageTableEntry::new_page(
-        PhysAddr::new(0x4000_0000),
-        MemFlags::READ | MemFlags::WRITE | MemFlags::EXECUTE,
-        true,
-    );
+    unsafe {
+        BOOT_PT_L1[1] = PageTableEntry::new_page(
+            PhysAddr::new(0x4000_0000),
+            MemFlags::READ | MemFlags::WRITE | MemFlags::EXECUTE,
+            true,
+        );
+    }
 }
 
 #[unsafe(naked)]
@@ -121,6 +127,7 @@ unsafe extern "C" fn _start() -> ! {
         bl      {switch_to_el1}
         bl      {init_boot_page_table}
         bl      {init_mmu}
+
         ldr     x8, =boot_stack_top
         mov     sp, x8
         ldr     x8, ={rust_main}

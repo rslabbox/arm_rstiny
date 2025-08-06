@@ -1,16 +1,16 @@
 use buddy_system_allocator::Heap;
+use kspin::SpinNoIrq;
 use core::alloc::{GlobalAlloc, Layout};
 use core::mem::size_of;
 use core::ptr::NonNull;
 
 use crate::config::KERNEL_HEAP_SIZE;
-use crate::sync::SpinNoIrqLock;
 
-struct LockedHeap(SpinNoIrqLock<Heap<32>>);
+struct LockedHeap(SpinNoIrq<Heap<32>>);
 
 impl LockedHeap {
     pub const fn empty() -> Self {
-        LockedHeap(SpinNoIrqLock::new(Heap::<32>::new()))
+        LockedHeap(SpinNoIrq::new(Heap::<32>::new()))
     }
 
     pub fn init(&self, start: usize, size: usize) {
@@ -28,7 +28,7 @@ unsafe impl GlobalAlloc for LockedHeap {
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        self.0.lock().dealloc(NonNull::new_unchecked(ptr), layout)
+        self.0.lock().dealloc(unsafe { NonNull::new_unchecked(ptr) }, layout)
     }
 }
 #[cfg_attr(not(test), global_allocator)]

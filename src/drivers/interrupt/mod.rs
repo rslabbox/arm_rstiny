@@ -1,6 +1,5 @@
 
 mod gicv2;
-pub use self::imp::handle_irq;
 use gicv2 as imp;
 
 #[allow(unused_imports)]

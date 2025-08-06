@@ -2,10 +2,12 @@
 
 use core::sync::atomic::{AtomicU64, Ordering};
 
-use crate::sync::{LazyInit, SpinNoIrqLock};
+use kspin::SpinNoIrq;
+
+use crate::sync::LazyInit;
 use crate::utils::timer_list::TimerList;
 
-pub use crate::drivers::timer::{current_ticks, nanos_to_ticks, set_oneshot_timer, ticks_to_nanos};
+pub use crate::drivers::timer::{current_ticks, set_oneshot_timer, ticks_to_nanos};
 pub use crate::utils::timer_list::TimeValue;
 
 pub const NANOS_PER_SEC: u64 = 1_000_000_000;
@@ -16,7 +18,7 @@ const PERIODIC_INTERVAL_NANOS: u64 = NANOS_PER_SEC / crate::config::TICKS_PER_SE
 static NEXT_DEADLINE: AtomicU64 = AtomicU64::new(0);
 static NEXT_PERIODIC_DEADLINE: AtomicU64 = AtomicU64::new(0);
 
-static TIMER_LIST: LazyInit<SpinNoIrqLock<TimerList>> = LazyInit::new();
+static TIMER_LIST: LazyInit<SpinNoIrq<TimerList>> = LazyInit::new();
 
 fn update_deadline(deadline_ns: u64) {
     NEXT_DEADLINE.store(deadline_ns, Ordering::Release);
@@ -32,7 +34,7 @@ pub fn current_time() -> TimeValue {
 }
 
 pub fn init() {
-    TIMER_LIST.init_by(SpinNoIrqLock::new(TimerList::new()));
+    TIMER_LIST.init_by(SpinNoIrq::new(TimerList::new()));
     let deadline = current_time_nanos() + PERIODIC_INTERVAL_NANOS;
     NEXT_PERIODIC_DEADLINE.store(deadline, Ordering::Release);
     update_deadline(deadline);
