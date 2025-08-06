@@ -1,6 +1,7 @@
 pub mod heap_allocator;
 pub mod logging;
 
+mod console;
 use core::arch::asm;
 use core::panic::PanicInfo;
 
