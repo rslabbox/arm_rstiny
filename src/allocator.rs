@@ -16,10 +16,19 @@ pub fn init_heap() {
         let heap_end = &__heap_end as *const u8 as usize;
         let heap_size = heap_end - heap_start;
 
+        // Validate heap configuration
+        if heap_size == 0 {
+            panic!("Heap size is zero!");
+        }
+
+        if heap_start >= heap_end {
+            panic!("Invalid heap configuration: start >= end");
+        }
+
         ALLOCATOR.lock().init(heap_start as *mut u8, heap_size);
 
         info!(
-            "Heap: 0x{:x} - 0x{:x} (size: {} MB)",
+            "Heap initialized: 0x{:x} - 0x{:x} (size: {} MB)",
             heap_start,
             heap_end,
             heap_size / (1024 * 1024)

@@ -1,5 +1,6 @@
 mod context_frame;
 mod trap;
+mod boot;
 
 use crate::config::PSCI_SYSTEM_OFF;
 use crate::println;
@@ -8,7 +9,6 @@ use core::{arch::asm, panic::PanicInfo};
 use log::warn;
 
 global_asm!(include_str!("exception.s"));
-global_asm!(include_str!("boot.s"));
 
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {

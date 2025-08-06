@@ -31,14 +31,18 @@ pub struct AllocatorTestSuite {
 
 impl AllocatorTestSuite {
     pub fn new() -> Self {
+        info!("Creating AllocatorTestSuite...");
+        let results = Vec::new();
+        info!("AllocatorTestSuite created with empty results vector");
         Self {
-            results: Vec::new(),
+            results,
         }
     }
 
     /// Run all tests
     pub fn run_all_tests(&mut self) {
         info!("Start testing allocator...");
+        info!("About to call test_basic_allocation...");
 
         self.test_basic_allocation();
         self.test_vec_operations();
@@ -59,27 +63,43 @@ impl AllocatorTestSuite {
         let mut passed = true;
         let mut error_msg = None;
 
+        info!("Creating new Vec...");
         // Test basic Vec allocation
         let mut vec = Vec::new();
+        info!("Vec created, pushing first element...");
         vec.push(42u32);
+        info!("First element pushed, pushing second element...");
         vec.push(100u32);
+        info!("Second element pushed, checking values...");
 
         if vec.len() != 2 || vec[0] != 42 || vec[1] != 100 {
             passed = false;
             error_msg = Some("Basic Vec operation failed");
+            info!("Basic Vec operation failed: len={}, vec[0]={}, vec[1]={}", vec.len(), vec[0], vec[1]);
+        } else {
+            info!("Basic Vec operations passed");
         }
 
         if passed {
+            info!("Starting Vec expansion test...");
             // Test expansion
             for i in 0..100 {
                 vec.push(i);
+                if i % 20 == 0 {
+                    info!("Pushed {} elements", i);
+                }
             }
+            info!("Vec expansion completed, checking length...");
             if vec.len() != 102 {
                 passed = false;
                 error_msg = Some("Vec expansion failed");
+                info!("Vec expansion failed: expected 102, got {}", vec.len());
+            } else {
+                info!("Vec expansion test passed");
             }
         }
 
+        info!("Basic allocation test completed");
         self.results
             .push(TestResult::new(test_name, passed, error_msg));
     }
@@ -343,6 +363,9 @@ impl AllocatorTestSuite {
 
 /// Convenient function to run memory allocator tests
 pub fn run_allocator_tests() {
+    info!("run_allocator_tests called");
     let mut test_suite = AllocatorTestSuite::new();
+    info!("AllocatorTestSuite created, calling run_all_tests");
     test_suite.run_all_tests();
+    info!("run_all_tests completed");
 }
