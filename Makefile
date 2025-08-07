@@ -22,7 +22,9 @@ QEMU_ARGS = -M virt -cpu cortex-a72 -m 4G \
 			-device virtio-blk-device,drive=test \
 			-drive file=$(DISK_IMG),if=none,id=test,format=raw,cache=none \
 			-device virtio-net-device,netdev=net0 \
-			-netdev user,id=net0
+			-netdev user,id=net0 \
+			-drive file=nvme.img,if=none,id=nvm \
+			-device nvme,serial=deadbeef,drive=nvm
 
 # 编译选项
 CARGO_FLAGS = $(MODE_ARG) --target $(TARGET)
