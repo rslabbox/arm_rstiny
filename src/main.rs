@@ -43,7 +43,7 @@ pub fn rust_main() -> ! {
 
     test::run_allocator_tests();
 
-    virtio::virtio_test();
+    test::virtio_test();
 
     shutdown();
 }

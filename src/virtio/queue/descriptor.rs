@@ -20,3 +20,20 @@ pub struct Descriptor {
     /// 下一个描述符的索引（如果 NEXT 标志被设置）
     pub next: u16,
 }
+
+impl Descriptor {
+    /// 创建一个新的描述符
+    pub fn new(addr: u64, len: u32, flags: u16, next: u16) -> Self {
+        Self {
+            addr,
+            len,
+            flags,
+            next,
+        }
+    }
+
+    /// 检查描述符是否是最后一个（没有 NEXT 标志）
+    pub fn is_last(&self) -> bool {
+        self.flags & descriptor_flags::NEXT == 0
+    }
+}

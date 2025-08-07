@@ -73,12 +73,18 @@ pub mod mmio {
     pub const DRIVER_FEATURES: usize = 0x020;
     /// Driver features selector
     pub const DRIVER_FEATURES_SEL: usize = 0x024;
+    /// Queue size register
+    pub const QUEUE_SIZE: usize = 0x028;
     /// Queue selector
     pub const QUEUE_SEL: usize = 0x030;
     /// Queue size max
     pub const QUEUE_NUM_MAX: usize = 0x034;
     /// Queue size
     pub const QUEUE_NUM: usize = 0x038;
+    /// Queue Align
+    pub const QUEUE_ALIGN: usize = 0x3c;
+    /// Queue PFN
+    pub const QUEUE_DEVICE_PFN: usize = 0x040;
     /// Queue ready
     pub const QUEUE_READY: usize = 0x044;
     /// Queue notify

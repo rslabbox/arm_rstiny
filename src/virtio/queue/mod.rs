@@ -5,14 +5,9 @@ mod used;
 
 use core::{alloc::Layout, marker::PhantomData, ptr::NonNull};
 
-use alloc::sync::Arc;
-// use alloc::vec::Vec;
-// pub use available::AvailableRing;
 pub use descriptor::Descriptor;
 
 pub use super::{memory::VirtioAlloc, queue::queue::Queue};
-// use log::info;
-// pub use used::UsedRing;
 
 pub struct VirtQueue<M: VirtioAlloc> {
     queue: NonNull<Queue>,

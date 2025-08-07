@@ -1,6 +1,7 @@
 //! VirtIO Error Types
 //!
 //! This module defines common error types used across all VirtIO device implementations.
+#[allow(dead_code)]
 
 /// VirtIO specific error types
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
