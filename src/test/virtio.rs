@@ -26,7 +26,7 @@ impl VirtioAlloc for DefaultVirtioAlloc {
 }
 
 pub fn virtio_test() {
-    let queue = VirtQueue::<DefaultVirtioAlloc>::new();
+    let queue = VirtQueue::<DefaultVirtioAlloc>::new(16);
     let (desc_addr, avail_addr, used_addr) = queue.get_addresses();
     info!(
         "VirtQueue addresses: desc=0x{:x}, avail=0x{:x}, used=0x{:x}",
@@ -42,7 +42,6 @@ pub fn virtio_test() {
     let root_dir = fs.root_dir();
     let mut file = root_dir.create_file("hello.txt").expect("Failed to create file");
     file.write_all(b"Hello World!").expect("Failed to write to file");
-    // 再把数据读出来
     file.seek(SeekFrom::Start(0)).expect("Failed to seek in file");
     let mut buffer = vec![0u8; 12];
     file.read_exact(&mut buffer).expect("Failed to read from file");

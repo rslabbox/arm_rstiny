@@ -16,12 +16,12 @@ pub struct VirtQueue<M: VirtioAlloc> {
 }
 
 impl<M: VirtioAlloc> VirtQueue<M> {
-    pub fn new() -> Self {
+    pub fn new(queue_size: u16) -> Self {
         let layout = Layout::new::<Queue>();
         let queue_ptr = M::allocate(layout).as_ptr() as *mut Queue;
         Self {
             queue: NonNull::new(queue_ptr).expect("Failed to create VirtQueue"),
-            size: 16,
+            size: queue_size,
             _marker: PhantomData,
         }
     }

@@ -38,7 +38,7 @@ impl<M: VirtioAlloc> VirtioBlkDevice<M> {
     pub fn new(base_addr: usize) -> VirtioResult<Self> {
         let mut device = Self {
             base_addr,
-            virtqueue: VirtQueue::new(), // Start with a small queue
+            virtqueue: VirtQueue::new(16), // Start with a small queue
             config: VirtioBlkConfig::new(),
             features: 0,
             version: VIRTIO_MMIO_VERSION_1, // Default to version 1
