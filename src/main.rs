@@ -16,6 +16,7 @@ mod arch;
 mod config;
 mod test;
 mod utils;
+mod virtio;
 
 fn clear_bss() {
     unsafe extern "C" {
@@ -41,6 +42,8 @@ pub fn rust_main() -> ! {
     info!("Start OK");
 
     test::run_allocator_tests();
+
+    virtio::virtio_test();
 
     shutdown();
 }

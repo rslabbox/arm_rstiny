@@ -43,3 +43,8 @@ pub fn init_heap() {
         HEAP_ALLOCATOR.lock().init(heap_start as *mut u8, heap_size);
     }
 }
+
+/// Returns the reference to the global allocator.
+pub fn global_allocator() -> &'static LockedHeap {
+    &HEAP_ALLOCATOR
+}
