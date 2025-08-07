@@ -44,7 +44,7 @@ fn invalid_exception(tf: &mut TrapFrame, kind: TrapKind, source: TrapSource) {
 #[unsafe(no_mangle)]
 fn handle_sync_exception(tf: &mut TrapFrame) {
     let esr = ESR_EL1.extract();
-    trace!(
+    panic!(
         "Trap @ {:#x}: ESR = {:#x} (EC {:#08b}, ISS {:#x})\n{:#x?}",
         tf.elr,
         esr.get(),
@@ -56,5 +56,5 @@ fn handle_sync_exception(tf: &mut TrapFrame) {
 
 #[unsafe(no_mangle)]
 fn handle_irq_exception(_tf: &mut TrapFrame) {
-    trace!("IRQ");
+    error!("IRQ");
 }

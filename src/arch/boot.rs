@@ -100,7 +100,9 @@ unsafe fn init_boot_page_table() {
         BOOT_PT_L0[0] =
             PageTableEntry::new_table(PhysAddr::from_usize(BOOT_PT_L1.as_ptr() as usize));
     }
+
     // 0x0000_0000_0000..0x0000_4000_0000, 1G block, device memory
+    // This includes the ECAM region at 0x3f000000 and PCI MMIO space 0x1000_0000..0x2eff_0000
     unsafe {
         BOOT_PT_L1[0] = PageTableEntry::new_page(
             PhysAddr::from_usize(0),
@@ -113,6 +115,14 @@ unsafe fn init_boot_page_table() {
         BOOT_PT_L1[1] = PageTableEntry::new_page(
             PhysAddr::from_usize(0x4000_0000),
             MemFlags::READ | MemFlags::WRITE | MemFlags::EXECUTE,
+            true,
+        );
+    }
+
+    unsafe {
+        BOOT_PT_L1[256] = PageTableEntry::new_page(
+            PhysAddr::from_usize(0x40_0000_0000),
+            MemFlags::READ | MemFlags::WRITE | MemFlags::DEVICE,
             true,
         );
     }

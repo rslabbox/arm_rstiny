@@ -17,6 +17,7 @@ mod config;
 mod test;
 mod utils;
 mod virtio;
+mod pci;
 
 fn clear_bss() {
     unsafe extern "C" {
@@ -43,7 +44,11 @@ pub fn rust_main() -> ! {
 
     test::run_allocator_tests();
 
+    // Test NVMe discovery first to avoid heap allocation issues
+    // test::nvme_test();
+
     test::virtio_test();
+    pci::nvme_pci_test();
 
     shutdown();
 }
