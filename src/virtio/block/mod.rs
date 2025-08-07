@@ -29,10 +29,6 @@ pub struct VirtioBlkDevice<M: VirtioAlloc> {
     config: VirtioBlkConfig,
     /// Device features
     features: u64,
-    /// Device capacity in sectors
-    capacity: u64,
-    /// Block size
-    block_size: u32,
     /// Block version
     version: u32,
 }
@@ -43,10 +39,8 @@ impl<M: VirtioAlloc> VirtioBlkDevice<M> {
         let mut device = Self {
             base_addr,
             virtqueue: VirtQueue::new(), // Start with a small queue
-            config: unsafe { core::mem::zeroed() },
+            config: VirtioBlkConfig::new(),
             features: 0,
-            capacity: 0,
-            block_size: SECTOR_SIZE as u32,
             version: VIRTIO_MMIO_VERSION_1, // Default to version 1
         };
 
@@ -123,8 +117,8 @@ impl<M: VirtioAlloc> VirtioBlkDevice<M> {
 
         info!(
             "VirtIO Block device initialized successfully. Capacity: {} sectors ({} MB)",
-            self.capacity,
-            (self.capacity * SECTOR_SIZE as u64) / (1024 * 1024)
+            self.config.capacity,
+            (self.config.capacity * SECTOR_SIZE as u64) / (1024 * 1024)
         );
 
         Ok(())
@@ -180,15 +174,15 @@ impl<M: VirtioAlloc> VirtioBlkDevice<M> {
         // Read capacity (first 8 bytes of config space)
         let capacity_low = read_mmio_u32(self.base_addr, mmio::CONFIG);
         let capacity_high = read_mmio_u32(self.base_addr, mmio::CONFIG + 4);
-        self.capacity = (capacity_high as u64) << 32 | capacity_low as u64;
+        self.config.capacity = (capacity_high as u64) << 32 | capacity_low as u64;
 
         // Read block size if supported
         if self.features & features::VIRTIO_BLK_F_BLK_SIZE != 0 {
-            self.block_size = read_mmio_u32(self.base_addr, mmio::CONFIG + 20); // blk_size offset
+            self.config.blk_size = read_mmio_u32(self.base_addr, mmio::CONFIG + 20); // blk_size offset
         }
 
-        debug!("Device capacity: {} sectors", self.capacity);
-        debug!("Block size: {} bytes", self.block_size);
+        debug!("Device capacity: {} sectors", self.config.capacity);
+        debug!("Block size: {} bytes", self.config.blk_size);
 
         Ok(())
     }
@@ -274,27 +268,12 @@ impl<M: VirtioAlloc> VirtioBlkDevice<M> {
         write_mmio_u32(self.base_addr, mmio::STATUS, status);
     }
 
-    /// Get device capacity in sectors
-    pub fn capacity(&self) -> u64 {
-        self.capacity
-    }
-
-    /// Get block size
-    pub fn block_size(&self) -> u32 {
-        self.block_size
-    }
-
-    /// Get device features
-    pub fn features(&self) -> u64 {
-        self.features
-    }
-
     /// Read sectors from the block device
     pub fn read_sectors(&mut self, sector: u64, num_sectors: usize) -> VirtioResult<Vec<u8>> {
-        if sector + num_sectors as u64 > self.capacity {
+        if sector + num_sectors as u64 > self.config.capacity {
             error!(
                 "Read beyond device capacity: sector {} + {} > {}",
-                sector, num_sectors, self.capacity
+                sector, num_sectors, self.config.capacity
             );
             return Err(VirtioError::InvalidSector);
         }
@@ -317,6 +296,54 @@ impl<M: VirtioAlloc> VirtioBlkDevice<M> {
 
         debug!("Read completed successfully");
         Ok(request.data)
+    }
+
+    /// Write sectors to the block device
+    pub fn write_sectors(
+        &mut self,
+        sector: u64,
+        data: &[u8],
+    ) -> VirtioResult<()> {
+        if sector + (data.len() / self.config.blk_size as usize) as u64 > self.config.capacity {
+            error!(
+                "Write beyond device capacity: sector {} + {} > {}",
+                sector,
+                data.len() / self.config.blk_size as usize,
+                self.config.capacity
+            );
+            return Err(VirtioError::InvalidSector);
+        }
+
+        debug!("Writing {} bytes to sector {}", data.len(), sector);
+
+        // Create a write request
+        let mut request = VirtioBlkRequest::new_write(sector, data.to_vec());
+
+        // Submit the request and wait for completion
+        self.submit_request(&mut request)?;
+
+        if !request.is_successful() {
+            error!("Write request failed: {}", request.status().description());
+            return Err(VirtioError::BackendError);
+        }
+
+        debug!("Write completed successfully");
+        Ok(())
+    }
+
+    /// Flush the block device
+    pub fn flush(&mut self) -> VirtioResult<()> {
+        debug!("Flushing block device");
+        // Create a flush request
+        let mut request = VirtioBlkRequest::new_flush();
+        // Submit the request and wait for completion
+        self.submit_request(&mut request)?;
+        if !request.is_successful() {
+            error!("Flush request failed: {}", request.status().description());
+            return Err(VirtioError::BackendError);
+        }
+        debug!("Flush completed successfully");
+        Ok(())
     }
 
     /// Submit a VirtIO Block request

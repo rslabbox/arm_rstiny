@@ -4,6 +4,7 @@
 
 pub mod allocator;
 pub mod virtio;
+mod fatfs;
 
 pub use allocator::run_allocator_tests;
 pub use virtio::virtio_test;

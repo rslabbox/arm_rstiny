@@ -4,8 +4,6 @@ pub mod descriptor_flags {
     pub const NEXT: u16 = 1;
     /// 描述符是只写的（设备写入）
     pub const WRITE: u16 = 2;
-    /// 描述符包含间接描述符表
-    pub const INDIRECT: u16 = 4;
 }
 
 #[repr(C, packed)]
@@ -30,10 +28,5 @@ impl Descriptor {
             flags,
             next,
         }
-    }
-
-    /// 检查描述符是否是最后一个（没有 NEXT 标志）
-    pub fn is_last(&self) -> bool {
-        self.flags & descriptor_flags::NEXT == 0
     }
 }

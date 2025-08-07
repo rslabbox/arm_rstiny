@@ -1,6 +1,3 @@
-use alloc::vec;
-use alloc::vec::Vec;
-
 /// Available Ring 结构
 #[repr(C)]
 #[derive(Debug, Clone)]

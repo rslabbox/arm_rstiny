@@ -52,6 +52,7 @@ impl<M: VirtioAlloc> Drop for VirtQueue<M> {
         let _ = self.queue_mut();
         let non_null_ptr = NonNull::new(self.queue.as_ptr() as *mut u8)
             .expect("Failed to create NonNull pointer for deallocation");
+        
         M::deallocate(non_null_ptr, layout);
     }
 }

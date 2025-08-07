@@ -23,14 +23,3 @@ pub struct Queue {
     /// 最后处理的已使用索引
     pub last_used_idx: u16,
 }
-
-impl Queue {
-    /// 获取队列的物理地址信息（用于设备配置）
-    pub fn get_addresses(&self) -> (u64, u64, u64) {
-        let desc_addr = self.descriptors.as_ptr() as u64;
-        let avail_addr = &self.available as *const _ as u64;
-        let used_addr = &self.used as *const _ as u64;
-
-        (desc_addr, avail_addr, used_addr)
-    }
-}

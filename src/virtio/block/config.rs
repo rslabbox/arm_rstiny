@@ -37,6 +37,37 @@ pub struct VirtioBlkConfig {
     pub write_zeroes_may_unmap: u8,
 }
 
+impl VirtioBlkConfig {
+    /// Create a new VirtioBlkConfig with default values
+    pub fn new() -> Self {
+        Self {
+            capacity: 0,
+            size_max: 0,
+            seg_max: 0,
+            geometry: VirtioBlkGeometry {
+                cylinders: 0,
+                heads: 0,
+                sectors: 0,
+            },
+            blk_size: 256, // Default block size
+            topology: VirtioBlkTopology {
+                physical_block_exp: 9, // Default to 512 bytes
+                alignment_offset: 0,
+                min_io_size: 256, // Default minimum I/O size
+                opt_io_size: 256, // Default optimal I/O size
+            },
+            writeback: 0,
+            num_queues: 1, // Default to single queue
+            max_discard_sectors: 0,
+            max_discard_seg: 0,
+            discard_sector_alignment: 0,
+            max_write_zeroes_sectors: 0,
+            max_write_zeroes_seg: 0,
+            write_zeroes_may_unmap: 0,
+        }
+    }
+}
+
 /// VirtIO Block device geometry
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]

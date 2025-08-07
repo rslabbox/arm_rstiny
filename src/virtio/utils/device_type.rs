@@ -43,16 +43,6 @@ impl VirtioDeviceID {
             Self::Console => "Console",
         }
     }
-
-    /// Check if the device type is valid (not Invalid)
-    pub fn is_valid(&self) -> bool {
-        !matches!(self, Self::Invalid)
-    }
-
-    /// Get all supported device types
-    pub fn all_types() -> &'static [VirtioDeviceID] {
-        &[Self::Network, Self::Block, Self::Console]
-    }
 }
 
 impl From<u32> for VirtioDeviceID {

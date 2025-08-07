@@ -2,11 +2,11 @@
 //!
 //! This module provides safe abstractions for VirtIO MMIO register access
 //! with proper alignment checking and error handling.
-
 use crate::virtio::error::{VirtioError, VirtioResult};
 use log::error;
 
 /// Check if an address is properly aligned for 32-bit access
+#[allow(dead_code)]
 fn check_alignment(base_addr: usize, offset: usize) -> VirtioResult<usize> {
     let addr = base_addr + offset;
 
@@ -23,6 +23,7 @@ fn check_alignment(base_addr: usize, offset: usize) -> VirtioResult<usize> {
 }
 
 /// Read a 32-bit value from MMIO with alignment checking
+#[allow(dead_code)]
 pub fn read_mmio_u32(base_addr: usize, offset: usize) -> u32 {
     match check_alignment(base_addr, offset) {
         Ok(addr) => {
@@ -38,6 +39,7 @@ pub fn read_mmio_u32(base_addr: usize, offset: usize) -> u32 {
 }
 
 /// Write a 32-bit value to MMIO with alignment checking
+#[allow(dead_code)]
 pub fn write_mmio_u32(base_addr: usize, offset: usize, value: u32) {
     match check_alignment(base_addr, offset) {
         Ok(addr) => {
@@ -52,12 +54,14 @@ pub fn write_mmio_u32(base_addr: usize, offset: usize, value: u32) {
 }
 
 /// Read a 32-bit value from MMIO with Result return type
+#[allow(dead_code)]
 pub fn try_read_mmio_u32(base_addr: usize, offset: usize) -> VirtioResult<u32> {
     let addr = check_alignment(base_addr, offset)?;
     Ok(unsafe { core::ptr::read_volatile(addr as *const u32) })
 }
 
 /// Write a 32-bit value to MMIO with Result return type
+#[allow(dead_code)]
 pub fn try_write_mmio_u32(base_addr: usize, offset: usize, value: u32) -> VirtioResult<()> {
     let addr = check_alignment(base_addr, offset)?;
     unsafe { core::ptr::write_volatile(addr as *mut u32, value) }
@@ -65,6 +69,7 @@ pub fn try_write_mmio_u32(base_addr: usize, offset: usize, value: u32) -> Virtio
 }
 
 /// Read a 16-bit value from MMIO with alignment checking
+#[allow(dead_code)]
 pub fn read_mmio_u16(base_addr: usize, offset: usize) -> u16 {
     let addr = base_addr + offset;
 
@@ -81,6 +86,7 @@ pub fn read_mmio_u16(base_addr: usize, offset: usize) -> u16 {
 }
 
 /// Write a 16-bit value to MMIO with alignment checking
+#[allow(dead_code)]
 pub fn write_mmio_u16(base_addr: usize, offset: usize, value: u16) {
     let addr = base_addr + offset;
 
@@ -97,12 +103,14 @@ pub fn write_mmio_u16(base_addr: usize, offset: usize, value: u16) {
 }
 
 /// Read an 8-bit value from MMIO (no alignment check needed)
+#[allow(dead_code)]
 pub fn read_mmio_u8(base_addr: usize, offset: usize) -> u8 {
     let addr = base_addr + offset;
     unsafe { core::ptr::read_volatile(addr as *const u8) }
 }
 
 /// Write an 8-bit value to MMIO (no alignment check needed)
+#[allow(dead_code)]
 pub fn write_mmio_u8(base_addr: usize, offset: usize, value: u8) {
     let addr = base_addr + offset;
     unsafe { core::ptr::write_volatile(addr as *mut u8, value) }
@@ -110,6 +118,7 @@ pub fn write_mmio_u8(base_addr: usize, offset: usize, value: u8) {
 
 /// Read a 64-bit value from MMIO with alignment checking
 /// This reads two consecutive 32-bit values to form a 64-bit value
+#[allow(dead_code)]
 pub fn read_mmio_u64(base_addr: usize, offset: usize) -> u64 {
     // Read low 32 bits
     let low = read_mmio_u32(base_addr, offset);
@@ -122,6 +131,7 @@ pub fn read_mmio_u64(base_addr: usize, offset: usize) -> u64 {
 
 /// Write a 64-bit value to MMIO with alignment checking
 /// This writes two consecutive 32-bit values
+#[allow(dead_code)]
 pub fn write_mmio_u64(base_addr: usize, offset: usize, value: u64) {
     // Write low 32 bits
     write_mmio_u32(base_addr, offset, value as u32);

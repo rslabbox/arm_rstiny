@@ -1,5 +1,3 @@
-use alloc::vec;
-use alloc::vec::Vec;
 /// Used Ring 元素
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
