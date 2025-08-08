@@ -14,8 +14,10 @@ use utils::logging;
 
 mod arch;
 mod config;
-mod test;
+mod drivers;
 mod utils;
+mod user;
+mod test;
 
 fn clear_bss() {
     unsafe extern "C" {
@@ -38,9 +40,9 @@ pub fn rust_main() -> ! {
 
     arch::trap::init();
 
-    info!("Start OK");
+    info!("ARM RSTiny - Rust Bare Metal OS");
 
-    test::run_allocator_tests();
+    user::user_main();
 
     shutdown();
 }
