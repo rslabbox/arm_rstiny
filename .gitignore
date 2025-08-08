@@ -2,3 +2,4 @@
 Cargo.lock
 test.img
 nvme.img
+/crates

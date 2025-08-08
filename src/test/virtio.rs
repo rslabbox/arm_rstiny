@@ -4,11 +4,15 @@ use crate::utils::heap_allocator::global_allocator;
 use crate::virtio::block::VirtioBlkDevice;
 use crate::virtio::queue::{VirtQueue, VirtioAlloc};
 use crate::virtio::{VirtioDeviceID, virtio_discover_device};
+use crate::virtio::constants::SECTOR_SIZE;
 use super::fatfs::MyFileSystem;
 
 use alloc::string::String;
 use alloc::vec;
+use aarch64_cpu::registers::{CNTFRQ_EL0, CNTVCT_EL0};
+use aarch64_cpu::registers::Readable;
 use fatfs::{FileSystem, FsOptions, Read, Seek, SeekFrom, Write};
+
 // 实现一个具体的 VirtioAlloc
 pub struct DefaultVirtioAlloc;
 
@@ -24,6 +28,11 @@ impl VirtioAlloc for DefaultVirtioAlloc {
         unsafe { global_allocator().lock().deallocate(ptr, layout) }
     }
 }
+
+#[inline(always)]
+fn counter_hz() -> u64 { CNTFRQ_EL0.get() as u64 }
+#[inline(always)]
+fn counter_now() -> u64 { CNTVCT_EL0.get() as u64 }
 
 pub fn virtio_test() {
     let queue = VirtQueue::<DefaultVirtioAlloc>::new(16);

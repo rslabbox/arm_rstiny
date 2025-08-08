@@ -48,7 +48,7 @@ pub fn rust_main() -> ! {
     // test::nvme_test();
 
     test::virtio_test();
-    pci::nvme_pci_test();
+    // pci::nvme_pci_test();
 
     shutdown();
 }

@@ -14,7 +14,7 @@ memory_addr = "0.4"
 linked_list_allocator = "0.10"
 fatfs = {  git = "https://github.com/rafalh/rust-fatfs" , rev = "4eccb50", default-features = false, features = ["alloc", "lfn", "log_level_trace", "unicode"] }
 nvme-driver = "0.3.1"
-dma-api = "0.4.3"
+dma-api = {version = "0.4", features = ["alloc"]}
 axdriver_pci = { git = "https://github.com/arceos-org/axdriver_crates.git", tag = "v0.1.2" }
 byte-unit = {version = "5.1.6", default-features = false, features = ["byte"]}
 
