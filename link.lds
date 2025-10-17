@@ -1,6 +1,6 @@
 OUTPUT_ARCH(aarch64)
 
-BASE_ADDRESS = 0x40080000;
+BASE_ADDRESS = 0x400000;
 
 ENTRY(_start)
 SECTIONS
@@ -46,11 +46,6 @@ SECTIONS
         . = ALIGN(4K);
         ebss = .;
     }
-
-    . = ALIGN(64);
-    __heap_start = .;
-    . += 0x1000000; /* 16MB */
-    __heap_end = .;
 
     /* 确保整个镜像结束时也是4K对齐 */
     . = ALIGN(4096);

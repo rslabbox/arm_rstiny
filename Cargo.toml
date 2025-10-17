@@ -12,8 +12,9 @@ kspin = "0.1"
 spin = "0.10"
 memory_addr = "0.4"
 linked_list_allocator = "0.10"
-virtio-drivers = "0.7.4"
-fatfs = {  git = "https://github.com/rafalh/rust-fatfs" , rev = "4eccb50", default-features = false, features = ["alloc", "lfn", "log_level_trace", "unicode"] }
+talc = "4.4.3"
+
+
 [profile.dev]
 panic = "abort"
 

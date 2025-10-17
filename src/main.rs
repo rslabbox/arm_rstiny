@@ -14,7 +14,6 @@ use utils::logging;
 
 mod arch;
 mod config;
-mod drivers;
 mod utils;
 mod user;
 mod test;
@@ -34,7 +33,6 @@ fn clear_bss() {
 pub fn rust_main() -> ! {
     clear_bss();
 
-    utils::heap_allocator::init_heap();
     logging::log_init();
     info!("Logging is enabled.");
 
