@@ -1,6 +1,6 @@
+use crate::utils::{project_root, TaskResult};
 use serde::Deserialize;
 use std::collections::HashMap;
-use crate::utils::{project_root, TaskResult};
 use std::{env, path::PathBuf, process::Command};
 
 #[derive(Debug, Default)]
@@ -117,6 +117,10 @@ impl super::TaskPlugin for BuildTask {
 
         // Add log level
         cargo_envs.insert("LOG".to_string(), self.build_config.log.to_string());
+
+        // Add build time
+        let build_time = chrono::Local::now().to_string();
+        cargo_envs.insert("BUILD_TIME".to_string(), build_time);
 
         info!("==> Execute build command: cargo {}", cargo_args.join(" "));
 

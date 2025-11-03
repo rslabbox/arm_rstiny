@@ -18,10 +18,13 @@ extern crate alloc;
 pub fn rust_main(_cpu_id: usize, _arg: usize) -> ! {
     arch::arch_init();
 
-    println!("\nHello RustTinyOS...");
+    // 打印编译时间
+    println!("Build time: {}", option_env!("BUILD_TIME").unwrap_or("unknown"));
+
+    println!("\nHello RustTinyOS!\n");
 
     logging::log_init();
-    info!("Reached rust_main!");
+    info!("This is an info message for testing.");
     error!("This is an error message for testing.");
     debug!("This is a debug message for testing.");
     trace!("This is a trace message for testing.");
@@ -36,6 +39,9 @@ pub fn rust_main(_cpu_id: usize, _arg: usize) -> ! {
 
 #[cfg(all(target_os = "none", not(test)))]
 #[panic_handler]
-fn panic(_info: &core::panic::PanicInfo) -> ! {
-    loop {}
+fn panic(info: &core::panic::PanicInfo) -> ! {
+    use crate::arch::device::psci::system_off;
+
+    println!("PANIC: {}", info);
+    system_off();
 }

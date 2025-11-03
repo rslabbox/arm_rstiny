@@ -6,7 +6,7 @@ pub struct SimpleLogger;
 impl Write for SimpleLogger {
     fn write_str(&mut self, s: &str) -> fmt::Result {
         for c in s.chars() {
-            crate::arch::dw_apb_uart::putchar(c as u8);
+            crate::arch::device::dw_apb_uart::putchar(c as u8);
         }
         Ok(())
     }
@@ -83,7 +83,7 @@ impl Log for SimpleLogger {
         let color_reset = "\u{1B}[0m";
 
         // 获取对应级别的颜色
-        let (level_color, args_color) = match level {
+        let (_level_color, args_color) = match level {
             Level::Error => (ColorCode::BrightRed, ColorCode::Red),
             Level::Warn => (ColorCode::BrightYellow, ColorCode::Yellow),
             Level::Info => (ColorCode::BrightGreen, ColorCode::Green),
@@ -91,9 +91,13 @@ impl Log for SimpleLogger {
             Level::Trace => (ColorCode::BrightBlack, ColorCode::BrightBlack),
         };
 
+        let current_ticks = crate::arch::device::generic_timer::boot_ticks();
+        let current_nanos =
+            crate::arch::device::generic_timer::ticks_to_nanos(current_ticks);
+        let secs = (current_nanos as f64) / (crate::arch::device::generic_timer::NANOS_PER_SEC as f64);
         // 彩色输出格式：[级别 文件:行号] 消息
         println!(
-            "[{level_color}{level}{color_reset} {file}:{line}] {args_color}{args}{color_reset}"
+            "[{secs} {file}:{line}] {args_color}{args}{color_reset}"
         );
     }
 

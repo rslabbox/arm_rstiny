@@ -48,7 +48,7 @@ pub(crate) fn irq_handler() {
 
 /// Register an interrupt handler for the given interrupt ID
 #[allow(unused)]
-pub fn irq_register(intid: IntId, handler: IrqHandler) {
+pub fn irqset_register(intid: IntId, handler: IrqHandler) {
     let mut handler_table = IRQ_HANDLER_TABLE.lock();
     let intid_val = u32::from(intid) as usize;
     handler_table[intid_val] = Some(handler);
@@ -57,7 +57,7 @@ pub fn irq_register(intid: IntId, handler: IrqHandler) {
 
 /// Unregister the interrupt handler for the given interrupt ID
 #[allow(unused)]
-pub fn irq_unregister(intid: IntId) {
+pub fn irqset_unregister(intid: IntId) {
     let mut handler_table = IRQ_HANDLER_TABLE.lock();
     let intid_val = u32::from(intid) as usize;
     handler_table[intid_val] = None;
@@ -66,7 +66,7 @@ pub fn irq_unregister(intid: IntId) {
 
 /// Enable the given interrupt
 #[allow(unused)]
-pub fn irq_enable(intid: IntId) {
+pub fn irqset_enable(intid: IntId) {
     let mut gic = GIC.lock();
     if let Some(ref mut gic) = *gic {
         let intid_val = u32::from(intid);
@@ -86,7 +86,7 @@ pub fn irq_enable(intid: IntId) {
 
 /// Disable the given interrupt
 #[allow(unused)]
-pub fn irq_disable(intid: IntId) {
+pub fn irqset_disable(intid: IntId) {
     let mut gic = GIC.lock();
     if let Some(ref mut gic) = *gic {
         let intid_val = u32::from(intid);

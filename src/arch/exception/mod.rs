@@ -36,7 +36,7 @@ fn invalid_exception(tf: &TrapFrame, kind: TrapKind, source: TrapSource) {
 
 #[unsafe(no_mangle)]
 fn handle_irq_exception(_tf: &TrapFrame) {
-    crate::arch::gicv3::irq_handler();
+    crate::arch::device::gicv3::irq_handler();
 }
 
 fn handle_instruction_abort(tf: &TrapFrame, _iss: u64) {

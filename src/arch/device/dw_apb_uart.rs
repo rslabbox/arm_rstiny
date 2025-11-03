@@ -4,10 +4,11 @@ use dw_apb_uart::DW8250;
 use kspin::SpinNoIrq;
 use memory_addr::{PhysAddr, pa};
 
+use crate::arch::mem::phys_to_virt;
+
 const UART_BASE: PhysAddr = pa!(crate::config::devices::UART_PADDR);
 
-static UART: SpinNoIrq<DW8250> =
-    SpinNoIrq::new(DW8250::new(super::mem::phys_to_virt(UART_BASE).as_usize()));
+static UART: SpinNoIrq<DW8250> = SpinNoIrq::new(DW8250::new(phys_to_virt(UART_BASE).as_usize()));
 
 /// Writes a byte to the console.
 #[allow(dead_code)]
