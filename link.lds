@@ -1,58 +1,101 @@
 OUTPUT_ARCH(aarch64)
 
-BASE_ADDRESS = 0x400000;
+BASE_ADDRESS = 0xffff000000400000;
 
 ENTRY(_start)
 SECTIONS
 {
     . = BASE_ADDRESS;
-    skernel = .;
+    _skernel = .;
 
-    .text : {
-        stext = .;
+    .text : ALIGN(4K) {
+        _stext = .;
         *(.text.boot)
         *(.text .text.*)
         . = ALIGN(4K);
-        etext = .;
+        _etext = .;
     }
 
-    .rodata : {
-        srodata = .;
+    _srodata = .;
+    .rodata : ALIGN(4K) {
         *(.rodata .rodata.*)
         *(.srodata .srodata.*)
-        . = ALIGN(4K);
-        erodata = .;
+        *(.sdata2 .sdata2.*)
     }
 
-    .data : {
-        sdata = .;
+    .init_array : ALIGN(0x10) {
+        __init_array_start = .;
+        *(.init_array .init_array.*)
+        __init_array_end = .;
+    }
+
+    . = ALIGN(4K);
+    _erodata = .;
+
+    .data : ALIGN(4K) {
+        _sdata = .;
         *(.data.boot_page_table)
+        . = ALIGN(4K);
         *(.data .data.*)
         *(.sdata .sdata.*)
         *(.got .got.*)
-        . = ALIGN(4K);
-        edata = .;
     }
 
-    .bss : {
+    .tdata : ALIGN(0x10) {
+        _stdata = .;
+        *(.tdata .tdata.*)
+        _etdata = .;
+    }
+
+    .tbss : ALIGN(0x10) {
+        _stbss = .;
+        *(.tbss .tbss.*)
+        *(.tcommon)
+        _etbss = .;
+    }
+
+    . = ALIGN(4K);
+    _percpu_start = .;
+    _percpu_end = _percpu_start + SIZEOF(.percpu);
+    .percpu 0x0 : AT(_percpu_start) {
+        _percpu_load_start = .;
+        *(.percpu .percpu.*)
+        _percpu_load_end = .;
+        . = _percpu_load_start + ALIGN(64) * 1;
+    }
+    . = _percpu_end;
+
+    . = ALIGN(4K);
+    _edata = .;
+
+    .bss : AT(.) ALIGN(4K) {
         boot_stack = .;
         *(.bss.stack)
         . = ALIGN(4K);
         boot_stack_top = .;
 
-        sbss = .;
+        _sbss = .;
         *(.bss .bss.*)
         *(.sbss .sbss.*)
+        *(COMMON)
         . = ALIGN(4K);
-        ebss = .;
+        _ebss = .;
     }
 
-    /* 确保整个镜像结束时也是4K对齐 */
-    . = ALIGN(4096);
+    _ekernel = .;
 
-    ekernel = .;
-
-    /DISCARD/ : {
-        *(.eh_frame) *(.eh_frame_hdr)
+	/DISCARD/ : {
+        *(.comment) *(.gnu*) *(.note*) *(.eh_frame*)
     }
 }
+
+SECTIONS {
+    linkme_IRQ : { *(linkme_IRQ) }
+    linkm2_IRQ : { *(linkm2_IRQ) }
+    linkme_PAGE_FAULT : { *(linkme_PAGE_FAULT) }
+    linkm2_PAGE_FAULT : { *(linkm2_PAGE_FAULT) }
+    linkme_SYSCALL : { *(linkme_SYSCALL) }
+    linkm2_SYSCALL : { *(linkm2_SYSCALL) }
+    axns_resource : { *(axns_resource) }
+}
+INSERT AFTER .tbss;

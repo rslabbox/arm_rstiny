@@ -1,5 +1,5 @@
 use serde::Deserialize;
-
+use std::collections::HashMap;
 use crate::utils::{project_root, TaskResult};
 use std::{env, path::PathBuf, process::Command};
 
@@ -97,6 +97,7 @@ impl super::TaskPlugin for BuildTask {
 
         // Build cargo arguments
         let mut cargo_args = vec!["build".to_string()];
+        let mut cargo_envs: HashMap<String, String> = HashMap::new();
 
         // Add mode argument
         if self.build_config.mode == "release" {
@@ -109,13 +110,20 @@ impl super::TaskPlugin for BuildTask {
 
         // Add linker lds
         let linker_path = "link.lds";
+        cargo_envs.insert(
+            "RUSTFLAGS".to_string(),
+            format!("-C link-arg=-T{}", linker_path),
+        );
+
+        // Add log level
+        cargo_envs.insert("LOG".to_string(), self.build_config.log.to_string());
 
         info!("==> Execute build command: cargo {}", cargo_args.join(" "));
 
         let cargo_status = Command::new("cargo")
             .args(&cargo_args)
             .current_dir(&project_root)
-            .env("RUSTFLAGS", format!("-C link-arg=-T{}", linker_path))
+            .envs(&cargo_envs)
             .status()?;
 
         if !cargo_status.success() {

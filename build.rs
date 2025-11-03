@@ -1,6 +1,0 @@
-// build.rs
-fn main() {
-    // println!("cargo:rustc-link-arg=-T");
-    // println!("cargo:rustc-link-arg=link.lds");
-    // println!("cargo:rustc-codegen-options=-C target-cpu=cortex-a76");
-}

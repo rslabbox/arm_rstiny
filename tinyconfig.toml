@@ -3,8 +3,8 @@ mode = "release"
 target = "aarch64-unknown-none-softfloat"
 log = "info"
 tool_path = "tools/orangepi5"
-load_address = 0x802_0000
-entry_point = 0x802_0000
+load_address = 0x40_0000
+entry_point = 0x40_0000
 
 [tftp]
 tftp_path = "/data/docker/tftpboot/data/kernel.uimg"

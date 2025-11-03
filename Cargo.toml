@@ -4,6 +4,18 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+bitflags = "2.6"
+memory_addr = "0.4"
+page_table_entry = "0.5"
+aarch64-cpu = "11.1.0"
+
+log = "0.4"
+talc = "4.4.3"
+kspin = "0.1"
+spin = "0.10.0"
+dw_apb_uart = "0.1"
+lazyinit = "0.2"
+arm-gic = "0.7.1"
 
 [workspace]
 members = ["xtask"]
