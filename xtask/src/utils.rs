@@ -17,6 +17,10 @@ pub enum TaskError {
     Io(#[from] std::io::Error),
     #[error("toml: {0}")]
     Toml(#[from] toml::de::Error),
+    #[error("figment: {0}")]
+    Figment(#[from] figment::Error),
+    #[error("xshell: {0}")]
+    Shell(#[from] xshell::Error),
     #[error("Ok")]
     Ok,
 }

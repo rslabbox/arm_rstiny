@@ -3,6 +3,11 @@ name = "rstiny_arm"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+default = ["opi5p"]
+opi5p = []
+qemu = []
+
 [dependencies]
 bitflags = "2.6"
 memory_addr = "0.4"
@@ -17,6 +22,9 @@ dw_apb_uart = "0.1"
 lazyinit = "0.2"
 arm-gic = "0.7.1"
 int_ratio = "0.1"
+
+arm_pl011 = "0.1"
+
 
 [workspace]
 members = ["xtask"]

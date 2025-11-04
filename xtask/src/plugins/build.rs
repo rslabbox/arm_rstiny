@@ -1,13 +1,7 @@
 use crate::utils::{project_root, TaskResult};
 use serde::Deserialize;
-use std::collections::HashMap;
-use std::{env, path::PathBuf, process::Command};
-
-#[derive(Debug, Default)]
-struct BuildOptions {
-    log: Option<String>,
-    mode: Option<String>,
-}
+use std::path::PathBuf;
+use xshell::{cmd, Shell};
 
 #[derive(Debug, Deserialize, Default)]
 struct BuildConfig {
@@ -19,54 +13,19 @@ struct BuildConfig {
     entry_point: usize,
 }
 
-fn parse_build_options(args: &mut impl Iterator<Item = String>) -> TaskResult<BuildOptions> {
-    let mut options = BuildOptions::default();
-
-    while let Some(arg) = args.next() {
-        match arg.as_str() {
-            "--log" => {
-                options.log = args.next();
-            }
-            "--mode" => {
-                options.mode = args.next();
-            }
-            "--help" | "-h" => {
-                println!("Build Task Help:");
-                println!("  --log <level>    Set the log level (e.g., info, debug)");
-                println!("  --mode <mode>    Set the build mode (e.g., debug, release)");
-                return Err(crate::utils::TaskError::Ok);
-            }
-            _ => {
-                return Err(crate::utils::TaskError::UnknownArgument(arg));
-            }
-        }
-    }
-
-    Ok(options)
-}
-
 pub struct BuildTask {
     project_name: String,
     build_config: BuildConfig,
 }
 
 impl BuildTask {
-    pub fn elf_name(&self) -> PathBuf {
-        project_root()
-            .join("target")
-            .join(self.build_config.target.clone())
-            .join(self.build_config.mode.clone())
-            .join(self.project_name.clone())
-    }
-}
-
-impl super::TaskPlugin for BuildTask {
-    fn new(args: &[String], config: &toml::Value) -> Self {
-        let options = parse_build_options(&mut args.iter().cloned()).unwrap_or_default();
+    pub fn new(options: crate::BuildOptions, config: &toml::Value) -> TaskResult<Self> {
         let mut build_config: BuildConfig = config
             .get("build")
             .and_then(|v| v.clone().try_into().ok())
             .unwrap_or_default();
+        
+        // 用命令行参数覆盖配置文件
         if let Some(log) = options.log {
             build_config.log = log;
         }
@@ -74,137 +33,82 @@ impl super::TaskPlugin for BuildTask {
             build_config.mode = mode;
         }
 
-        BuildTask {
+        Ok(BuildTask {
             project_name: env!("PROJECT_NAME").to_string(),
             build_config,
-        }
+        })
     }
 
-    fn description() -> &'static str {
-        "Build the project with specified configurations."
+    pub fn elf_name(&self) -> PathBuf {
+        project_root()
+            .join("target")
+            .join(self.build_config.target.clone())
+            .join(self.build_config.mode.clone())
+            .join(self.project_name.clone())
     }
 
-    fn execute(&self) -> TaskResult<()> {
+    pub fn execute(&self) -> TaskResult<()> {
+        let sh = Shell::new()?;
         let project_root = project_root();
+        sh.change_dir(&project_root);
 
         info!("==> Read configs:");
         info!("    Project Name: {}", self.project_name);
-        info!("    Model: {}", self.build_config.mode);
+        info!("    Mode: {}", self.build_config.mode);
         info!("    Target Platform: {}", self.build_config.target);
         info!("    Log Level: {}", self.build_config.log);
         info!("    Tool path: {}", self.build_config.tool_path);
         info!("    Output Dir: {}", self.elf_name().display());
 
-        // Build cargo arguments
-        let mut cargo_args = vec!["build".to_string()];
-        let mut cargo_envs: HashMap<String, String> = HashMap::new();
-
-        // Add mode argument
-        if self.build_config.mode == "release" {
-            cargo_args.push("--release".to_string());
-        }
-
-        // Add target platform
-        cargo_args.push("--target".to_string());
-        cargo_args.push(self.build_config.target.to_string());
-
-        // Add linker lds
+        // Prepare environment variables
         let linker_path = "link.lds";
-        cargo_envs.insert(
-            "RUSTFLAGS".to_string(),
-            format!("-C link-arg=-T{}", linker_path),
-        );
-
-        // Add log level
-        cargo_envs.insert("LOG".to_string(), self.build_config.log.to_string());
-
-        // Add build time
+        let rustflags = format!("-C link-arg=-T{}", linker_path);
+        let log_level = &self.build_config.log;
         let build_time = chrono::Local::now().to_string();
-        cargo_envs.insert("BUILD_TIME".to_string(), build_time);
 
-        info!("==> Execute build command: cargo {}", cargo_args.join(" "));
+        // Set environment variables for cargo
+        sh.set_var("RUSTFLAGS", &rustflags);
+        sh.set_var("LOG", log_level);
+        sh.set_var("BUILD_TIME", &build_time);
 
-        let cargo_status = Command::new("cargo")
-            .args(&cargo_args)
-            .current_dir(&project_root)
-            .envs(&cargo_envs)
-            .status()?;
-
-        if !cargo_status.success() {
-            return Err(crate::utils::TaskError::ExecutionFailed(
-                "cargo build".into(),
-            ));
+        // Build cargo command
+        let target = &self.build_config.target;
+        
+        info!("==> Execute build command");
+        if self.build_config.mode == "release" {
+            cmd!(sh, "cargo build --release --target {target}").run()?;
+        } else {
+            cmd!(sh, "cargo build --target {target}").run()?;
         }
 
         info!("==> Build succeeded!");
         info!("    ELF file: {}", self.elf_name().display());
 
+        // Generate binary file
         info!("==> Copy binary");
-        let objcopy_status = Command::new("rust-objcopy")
-            .arg("-O")
-            .arg("binary")
-            .arg(self.elf_name().to_str().unwrap())
-            .arg(self.elf_name().with_extension("bin").to_str().unwrap())
-            .status()?;
+        let elf_path = self.elf_name();
+        let bin_path = elf_path.with_extension("bin");
+        cmd!(sh, "rust-objcopy -O binary {elf_path} {bin_path}").run()?;
+        info!("    Binary file: {}", bin_path.display());
 
-        if !objcopy_status.success() {
-            return Err(crate::utils::TaskError::ExecutionFailed(
-                "rust-objcopy".into(),
-            ));
-        }
-        info!(
-            "    Binary file: {}",
-            self.elf_name().with_extension("bin").display()
-        );
-
+        // Generate disassembly file
         info!("==> Objdump");
-        let objdump_output = Command::new("rust-objdump")
-            .arg("-d")
-            .arg("--print-imm-hex")
-            .arg(self.elf_name().to_str().unwrap())
-            .output()?;
+        let asm_path = elf_path.with_extension("asm");
+        let asm_content = cmd!(sh, "rust-objdump -d --print-imm-hex {elf_path}").read()?;
+        std::fs::write(&asm_path, asm_content)?;
+        info!("    ASM file: {}", asm_path.display());
 
-        if !objdump_output.status.success() {
-            return Err(crate::utils::TaskError::ExecutionFailed(
-                "rust-objdump".into(),
-            ));
-        }
-
-        // Write objdump output to .asm file
-        let asm_file = self.elf_name().with_extension("asm");
-        std::fs::write(&asm_file, objdump_output.stdout)?;
-        info!("    ASM file: {}", asm_file.display());
-
+        // Generate U-Boot image
         info!("==> Mkimage");
-        let mkimage_status = Command::new("mkimage")
-            .arg("-A")
-            .arg("arm")
-            .arg("-O")
-            .arg("linux")
-            .arg("-T")
-            .arg("kernel")
-            .arg("-C")
-            .arg("none")
-            .arg("-a")
-            .arg(format!("0x{:x}", self.build_config.load_address))
-            .arg("-e")
-            .arg(format!("0x{:x}", self.build_config.entry_point))
-            .arg("-n")
-            .arg(&self.project_name)
-            .arg("-d")
-            .arg(self.elf_name().with_extension("bin").to_str().unwrap())
-            .arg(self.elf_name().with_extension("uimg").to_str().unwrap())
-            .status()?;
-        if !mkimage_status.success() {
-            return Err(crate::utils::TaskError::ExecutionFailed("mkimage".into()));
-        }
-        info!(
-            "    UIMG file: {}",
-            self.elf_name().with_extension("uimg").display()
-        );
+        let uimg_path = elf_path.with_extension("uimg");
+        let load_addr = format!("0x{:x}", self.build_config.load_address);
+        let entry_point = format!("0x{:x}", self.build_config.entry_point);
+        let project_name = &self.project_name;
+        
+        cmd!(sh, "mkimage -A arm -O linux -T kernel -C none -a {load_addr} -e {entry_point} -n {project_name} -d {bin_path} {uimg_path}").run()?;
+        info!("    UIMG file: {}", uimg_path.display());
 
         Ok(())
     }
 }
 
-pub use BuildTask as TaskInstance;

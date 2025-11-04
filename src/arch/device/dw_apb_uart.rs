@@ -37,6 +37,6 @@ pub fn init_early() {
 
 /// UART IRQ Handler
 #[allow(dead_code)]
-pub fn handle(irq: usize) {
+pub fn irq_handle(irq: usize) {
     panic!("Uart IRQ Handler: {irq}");
 }
