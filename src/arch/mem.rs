@@ -5,7 +5,7 @@ use core::ops::{Deref, DerefMut};
 
 use memory_addr::{PhysAddr, VirtAddr, pa, va};
 
-use crate::config::PHYS_VIRT_OFFSET;
+use crate::config::kernel::PHYS_VIRT_OFFSET;
 
 bitflags::bitflags! {
     /// The flags of a physical memory region.

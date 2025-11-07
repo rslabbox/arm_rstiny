@@ -1,5 +1,5 @@
 use super::mem::Aligned4K;
-use crate::config::BOOT_STACK_SIZE;
+use crate::config::kernel::BOOT_STACK_SIZE;
 use aarch64_cpu::asm::barrier;
 use aarch64_cpu::registers::*;
 use memory_addr::{PhysAddr, pa};

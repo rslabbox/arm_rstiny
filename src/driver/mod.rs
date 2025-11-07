@@ -22,6 +22,10 @@ pub use driver_base::*;
 pub fn probe_mmio_device() {
     info!("=== Starting PCIe Device Probing (Using DW iATU) ===");
 
+    pci::test_dw_pcie_atu();
+
+    loop {}
+
     // First test if iATU is working properly
     pcie_dw::test_iatu();
 

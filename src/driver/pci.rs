@@ -396,6 +396,211 @@ impl PciConfig {
     }
 }
 
+// ============================================================================
+// DesignWare PCIe ATU (Address Translation Unit) Support
+// ============================================================================
+
+/// DBI (DesignWare Bus Interface) register base address for RK3588
+#[allow(dead_code)]
+const DBI_BASE: u64 = 0xa40c00000;
+
+/// iATU Unroll mode register offsets
+#[allow(dead_code)]
+const PCIE_ATU_UNR_REGION_CTRL1: usize = 0x00;
+#[allow(dead_code)]
+const PCIE_ATU_UNR_REGION_CTRL2: usize = 0x04;
+#[allow(dead_code)]
+const PCIE_ATU_UNR_LOWER_BASE: usize = 0x08;
+#[allow(dead_code)]
+const PCIE_ATU_UNR_UPPER_BASE: usize = 0x0C;
+#[allow(dead_code)]
+const PCIE_ATU_UNR_LOWER_LIMIT: usize = 0x10;
+#[allow(dead_code)]
+const PCIE_ATU_UNR_UPPER_LIMIT: usize = 0x14;
+#[allow(dead_code)]
+const PCIE_ATU_UNR_LOWER_TARGET: usize = 0x14;
+#[allow(dead_code)]
+const PCIE_ATU_UNR_UPPER_TARGET: usize = 0x18;
+
+/// iATU Unroll base address offset (DBI + 0x300000)
+#[allow(dead_code)]
+const DEFAULT_DBI_ATU_OFFSET: u64 = 0x3 << 20; // 0x300000
+
+/// iATU Enable bit
+#[allow(dead_code)]
+const PCIE_ATU_ENABLE: u32 = 1 << 31;
+
+/// iATU Type: Config Type 0
+#[allow(dead_code)]
+const PCIE_ATU_TYPE_CFG0: u32 = 0x4;
+/// iATU Type: Config Type 1
+#[allow(dead_code)]
+const PCIE_ATU_TYPE_CFG1: u32 = 0x5;
+/// iATU Type: I/O
+#[allow(dead_code)]
+const PCIE_ATU_TYPE_IO: u32 = 0x2;
+/// iATU Type: Memory
+#[allow(dead_code)]
+const PCIE_ATU_TYPE_MEM: u32 = 0x0;
+
+/// iATU Region Index for configuration access
+#[allow(dead_code)]
+const PCIE_ATU_REGION_INDEX1: u32 = 1;
+
+/// Maximum retries for iATU enable
+const LINK_WAIT_MAX_IATU_RETRIES: usize = 5;
+
+/// Get outbound iATU region register offset
+/// Each region is 512 bytes (region << 9)
+#[inline]
+const fn get_atu_outb_unr_reg_offset(region: u32) -> usize {
+    (region as usize) << 9
+}
+
+/// DesignWare PCIe controller ATU operations
+pub struct DwPcieAtu {
+    dbi_base_virt: usize,
+    atu_base_virt: usize,
+}
+
+impl DwPcieAtu {
+    /// Create new ATU accessor
+    pub fn new() -> Self {
+        let dbi_base_virt = phys_to_virt(PhysAddr::from(DBI_BASE as usize)).as_usize();
+        let atu_base_virt = dbi_base_virt + (DEFAULT_DBI_ATU_OFFSET as usize);
+
+        info!("DesignWare PCIe ATU Initialization:");
+        info!("  DBI Base:  phys={:#010x}, virt={:#018x}", DBI_BASE, dbi_base_virt);
+        info!("  ATU Base:  virt={:#018x}", atu_base_virt);
+
+        Self {
+            dbi_base_virt,
+            atu_base_virt,
+        }
+    }
+
+    /// Write to outbound ATU register (Unroll mode)
+    #[inline]
+    fn writel_ob_unroll(&self, index: u32, reg: usize, val: u32) {
+        let offset = get_atu_outb_unr_reg_offset(index);
+        let addr = (self.atu_base_virt + offset + reg) as *mut u32;
+        unsafe {
+            core::ptr::write_volatile(addr, val);
+        }
+    }
+
+    /// Read from outbound ATU register (Unroll mode)
+    #[inline]
+    fn readl_ob_unroll(&self, index: u32, reg: usize) -> u32 {
+        let offset = get_atu_outb_unr_reg_offset(index);
+        let addr = (self.atu_base_virt + offset + reg) as *const u32;
+        unsafe { core::ptr::read_volatile(addr) }
+    }
+
+    /// Program outbound ATU (Unroll mode)
+    ///
+    /// # Parameters
+    /// * `index` - ATU region index
+    /// * `atu_type` - ATU access type (CFG0, CFG1, MEM, IO)
+    /// * `cpu_addr` - Physical address for the translation entry (source)
+    /// * `pci_addr` - PCIe bus address for the translation entry (target)
+    /// * `size` - Size of the translation entry
+    ///
+    /// # Returns
+    /// * `Ok(())` on success
+    /// * `Err(&str)` on failure
+    pub fn prog_outbound_atu(
+        &self,
+        index: u32,
+        atu_type: u32,
+        cpu_addr: u64,
+        pci_addr: u64,
+        size: u32,
+    ) -> Result<(), &'static str> {
+        info!(
+            "ATU[{}]: type={:#x}, cpu={:#016x}, pci={:#016x}, size={:#x}",
+            index, atu_type, cpu_addr, pci_addr, size
+        );
+
+        // Configure lower and upper base (source CPU address)
+        let lower_base = (cpu_addr & 0xFFFFFFFF) as u32;
+        let upper_base = (cpu_addr >> 32) as u32;
+
+        self.writel_ob_unroll(index, PCIE_ATU_UNR_LOWER_BASE, lower_base);
+        self.writel_ob_unroll(index, PCIE_ATU_UNR_UPPER_BASE, upper_base);
+
+        // Configure limit (end of source address range)
+        let limit_addr = cpu_addr + (size as u64) - 1;
+        let lower_limit = (limit_addr & 0xFFFFFFFF) as u32;
+        let upper_limit = (limit_addr >> 32) as u32;
+
+        self.writel_ob_unroll(index, PCIE_ATU_UNR_LOWER_LIMIT, lower_limit);
+        self.writel_ob_unroll(index, PCIE_ATU_UNR_UPPER_LIMIT, upper_limit);
+
+        // Configure target address (PCIe bus address)
+        let lower_target = (pci_addr & 0xFFFFFFFF) as u32;
+        let upper_target = (pci_addr >> 32) as u32;
+
+        self.writel_ob_unroll(index, PCIE_ATU_UNR_LOWER_TARGET, lower_target);
+        self.writel_ob_unroll(index, PCIE_ATU_UNR_UPPER_TARGET, upper_target);
+
+        // Configure region control (transaction type)
+        self.writel_ob_unroll(index, PCIE_ATU_UNR_REGION_CTRL1, atu_type);
+
+        // Enable ATU region
+        self.writel_ob_unroll(index, PCIE_ATU_UNR_REGION_CTRL2, PCIE_ATU_ENABLE);
+
+        // Wait for ATU enable to take effect
+        for retry in 0..LINK_WAIT_MAX_IATU_RETRIES {
+            let val = self.readl_ob_unroll(index, PCIE_ATU_UNR_REGION_CTRL2);
+            if (val & PCIE_ATU_ENABLE) != 0 {
+                if retry > 0 {
+                    debug!("ATU[{}] enabled after {} retries", index, retry);
+                }
+                return Ok(());
+            }
+            // Small delay
+            for _ in 0..100_000 {
+                core::hint::spin_loop();
+            }
+        }
+
+        error!("ATU[{}] enable timeout!", index);
+        Err("Outbound iATU is not being enabled")
+    }
+
+    /// Dump ATU region configuration for debugging
+    pub fn dump_atu_config(&self, index: u32) {
+        let lower_base = self.readl_ob_unroll(index, PCIE_ATU_UNR_LOWER_BASE);
+        let upper_base = self.readl_ob_unroll(index, PCIE_ATU_UNR_UPPER_BASE);
+        let lower_limit = self.readl_ob_unroll(index, PCIE_ATU_UNR_LOWER_LIMIT);
+        let upper_limit = self.readl_ob_unroll(index, PCIE_ATU_UNR_UPPER_LIMIT);
+        let lower_target = self.readl_ob_unroll(index, PCIE_ATU_UNR_LOWER_TARGET);
+        let upper_target = self.readl_ob_unroll(index, PCIE_ATU_UNR_UPPER_TARGET);
+        let ctrl1 = self.readl_ob_unroll(index, PCIE_ATU_UNR_REGION_CTRL1);
+        let ctrl2 = self.readl_ob_unroll(index, PCIE_ATU_UNR_REGION_CTRL2);
+
+        info!("ATU Region {} Configuration:", index);
+        info!("  CTRL1 (Type):     {:#010x}", ctrl1);
+        info!(
+            "  CTRL2 (Enable):   {:#010x} {}",
+            ctrl2,
+            if (ctrl2 & PCIE_ATU_ENABLE) != 0 {
+                "[ENABLED]"
+            } else {
+                "[DISABLED]"
+            }
+        );
+        info!("  Source (CPU):     {:#010x}_{:08x}", upper_base, lower_base);
+        info!("  Limit:            {:#010x}_{:08x}", upper_limit, lower_limit);
+        info!("  Target (PCIe):    {:#010x}_{:08x}", upper_target, lower_target);
+    }
+}
+
+// ============================================================================
+// Standard ECAM Configuration Space Access
+// ============================================================================
+
 /// Default PCI configuration for RK3588 PCIe controller
 /// Based on device tree: pcie@fe180000
 pub fn default_pci_config() -> PciConfig {
@@ -459,3 +664,39 @@ pub fn find_network_controllers() -> alloc::vec::Vec<PciDeviceInfo> {
     let pci_config = default_pci_config();
     pci_config.find_devices_by_class(0x02) // Network controller class
 }
+
+/// Test DesignWare PCIe ATU functionality
+/// 
+/// This function demonstrates how to use the ATU to configure outbound
+/// address translation for PCIe configuration space access.
+#[allow(dead_code)]
+pub fn test_dw_pcie_atu() {
+    info!("=== Testing DesignWare PCIe ATU ===");
+
+    let atu = DwPcieAtu::new();
+
+    // Example: Configure ATU for configuration space access
+    // Region 1, Type CFG0, CPU address -> PCIe bus address
+    let cpu_addr = 0xf300_0000u64; // Configuration window
+    let pci_addr = 0x0000_0000u64; // Bus 0, Device 0, Function 0
+    let size = 0x10_0000u32; // 1MB window
+
+    info!("Configuring ATU region 1 for configuration access");
+    match atu.prog_outbound_atu(PCIE_ATU_REGION_INDEX1, PCIE_ATU_TYPE_CFG0, cpu_addr, pci_addr, size) {
+        Ok(_) => {
+            info!("ATU configuration successful");
+            atu.dump_atu_config(PCIE_ATU_REGION_INDEX1);
+
+            // READ pci test 0xf3000000
+            let test_addr = phys_to_virt(PhysAddr::from(0xf300_0000u64 as usize));
+            unsafe {
+                let val = core::ptr::read_volatile(test_addr.as_ptr() as *const u32);
+                info!("Read from PCI config space at 0xf3000000: {:#010x}", val);
+            }
+        }
+        Err(e) => {
+            error!("ATU configuration failed: {}", e);
+        }
+    }
+}
+

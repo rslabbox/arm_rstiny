@@ -2,7 +2,7 @@ use core::alloc::{GlobalAlloc, Layout};
 
 use talc::*;
 
-use crate::config::HEAP_ALLOCATOR_SIZE;
+use crate::config::kernel::HEAP_ALLOCATOR_SIZE;
 
 static mut ARENA: [u8; HEAP_ALLOCATOR_SIZE] = [0; HEAP_ALLOCATOR_SIZE];
 

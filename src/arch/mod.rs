@@ -34,7 +34,7 @@ pub fn flush_tlb(vaddr: Option<VirtAddr>) {
 
 // Setup timer interrupt handler
 const PERIODIC_INTERVAL_NANOS: u64 =
-    device::generic_timer::NANOS_PER_SEC / crate::config::TICKS_PER_SEC as u64;
+    device::generic_timer::NANOS_PER_SEC / crate::config::kernel::TICKS_PER_SEC as u64;
 
 static NEXT_DEADLINE: AtomicU64 = AtomicU64::new(0);
 pub fn update_timer() {
