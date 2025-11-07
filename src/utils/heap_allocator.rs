@@ -1,4 +1,4 @@
-use core::alloc::Layout;
+use core::alloc::{GlobalAlloc, Layout};
 
 use talc::*;
 
@@ -17,4 +17,8 @@ static ALLOCATOR: Talck<spin::Mutex<()>, ClaimOnOom> = Talc::new(unsafe {
 #[alloc_error_handler]
 pub fn handle_alloc_error(layout: Layout) -> ! {
     panic!("Heap allocation error, layout = {:?}", layout);
+}
+
+pub fn global_allocator() -> &'static dyn GlobalAlloc {
+    &ALLOCATOR
 }

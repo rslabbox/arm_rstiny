@@ -1,6 +1,6 @@
 use clap::{Parser, Subcommand};
-use std::process::exit;
 use std::fs;
+use std::process::exit;
 
 mod utils;
 use utils::{project_root, TaskResult};
@@ -23,7 +23,7 @@ pub struct BuildOptions {
     /// Log level (trace, debug, info, warn, error)
     #[arg(long)]
     pub log: Option<String>,
-    
+
     /// Build mode (debug/release)
     #[arg(long)]
     pub mode: Option<String>,
@@ -33,9 +33,12 @@ pub struct BuildOptions {
 enum Commands {
     /// Build the project with specified configurations
     Build(BuildOptions),
-    
+
     /// Upload the built image file to TFTP server
     Tftp(BuildOptions),
+
+    /// Flash the built image to the target device
+    Flash(BuildOptions),
 }
 
 fn main() {
@@ -70,6 +73,10 @@ fn try_main() -> TaskResult<()> {
         }
         Commands::Tftp(options) => {
             let task = plugins::tftp::TftpTask::new(options, &config)?;
+            task.execute()?;
+        }
+        Commands::Flash(options) => {
+            let task = plugins::flash::FlashTask::new(options, &config)?;
             task.execute()?;
         }
     }

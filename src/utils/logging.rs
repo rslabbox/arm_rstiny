@@ -97,7 +97,7 @@ impl Log for SimpleLogger {
         let secs = (current_nanos as f64) / (crate::arch::device::generic_timer::NANOS_PER_SEC as f64);
         // 彩色输出格式：[级别 文件:行号] 消息
         println!(
-            "[{secs} {file}:{line}] {args_color}{args}{color_reset}"
+            "[{secs:.5} {file}:{line}] {args_color}{args}{color_reset}"
         );
     }
 

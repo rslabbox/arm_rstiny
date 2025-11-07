@@ -56,6 +56,8 @@ fn handle_data_abort(tf: &TrapFrame, _iss: u64) {
         FAR_EL1.get(),
         tf,
     );
+
+    panic!("Data Abort encountered");
 }
 
 #[unsafe(no_mangle)]

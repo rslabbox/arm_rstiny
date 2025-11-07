@@ -9,7 +9,7 @@ opi5p = []
 qemu = []
 
 [dependencies]
-bitflags = "2.6"
+bitflags = "2.10"
 memory_addr = "0.4"
 page_table_entry = "0.5"
 aarch64-cpu = "11.1.0"
@@ -25,9 +25,13 @@ int_ratio = "0.1"
 
 arm_pl011 = "0.1"
 
-
-[workspace]
-members = ["xtask"]
+# Network stack
+smoltcp = { version = "0.12", default-features = false, features = [
+    "alloc",
+    "proto-ipv4",
+    "socket-icmp",
+    "medium-ethernet",
+] }
 
 [profile.dev]
 panic = "abort"

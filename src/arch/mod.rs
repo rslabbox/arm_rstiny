@@ -49,6 +49,12 @@ pub fn update_timer() {
     device::generic_timer::set_oneshot_timer(next_deadline_ns);
 }
 
+pub fn busy_wait_us(us: u64) {
+    let start_ticks = device::generic_timer::current_ticks();
+    let wait_ticks = device::generic_timer::nanos_to_ticks(us * 1_000);
+    while device::generic_timer::current_ticks() - start_ticks < wait_ticks {}
+}
+
 pub fn arch_init() {
     exception::init_trap();
     mem::clear_bss();

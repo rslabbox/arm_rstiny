@@ -3,7 +3,7 @@
 use core::fmt;
 use core::ops::{Deref, DerefMut};
 
-use memory_addr::{PhysAddr, VirtAddr, va};
+use memory_addr::{PhysAddr, VirtAddr, pa, va};
 
 use crate::config::PHYS_VIRT_OFFSET;
 
@@ -59,8 +59,12 @@ impl<T> DerefMut for Aligned4K<T> {
     }
 }
 
-pub(crate) const fn phys_to_virt(paddr: PhysAddr) -> VirtAddr {
+pub const fn phys_to_virt(paddr: PhysAddr) -> VirtAddr {
     va!(paddr.as_usize() + PHYS_VIRT_OFFSET)
+}
+
+pub const fn virt_to_phys(vaddr: VirtAddr) -> PhysAddr {
+    pa!(vaddr.as_usize() - PHYS_VIRT_OFFSET)
 }
 
 unsafe extern "C" {

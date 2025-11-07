@@ -109,6 +109,8 @@ unsafe fn init_boot_page_table() {
     unsafe {
         // 0x0000_0000_0000 ~ 0x0080_0000_0000, table
         BOOT_PT_L0[0] = A64PTE::new_table(pa!(&raw mut BOOT_PT_L1 as usize));
+        
+        // Map low memory (0-4GB) for kernel and normal devices
         // 0x0000_0000_0000..0x0000_4000_0000, 1G block, normal memory
         BOOT_PT_L1[0] = A64PTE::new_page(
             pa!(0x0),
@@ -130,6 +132,14 @@ unsafe fn init_boot_page_table() {
         // 1G block, device memory. From 0xfb000000
         BOOT_PT_L1[3] = A64PTE::new_page(
             pa!(0xc0000000),
+            MappingFlags::READ | MappingFlags::WRITE | MappingFlags::DEVICE,
+            true,
+        );
+        
+        // Map PCIe ECAM configuration space at 0x0a_40c00000 (42GB)
+        // This is required for PCI device enumeration
+        BOOT_PT_L1[41] = A64PTE::new_page(
+            pa!(0x0a_40000000), // 42GB, 1G block aligned
             MappingFlags::READ | MappingFlags::WRITE | MappingFlags::DEVICE,
             true,
         );

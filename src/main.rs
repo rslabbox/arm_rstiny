@@ -6,6 +6,8 @@ mod arch;
 mod config;
 mod utils;
 mod test;
+mod driver;
+mod net;
 
 use utils::logging;
 
@@ -31,6 +33,8 @@ pub fn rust_main(_cpu_id: usize, _arg: usize) -> ! {
     warn!("This is a warning message for testing.");
     
     test::run_allocator_tests();
+
+    driver::probe_mmio_device();
 
     loop {
         
