@@ -11,8 +11,6 @@ impl Board for QemuVirt {
     const UART_PADDR: usize = config::UART_PADDR;
     const GICD_BASE: usize = config::GICD_BASE;
     const GICR_BASE: usize = config::GICR_BASE;
-
-    fn init() {
-        // Board-specific initialization
-    }
 }
+
+pub use QemuVirt as CurrentBoard;

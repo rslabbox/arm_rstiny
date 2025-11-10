@@ -71,6 +71,8 @@ pub fn rust_main(_cpu_id: usize, _arg: usize) -> ! {
         option_env!("BUILD_TIME").unwrap_or("unknown")
     );
 
+    println!("Board: {}", platform::config::BOARD_NAME);
+
     println!("\nHello RustTinyOS!\n");
 
     console::init_logger();

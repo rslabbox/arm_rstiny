@@ -1,5 +1,7 @@
 //! QEMU virt board configuration.
 
+pub const BOARD_NAME: &str = "QEMU virt";
+
 /// QEMU virt board constants.
 pub const UART_PADDR: usize = 0x0900_0000;
 pub const GICD_BASE: usize = 0x0800_0000;

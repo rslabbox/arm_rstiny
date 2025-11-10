@@ -10,5 +10,8 @@ pub mod addr;
 pub mod allocator;
 pub mod phys;
 
+#[allow(unused)]
 pub use addr::{phys_to_virt, virt_to_phys};
+
+#[allow(unused)]
 pub use phys::{Aligned4K, MemRegionFlags};

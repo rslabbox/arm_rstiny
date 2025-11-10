@@ -1,5 +1,6 @@
 //! ARM Power State Coordination Interface (PSCI) driver.
 
+#![allow(unused)]
 use core::sync::atomic::{AtomicBool, Ordering};
 use log::*;
 

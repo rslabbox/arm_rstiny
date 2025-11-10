@@ -12,7 +12,7 @@ use memory_addr::pa;
 use spin::Mutex;
 
 use crate::mm::phys_to_virt;
-use crate::platform::{CurrentBoard, board::Board};
+use crate::platform::config;
 
 /// The type of an interrupt handler.
 pub type IrqHandler = fn(usize);
@@ -54,6 +54,7 @@ pub fn irqset_register(intid: IntId, handler: IrqHandler) {
 }
 
 /// Unregister the interrupt handler for the given interrupt ID.
+#[allow(dead_code)]
 pub fn irqset_unregister(intid: IntId) {
     let mut handler_table = IRQ_HANDLER_TABLE.lock();
     let intid_val = u32::from(intid) as usize;
@@ -81,6 +82,7 @@ pub fn irqset_enable(intid: IntId) {
 }
 
 /// Disable the given interrupt.
+#[allow(dead_code)]
 pub fn irqset_disable(intid: IntId) {
     let mut gic = GIC.lock();
     if let Some(ref mut gic) = *gic {
@@ -102,9 +104,9 @@ pub fn irqset_disable(intid: IntId) {
 /// Initialize the GICv3 interrupt controller.
 pub fn init() {
     // Base addresses of the GICv3 distributor and redistributor.
-    let gicd_base_address: *mut Gicd = phys_to_virt(pa!(CurrentBoard::GICD_BASE)).as_mut_ptr_of();
+    let gicd_base_address: *mut Gicd = phys_to_virt(pa!(config::GICD_BASE)).as_mut_ptr_of();
     let gicr_base_address: *mut GicrSgi =
-        phys_to_virt(pa!(CurrentBoard::GICR_BASE)).as_mut_ptr_of();
+        phys_to_virt(pa!(config::GICR_BASE)).as_mut_ptr_of();
 
     let gicd = unsafe { UniqueMmioPointer::new(NonNull::new(gicd_base_address).unwrap()) };
     let gicr = NonNull::new(gicr_base_address).unwrap();

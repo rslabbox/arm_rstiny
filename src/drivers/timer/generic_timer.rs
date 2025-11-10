@@ -1,5 +1,6 @@
 //! ARM Generic Timer driver.
 
+#![allow(unused)]
 use core::sync::atomic::{AtomicU64, Ordering};
 
 use aarch64_cpu::registers::{CNTFRQ_EL0, CNTP_CTL_EL0, CNTP_TVAL_EL0, CNTPCT_EL0};
