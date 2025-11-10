@@ -1,36 +1,12 @@
+use core::error;
+
 use memory_addr::PhysAddr;
 
-use crate::TinyResult;
-use crate::mm::phys_to_virt;
+use crate::{drivers::pci::realtek::NetDriverOps, mm::phys_to_virt};
 
 mod atu;
-
-pub struct DwPcie {
-    atu: atu::DwPcieAtu,
-    cpu_addr: usize,
-    pci_addr: usize,
-    size: usize,
-}
-
-impl DwPcie {
-    pub fn new(dbi_base_virt: usize) -> Self {
-        let atu = atu::DwPcieAtu::new(dbi_base_virt);
-        Self {
-            atu,
-            cpu_addr: 0xf300_0000usize,
-            pci_addr: 0x0usize,
-            size: 0x10_0000usize,
-        }
-    }
-
-    pub fn pcie_dw_read_config(&self, addr: u64) -> TinyResult<u32> {
-        unsafe {
-            let virt_addr = phys_to_virt(PhysAddr::from(addr as usize));
-            let val = core::ptr::read_volatile(virt_addr.as_ptr() as *const u32);
-            Ok(val)
-        }
-    }
-}
+mod bus;
+mod realtek;
 
 /// DBI (DesignWare Bus Interface) register base address for RK3588
 #[allow(dead_code)]
@@ -42,37 +18,67 @@ const DBI_BASE: u64 = 0xa40c00000;
 /// address translation for PCIe configuration space access.
 pub fn test_dw_pcie_atu() {
     info!("=== Testing DesignWare PCIe ATU ===");
+    let mmio_base = phys_to_virt(PhysAddr::from(0xf300_0000usize));
+    let dbi_base = phys_to_virt(PhysAddr::from(DBI_BASE as usize));
+    let cpu_addr = 0xf300_0000usize; // Configuration window
+    let pci_addr = 0x0000_0000usize; // Bus 0, Device 0, Function 0
+    let phy_addr = 0x40100000usize; // Physical start address
+    let size = 0x10_0000usize; // 1MB window
+    let mut root = unsafe {
+        bus::PciRoot::new(
+            mmio_base.as_mut_ptr(),
+            dbi_base.as_usize(),
+            cpu_addr,
+            pci_addr,
+            size,
+            phy_addr,
+            bus::Cam::MmioCam,
+        )
+    };
 
-    let dbi_base = phys_to_virt(PhysAddr::from(DBI_BASE as usize)).as_usize();
-    let atu = atu::DwPcieAtu::new(dbi_base);
+    let (bdf, dev_info) = root
+        .enumerate_bus(0)
+        .next()
+        .expect("Failed to enumerate PCIe bus");
 
-    // Example: Configure ATU for configuration space access
-    // Region 1, Type CFG0, CPU address -> PCIe bus address
-    let cpu_addr = 0xf300_0000u64; // Configuration window
-    let pci_addr = 0x0000_0000u64; // Bus 0, Device 0, Function 0
-    let size = 0x10_0000u32; // 1MB window
+    info!("PCI {}: {}", bdf, dev_info);
 
-    info!("Configuring ATU region 1 for configuration access");
-    match atu.prog_outbound_atu(
-        atu::AtuRegionIndex::Region1,
-        atu::AtuType::Config0,
-        cpu_addr,
-        pci_addr,
-        size,
-    ) {
-        Ok(_) => {
-            info!("ATU configuration successful");
-            atu.dump_atu_config(atu::AtuRegionIndex::Region1);
+    if !realtek::is_realtek_device(dev_info.vendor_id, dev_info.device_id) {
+        error!("No RealTek device found for testing.");
+        return;
+    }
 
-            // READ pci test 0xf3000000
-            let test_addr = phys_to_virt(PhysAddr::from(0xf300_0000u64 as usize));
-            unsafe {
-                let val = core::ptr::read_volatile(test_addr.as_ptr() as *const u32);
-                info!("Read from PCI config space at 0xf3000000: {:#010x}", val);
+    let bar_info = root.bar_info(bdf, 2).unwrap();
+
+    info!("RealTek device BAR{} info: {:?}", 0, bar_info);
+    match bar_info {
+        bus::BarInfo::Memory {
+            address, size: _, ..
+        } => {
+            info!("Mapping RealTek BAR{} at Memory address {:#x}", 2, address);
+
+            let mmio_vaddr = crate::mm::phys_to_virt((0x9c0100000 as usize).into()).as_usize();
+
+            // 直接从 mmio_vaddr 读取一个 u32
+            let value = unsafe { core::ptr::read_volatile(mmio_vaddr as *const u32) };
+            info!("Read value from I/O BAR address {:#x}: {:#x}", address, value);
+
+            if let Ok(realtek) =
+                realtek::create_driver(dev_info.vendor_id, dev_info.device_id, mmio_vaddr, 0xea)
+            {
+                let mac = realtek.mac_address();
+                info!(
+                    "RealTek device MAC address: {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+                    mac.0[0], mac.0[1], mac.0[2], mac.0[3], mac.0[4], mac.0[5]
+                );
+            } else {
+                error!("Failed to create RealTek driver instance for testing.");
             }
         }
-        Err(e) => {
-            error!("ATU configuration failed: {}", e);
+        bus::BarInfo::IO { address, .. } => {
+            error!("realtek: BAR{} is of I/O type, address {:#x}", 2, address);
+
+            return;
         }
     }
 }

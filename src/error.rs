@@ -22,6 +22,14 @@ pub enum TinyError {
     #[error("PCIe invalid configuration address: {0:#x}")]
     PcieInvalidAddress(u64),
 
+    /// Again
+    #[error("Resource temporarily unavailable, try again")]
+    Again,
+
+    /// Io
+    #[error("I/O error occurred")]
+    IoError,
+
     // ============================================================================
     // PSCI (Power State Coordination Interface) Related Errors
     // ============================================================================
@@ -139,10 +147,18 @@ pub enum TinyError {
     /// Generic operation failed
     #[error("Operation failed: {0}")]
     OperationFailed(&'static str),
+
+    /// Out of memory
+    #[error("Out of memory")]
+    NoMemory,
+
+    /// Bad state
+    #[error("Bad state")]
+    BadState,
 }
 
 /// Type alias for Result with TinyError as the error type.
 ///
 /// This simplifies function signatures throughout the kernel.
 /// Example: `fn configure() -> TinyResult<()>`
-pub type TinyResult<T> = core::result::Result<T, TinyError>;
+pub type TinyResult<T = ()> = core::result::Result<T, TinyError>;

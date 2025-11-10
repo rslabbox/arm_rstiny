@@ -88,6 +88,7 @@ const fn get_atu_outb_unr_reg_offset(region: u32) -> usize {
 }
 
 /// DesignWare PCIe controller ATU operations
+#[derive(Debug, Clone)]
 pub struct DwPcieAtu {
     atu_base_virt: usize,
 }
