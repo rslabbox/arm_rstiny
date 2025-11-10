@@ -68,8 +68,6 @@ pub fn rust_main(_cpu_id: usize, _arg: usize) -> ! {
 
     tests::run_allocator_tests();
 
-    drivers::pci::test_dw_pcie_atu();
-
     loop {
         busy_wait(Duration::from_secs(1));
     }
