@@ -4,6 +4,8 @@ use core::fmt::{self, Display};
 use log::{Level, LevelFilter, Log, Metadata, Record};
 
 use crate::println;
+use crate::TinyResult;
+use crate::error::TinyError;
 
 pub struct SimpleLogger;
 
@@ -64,12 +66,12 @@ impl Log for SimpleLogger {
 }
 
 /// Initialize the logger.
-pub fn init() {
+pub fn init() -> TinyResult<()> {
     println!(
         "Initializing logger with level: {}",
         option_env!("LOG").unwrap_or("off")
     );
-    log::set_logger(&SimpleLogger).unwrap();
+    log::set_logger(&SimpleLogger).map_err(|_| TinyError::LoggerInitFailed)?;
     log::set_max_level(match option_env!("LOG") {
         Some("error") => LevelFilter::Error,
         Some("warn") => LevelFilter::Warn,
@@ -78,4 +80,5 @@ pub fn init() {
         Some("trace") => LevelFilter::Trace,
         _ => LevelFilter::Off,
     });
+    Ok(())
 }

@@ -6,6 +6,8 @@ use memory_addr::pa;
 
 use crate::mm::phys_to_virt;
 use crate::platform::config;
+use crate::TinyResult;
+use crate::error::TinyError;
 
 static UART: SpinNoIrq<DW8250> = SpinNoIrq::new(DW8250::new(
     phys_to_virt(pa!(config::UART_PADDR)).as_usize(),
@@ -37,6 +39,7 @@ pub fn init_early() {
 
 /// UART IRQ Handler.
 #[allow(unused)]
-pub fn irq_handler(irq: usize) {
-    panic!("UART IRQ Handler: {irq}");
+pub fn irq_handler(irq: usize) -> TinyResult<()> {
+    error!("UART IRQ Handler invoked unexpectedly: {irq}");
+    Err(TinyError::UartIrqUnexpected(irq))
 }

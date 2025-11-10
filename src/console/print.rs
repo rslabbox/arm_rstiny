@@ -15,7 +15,8 @@ impl fmt::Write for ConsolePrinter {
 
 pub fn _print(args: fmt::Arguments) {
     use fmt::Write;
-    ConsolePrinter.write_fmt(args).unwrap();
+    // Ignore write errors in print function - printing should not panic
+    let _ = ConsolePrinter.write_fmt(args);
 }
 
 /// Simple console print operation.

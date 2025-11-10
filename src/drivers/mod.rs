@@ -10,3 +10,6 @@ pub mod uart;
 // Placeholder modules for future implementation
 pub mod block;
 pub mod net;
+
+
+pub mod pci;

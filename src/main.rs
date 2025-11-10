@@ -8,6 +8,7 @@ mod boot;
 mod config;
 
 mod console;
+mod error;
 
 mod drivers;
 mod hal;
@@ -27,6 +28,8 @@ extern crate log;
 
 extern crate alloc;
 
+pub use error::{TinyError, TinyResult};
+
 use core::time::Duration;
 
 use drivers::timer;
@@ -37,8 +40,8 @@ use crate::drivers::timer::busy_wait;
 fn kernel_init() {
     hal::init_exception();
     hal::clear_bss();
-    drivers::power::init("hvc");
-    drivers::irq::init();
+    drivers::power::init("hvc").expect("Failed to initialize PSCI");
+    drivers::irq::init().expect("Failed to initialize IRQ");
     timer::init_early();
 }
 
@@ -56,7 +59,7 @@ pub fn rust_main(_cpu_id: usize, _arg: usize) -> ! {
 
     println!("\nHello RustTinyOS!\n");
 
-    console::init_logger();
+    console::init_logger().expect("Failed to initialize logger");
     info!("This is an info message for testing.");
     error!("This is an error message for testing.");
     debug!("This is a debug message for testing.");
@@ -65,9 +68,10 @@ pub fn rust_main(_cpu_id: usize, _arg: usize) -> ! {
 
     tests::run_allocator_tests();
 
+    drivers::pci::test_dw_pcie_atu();
+
     loop {
         busy_wait(Duration::from_secs(1));
-        info!("Tick");
     }
 }
 
