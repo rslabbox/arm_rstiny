@@ -22,8 +22,10 @@ dw_apb_uart = "0.1"
 lazyinit = "0.2"
 arm-gic = "0.7.1"
 int_ratio = "0.1"
-
+thiserror = { version = "2.0.17", default-features = false }
 arm_pl011 = "0.1"
+
+tock-registers = "0.10.1"
 
 # Network stack
 smoltcp = { version = "0.12", default-features = false, features = [

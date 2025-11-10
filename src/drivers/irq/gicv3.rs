@@ -13,6 +13,8 @@ use spin::Mutex;
 
 use crate::mm::phys_to_virt;
 use crate::platform::config;
+use crate::TinyResult;
+use crate::error::TinyError;
 
 /// The type of an interrupt handler.
 pub type IrqHandler = fn(usize);
@@ -29,7 +31,13 @@ static GIC: Mutex<Option<GicV3>> = Mutex::new(None);
 
 /// IRQ handler called from exception vector.
 pub fn irq_handler() {
-    let intid = GicCpuInterface::get_and_acknowledge_interrupt(InterruptGroup::Group1).unwrap();
+    let intid = match GicCpuInterface::get_and_acknowledge_interrupt(InterruptGroup::Group1) {
+        Some(id) => id,
+        None => {
+            error!("Failed to acknowledge interrupt");
+            return;
+        }
+    };
     trace!("Handling IRQ: {:?}", intid);
 
     // Call the registered handler if exists
@@ -102,14 +110,18 @@ pub fn irqset_disable(intid: IntId) {
 }
 
 /// Initialize the GICv3 interrupt controller.
-pub fn init() {
+pub fn init() -> TinyResult<()> {
     // Base addresses of the GICv3 distributor and redistributor.
     let gicd_base_address: *mut Gicd = phys_to_virt(pa!(config::GICD_BASE)).as_mut_ptr_of();
     let gicr_base_address: *mut GicrSgi =
         phys_to_virt(pa!(config::GICR_BASE)).as_mut_ptr_of();
 
-    let gicd = unsafe { UniqueMmioPointer::new(NonNull::new(gicd_base_address).unwrap()) };
-    let gicr = NonNull::new(gicr_base_address).unwrap();
+    let gicd = unsafe {
+        UniqueMmioPointer::new(
+            NonNull::new(gicd_base_address).ok_or(TinyError::InvalidGicPointer)?
+        )
+    };
+    let gicr = NonNull::new(gicr_base_address).ok_or(TinyError::InvalidGicPointer)?;
 
     // Initialise the GIC.
     let mut gic = unsafe { GicV3::new(gicd, gicr, 1, false) };
@@ -119,4 +131,6 @@ pub fn init() {
     *GIC.lock() = Some(gic);
 
     arm_gic::irq_enable();
+    
+    Ok(())
 }

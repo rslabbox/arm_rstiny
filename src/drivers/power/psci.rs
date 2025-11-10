@@ -4,6 +4,9 @@
 use core::sync::atomic::{AtomicBool, Ordering};
 use log::*;
 
+use crate::TinyResult;
+use crate::error::TinyError;
+
 const PSCI_0_2_FN_BASE: u32 = 0x84000000;
 const PSCI_0_2_64BIT: u32 = 0x40000000;
 const PSCI_0_2_FN_CPU_OFF: u32 = PSCI_0_2_FN_BASE + 2;
@@ -13,36 +16,19 @@ const PSCI_0_2_FN64_CPU_ON: u32 = PSCI_0_2_FN_BASE + PSCI_0_2_64BIT + 3;
 
 static PSCI_METHOD_HVC: AtomicBool = AtomicBool::new(false);
 
-/// PSCI return values, inclusive of all PSCI versions.
-#[derive(PartialEq, Debug)]
-#[repr(i32)]
-enum PsciError {
-    NotSupported = -1,
-    InvalidParams = -2,
-    Denied = -3,
-    AlreadyOn = -4,
-    OnPending = -5,
-    InternalFailure = -6,
-    NotPresent = -7,
-    Disabled = -8,
-    InvalidAddress = -9,
-}
-
-impl From<i32> for PsciError {
-    fn from(code: i32) -> PsciError {
-        use PsciError::*;
-        match code {
-            -1 => NotSupported,
-            -2 => InvalidParams,
-            -3 => Denied,
-            -4 => AlreadyOn,
-            -5 => OnPending,
-            -6 => InternalFailure,
-            -7 => NotPresent,
-            -8 => Disabled,
-            -9 => InvalidAddress,
-            _ => panic!("Unknown PSCI error code: {}", code),
-        }
+/// Convert PSCI error code to TinyError
+fn psci_code_to_error(code: i32) -> TinyError {
+    match code {
+        -1 => TinyError::PsciNotSupported,
+        -2 => TinyError::PsciInvalidParams,
+        -3 => TinyError::PsciDenied,
+        -4 => TinyError::PsciAlreadyOn,
+        -5 => TinyError::PsciOnPending,
+        -6 => TinyError::PsciInternalFailure,
+        -7 => TinyError::PsciNotPresent,
+        -8 => TinyError::PsciDisabled,
+        -9 => TinyError::PsciInvalidAddress,
+        _ => TinyError::PsciUnknownCode(code),
     }
 }
 
@@ -76,7 +62,7 @@ fn psci_hvc_call(func: u32, arg0: usize, arg1: usize, arg2: usize) -> usize {
     ret
 }
 
-fn psci_call(func: u32, arg0: usize, arg1: usize, arg2: usize) -> Result<(), PsciError> {
+fn psci_call(func: u32, arg0: usize, arg1: usize, arg2: usize) -> TinyResult<()> {
     let ret = if PSCI_METHOD_HVC.load(Ordering::Acquire) {
         psci_hvc_call(func, arg0, arg1, arg2)
     } else {
@@ -85,7 +71,7 @@ fn psci_call(func: u32, arg0: usize, arg1: usize, arg2: usize) -> Result<(), Psc
     if ret == 0 {
         Ok(())
     } else {
-        Err(PsciError::from(ret as i32))
+        Err(psci_code_to_error(ret as i32))
     }
 }
 
@@ -99,11 +85,17 @@ pub fn halt() {
 /// Initialize with the given PSCI method.
 ///
 /// Method should be either "smc" or "hvc".
-pub fn init(method: &str) {
+pub fn init(method: &'static str) -> TinyResult<()> {
     match method {
-        "smc" => PSCI_METHOD_HVC.store(false, Ordering::Release),
-        "hvc" => PSCI_METHOD_HVC.store(true, Ordering::Release),
-        _ => panic!("Unknown PSCI method: {}", method),
+        "smc" => {
+            PSCI_METHOD_HVC.store(false, Ordering::Release);
+            Ok(())
+        }
+        "hvc" => {
+            PSCI_METHOD_HVC.store(true, Ordering::Release);
+            Ok(())
+        }
+        _ => Err(TinyError::PsciUnknownMethod(method)),
     }
 }
 
