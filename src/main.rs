@@ -27,38 +27,19 @@ extern crate log;
 
 extern crate alloc;
 
-use arm_gic::IntId;
-use core::sync::atomic::{AtomicU64, Ordering};
+use core::time::Duration;
 
 use drivers::timer;
 
-// Setup timer interrupt handler
-const PERIODIC_INTERVAL_NANOS: u64 = timer::NANOS_PER_SEC / config::kernel::TICKS_PER_SEC as u64;
+use crate::drivers::timer::busy_wait;
 
-static NEXT_DEADLINE: AtomicU64 = AtomicU64::new(0);
-
-fn update_timer(_irq: usize) {
-    let current_ns = timer::ticks_to_nanos(timer::current_ticks());
-    let mut deadline = NEXT_DEADLINE.load(Ordering::Relaxed);
-    if current_ns >= deadline {
-        deadline = current_ns + PERIODIC_INTERVAL_NANOS;
-    }
-    // Set the next timer deadline (1 second later)
-    let next_deadline_ns = deadline + timer::NANOS_PER_SEC;
-    NEXT_DEADLINE.store(next_deadline_ns, Ordering::Relaxed);
-    timer::set_oneshot_timer(next_deadline_ns);
-}
 
 fn kernel_init() {
     hal::init_exception();
     hal::clear_bss();
-    timer::init_early();
     drivers::power::init("hvc");
     drivers::irq::init();
-
-    // Enable Timer interrupt
-    drivers::irq::irqset_register(IntId::ppi(14), update_timer);
-    timer::enable_irqs(IntId::ppi(14));
+    timer::init_early();
 }
 
 #[unsafe(no_mangle)]
@@ -84,7 +65,10 @@ pub fn rust_main(_cpu_id: usize, _arg: usize) -> ! {
 
     tests::run_allocator_tests();
 
-    loop {}
+    loop {
+        busy_wait(Duration::from_secs(1));
+        info!("Tick");
+    }
 }
 
 #[cfg(all(target_os = "none", not(test)))]
