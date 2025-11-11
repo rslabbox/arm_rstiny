@@ -1,6 +1,7 @@
 //! Timer drivers.
 
 pub mod generic_timer;
+pub mod smoltcp_time;
 
 use core::sync::atomic::{AtomicU64, Ordering};
 

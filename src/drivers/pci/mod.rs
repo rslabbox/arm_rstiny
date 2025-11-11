@@ -6,7 +6,7 @@ use crate::{drivers::pci::realtek::NetDriverOps, mm::phys_to_virt};
 
 mod atu;
 mod bus;
-mod realtek;
+pub mod realtek;
 
 /// DBI (DesignWare Bus Interface) register base address for RK3588
 #[allow(dead_code)]
@@ -63,7 +63,7 @@ pub fn test_dw_pcie_atu() {
             let value = unsafe { core::ptr::read_volatile(mmio_vaddr as *const u32) };
             info!("Read value from I/O BAR address {:#x}: {:#x}", address, value);
 
-            if let Ok(realtek) =
+            if let Ok(mut realtek) =
                 realtek::create_driver(dev_info.vendor_id, dev_info.device_id, mmio_vaddr, 0xea)
             {
                 let mac = realtek.mac_address();
@@ -71,6 +71,13 @@ pub fn test_dw_pcie_atu() {
                     "RealTek device MAC address: {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
                     mac.0[0], mac.0[1], mac.0[2], mac.0[3], mac.0[4], mac.0[5]
                 );
+
+                // Test ping functionality (RTL8169 only)
+                if let realtek::RealtekDriverNic::Rtl8169(ref mut driver) = realtek {
+                    crate::net::test_ping(driver);
+                } else {
+                    warn!("Ping test only supports RTL8169, skipping for RTL8139");
+                }
             } else {
                 error!("Failed to create RealTek driver instance for testing.");
             }
