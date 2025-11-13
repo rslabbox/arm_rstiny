@@ -18,6 +18,8 @@ mod tests;
 
 // Future modules (placeholder)
 mod fs;
+
+#[cfg(feature = "net")]
 mod net;
 mod sync;
 mod syscall;
@@ -29,44 +31,40 @@ extern crate log;
 extern crate alloc;
 
 pub use error::{TinyError, TinyResult};
+use memory_addr::pa;
 
 use core::time::Duration;
 
 use drivers::timer;
 
-use crate::drivers::timer::busy_wait;
-
+use crate::{drivers::timer::busy_wait, mm::phys_to_virt};
 
 fn kernel_init() {
     hal::init_exception();
     hal::clear_bss();
+    drivers::uart::init_early(phys_to_virt(pa!(platform::config::UART_PADDR)));
+    timer::init_early();
     drivers::power::init("hvc").expect("Failed to initialize PSCI");
     drivers::irq::init().expect("Failed to initialize IRQ");
-    timer::init_early();
+
+    // Print build time
+    println!(
+        "\n\nBuild time: {}",
+        option_env!("BUILD_TIME").unwrap_or("unknown")
+    );
+
+    println!("Board: {}", platform::config::BOARD_NAME);
+
+    console::init_logger().expect("Failed to initialize logger");
 }
 
 #[unsafe(no_mangle)]
 pub fn rust_main(_cpu_id: usize, _arg: usize) -> ! {
     kernel_init();
 
-    // Print build time
-    println!(
-        "Build time: {}",
-        option_env!("BUILD_TIME").unwrap_or("unknown")
-    );
-
-    println!("Board: {}", platform::config::BOARD_NAME);
-
     println!("\nHello RustTinyOS!\n");
 
-    console::init_logger().expect("Failed to initialize logger");
-    info!("This is an info message for testing.");
-    error!("This is an error message for testing.");
-    debug!("This is a debug message for testing.");
-    trace!("This is a trace message for testing.");
-    warn!("This is a warning message for testing.");
-
-    tests::run_allocator_tests();
+    tests::rstiny_tests();
 
     loop {
         busy_wait(Duration::from_secs(1));

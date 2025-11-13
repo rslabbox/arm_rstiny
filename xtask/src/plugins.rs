@@ -2,3 +2,4 @@
 pub mod build;
 pub mod flash;
 pub mod tftp;
+pub mod run;

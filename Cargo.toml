@@ -4,8 +4,11 @@ version = "0.1.0"
 edition = "2024"
 
 [features]
-default = ["opi5p"]
-opi5p = []
+default = ["qemu"]
+pci = []
+net = ["pci"]
+
+opi5p = ["net"]
 qemu = []
 
 [dependencies]
