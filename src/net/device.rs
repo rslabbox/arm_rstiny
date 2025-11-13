@@ -32,7 +32,7 @@ impl<'a> Device for RealtekDevice<'a> {
         // Try to receive a packet
         match self.driver.receive() {
             Ok(buf_ptr) => {
-                let packet_len = buf_ptr.packet_len();
+                let _packet_len = buf_ptr.packet_len();
                 let packet_data = buf_ptr.packet().to_vec();
 
                 // Recycle buffer
@@ -95,7 +95,7 @@ impl<'a> phy::TxToken for RealtekTxToken<'a> {
     {
         // Allocate TX buffer from driver
         match self.driver.alloc_tx_buffer(len) {
-            Ok(mut tx_buf) => {
+            Ok(tx_buf) => {
                 // Fill buffer using callback
                 let result = unsafe {
                     let slice = core::slice::from_raw_parts_mut(tx_buf.raw_ptr::<u8>(), len);

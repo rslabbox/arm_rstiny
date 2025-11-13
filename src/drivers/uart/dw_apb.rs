@@ -2,16 +2,12 @@
 
 use dw_apb_uart::DW8250;
 use kspin::SpinNoIrq;
-use memory_addr::pa;
-
-use crate::mm::phys_to_virt;
-use crate::platform::config;
+use lazyinit::LazyInit;
 use crate::TinyResult;
 use crate::error::TinyError;
+use memory_addr::VirtAddr;
 
-static UART: SpinNoIrq<DW8250> = SpinNoIrq::new(DW8250::new(
-    phys_to_virt(pa!(config::UART_PADDR)).as_usize(),
-));
+static UART: LazyInit<SpinNoIrq<DW8250>> = LazyInit::new();
 
 /// Writes a byte to the console.
 pub fn putchar(c: u8) {
@@ -33,7 +29,8 @@ pub fn getchar() -> Option<u8> {
 
 /// UART early initialization.
 #[allow(unused)]
-pub fn init_early() {
+pub fn init_early(uart_base: VirtAddr) {
+    UART.init_once(SpinNoIrq::new(DW8250::new(uart_base.as_usize())));
     UART.lock().init();
 }
 

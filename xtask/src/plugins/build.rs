@@ -11,11 +11,14 @@ struct BuildConfig {
     tool_path: String,
     load_address: usize,
     entry_point: usize,
+    #[serde(default)]
+    features: Option<Vec<String>>,
 }
 
 pub struct BuildTask {
     project_name: String,
     build_config: BuildConfig,
+    features: Option<Vec<String>>,
 }
 
 impl BuildTask {
@@ -33,9 +36,25 @@ impl BuildTask {
             build_config.mode = mode;
         }
 
+        // 处理 features 参数
+        let features = if let Some(features_str) = options.features {
+            // 命令行参数优先，解析逗号分隔的字符串
+            Some(
+                features_str
+                    .split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect()
+            )
+        } else {
+            // 使用配置文件中的 features
+            build_config.features.clone()
+        };
+
         Ok(BuildTask {
             project_name: env!("PROJECT_NAME").to_string(),
             build_config,
+            features,
         })
     }
 
@@ -58,6 +77,11 @@ impl BuildTask {
         info!("    Target Platform: {}", self.build_config.target);
         info!("    Log Level: {}", self.build_config.log);
         info!("    Tool path: {}", self.build_config.tool_path);
+        if let Some(ref features) = self.features {
+            info!("    Features: {}", features.join(", "));
+        } else {
+            info!("    Features: (default)");
+        }
         info!("    Output Dir: {}", self.elf_name().display());
 
         // Prepare environment variables
@@ -76,9 +100,19 @@ impl BuildTask {
         
         info!("==> Execute build command");
         if self.build_config.mode == "release" {
-            cmd!(sh, "cargo build --release --target {target}").run()?;
+            if let Some(ref features) = self.features {
+                let features_str = features.join(",");
+                cmd!(sh, "cargo build --release --target {target} --features {features_str}").run()?;
+            } else {
+                cmd!(sh, "cargo build --release --target {target}").run()?;
+            }
         } else {
-            cmd!(sh, "cargo build --target {target}").run()?;
+            if let Some(ref features) = self.features {
+                let features_str = features.join(",");
+                cmd!(sh, "cargo build --target {target} --features {features_str}").run()?;
+            } else {
+                cmd!(sh, "cargo build --target {target}").run()?;
+            }
         }
 
         info!("==> Build succeeded!");

@@ -11,5 +11,5 @@ pub mod uart;
 pub mod block;
 pub mod net;
 
-
+#[cfg(feature = "pci")]
 pub mod pci;

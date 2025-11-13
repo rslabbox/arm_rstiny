@@ -27,6 +27,10 @@ pub struct BuildOptions {
     /// Build mode (debug/release)
     #[arg(long)]
     pub mode: Option<String>,
+
+    /// Build features (comma-separated, e.g., "qemu,net")
+    #[arg(long)]
+    pub features: Option<String>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -39,6 +43,9 @@ enum Commands {
 
     /// Flash the built image to the target device
     Flash(BuildOptions),
+
+    /// Build and run the project in QEMU
+    Run(BuildOptions),
 }
 
 fn main() {
@@ -77,6 +84,10 @@ fn try_main() -> TaskResult<()> {
         }
         Commands::Flash(options) => {
             let task = plugins::flash::FlashTask::new(options, &config)?;
+            task.execute()?;
+        }
+        Commands::Run(options) => {
+            let task = plugins::run::RunTask::new(options, &config)?;
             task.execute()?;
         }
     }
