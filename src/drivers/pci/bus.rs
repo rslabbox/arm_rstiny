@@ -7,7 +7,7 @@ use core::{
 };
 use log::warn;
 
-use crate::drivers::pci::atu;
+use super::atu;
 
 const INVALID_READ: u32 = 0xffffffff;
 

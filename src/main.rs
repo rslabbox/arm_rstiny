@@ -19,8 +19,6 @@ mod tests;
 // Future modules (placeholder)
 mod fs;
 
-#[cfg(feature = "net")]
-mod net;
 mod sync;
 mod syscall;
 mod task;

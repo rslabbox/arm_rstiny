@@ -31,7 +31,7 @@ pub fn getchar() -> Option<u8> {
 #[allow(unused)]
 pub fn init_early(uart_base: VirtAddr) {
     UART.init_once(SpinNoIrq::new(DW8250::new(uart_base.as_usize())));
-    UART.lock().init();
+    // UART.lock().init();
 }
 
 /// UART IRQ Handler.

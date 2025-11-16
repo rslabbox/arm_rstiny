@@ -43,3 +43,80 @@ pub fn clear_bss() {
             .fill(0);
     }
 }
+
+/// Get the D-cache line size from CTR_EL0 register
+#[inline]
+fn get_dcache_line_size() -> usize {
+    let ctr: usize;
+    unsafe {
+        asm!("mrs {}, ctr_el0", out(reg) ctr);
+    }
+    // DminLine is bits [19:16], log2 of the number of words (4 bytes)
+    let dminline = (ctr >> 16) & 0xF;
+    4 << dminline // Convert log2(words) to bytes
+}
+
+/// Clean (write-back) data cache by virtual address range
+///
+/// This operation writes modified cache lines back to memory but leaves them in the cache.
+/// This is required before DMA operations that read from memory (CPU -> Device).
+///
+/// # Safety
+/// The caller must ensure that the address range is valid and properly aligned.
+#[inline]
+pub unsafe fn clean_dcache_range(addr: usize, size: usize) {
+    if size == 0 {
+        return;
+    }
+
+    let cache_line_size = get_dcache_line_size();
+    let start = addr & !(cache_line_size - 1);
+    let end = (addr + size + cache_line_size - 1) & !(cache_line_size - 1);
+
+    let mut current = start;
+    while current < end {
+        unsafe {
+            // DC CVAC - Data Cache Clean by VA to Point of Coherency
+            asm!("dc cvac, {}", in(reg) current);
+        }
+        current += cache_line_size;
+    }
+
+    unsafe {
+        // Ensure completion and visibility
+        asm!("dsb sy");
+    }
+}
+
+/// Invalidate (discard) data cache by virtual address range
+///
+/// This operation discards cache lines, forcing subsequent reads to fetch from memory.
+/// This is required after DMA operations that write to memory (Device -> CPU).
+///
+/// # Safety
+/// The caller must ensure that the address range is valid and properly aligned.
+/// Invalidating cache lines with dirty data can cause data loss.
+#[inline]
+pub unsafe fn invalidate_dcache_range(addr: usize, size: usize) {
+    if size == 0 {
+        return;
+    }
+
+    let cache_line_size = get_dcache_line_size();
+    let start = addr & !(cache_line_size - 1);
+    let end = (addr + size + cache_line_size - 1) & !(cache_line_size - 1);
+
+    let mut current = start;
+    while current < end {
+        unsafe {
+            // DC IVAC - Data Cache Invalidate by VA to Point of Coherency
+            asm!("dc ivac, {}", in(reg) current);
+        }
+        current += cache_line_size;
+    }
+
+    unsafe {
+        // Ensure completion
+        asm!("dsb sy");
+    }
+}

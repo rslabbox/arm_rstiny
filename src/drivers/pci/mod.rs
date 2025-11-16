@@ -2,11 +2,9 @@ use core::error;
 
 use memory_addr::PhysAddr;
 
-use crate::{drivers::pci::realtek::NetDriverOps, mm::phys_to_virt};
-
-mod atu;
+use crate::{ mm::phys_to_virt};
 mod bus;
-pub mod realtek;
+mod atu;
 
 /// DBI (DesignWare Bus Interface) register base address for RK3588
 #[allow(dead_code)]
@@ -43,11 +41,6 @@ pub fn test_dw_pcie_atu() {
 
     info!("PCI {}: {}", bdf, dev_info);
 
-    if !realtek::is_realtek_device(dev_info.vendor_id, dev_info.device_id) {
-        error!("No RealTek device found for testing.");
-        return;
-    }
-
     let bar_info = root.bar_info(bdf, 2).unwrap();
 
     info!("RealTek device BAR{} info: {:?}", 0, bar_info);
@@ -63,24 +56,11 @@ pub fn test_dw_pcie_atu() {
             let value = unsafe { core::ptr::read_volatile(mmio_vaddr as *const u32) };
             info!("Read value from I/O BAR address {:#x}: {:#x}", address, value);
 
-            if let Ok(mut realtek) =
-                realtek::create_driver(dev_info.vendor_id, dev_info.device_id, mmio_vaddr, 0xea)
-            {
-                let mac = realtek.mac_address();
-                info!(
-                    "RealTek device MAC address: {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
-                    mac.0[0], mac.0[1], mac.0[2], mac.0[3], mac.0[4], mac.0[5]
-                );
-
-                // Test ping functionality (RTL8169 only)
-                if let realtek::RealtekDriverNic::Rtl8169(ref mut driver) = realtek {
-                    crate::net::test_ping(driver);
-                } else {
-                    warn!("Ping test only supports RTL8169, skipping for RTL8139");
-                }
-            } else {
-                error!("Failed to create RealTek driver instance for testing.");
-            }
+            // Test RTL8125 driver with ping support
+            info!("Testing RTL8125 driver with active ping...");
+            // Local IP: 192.168.22.102, will ping 192.168.22.101
+            let local_ip = [192, 168, 22, 102];
+            crate::drivers::net::netstack::test_ping((0x9c0100000 as usize).into(), local_ip);
         }
         bus::BarInfo::IO { address, .. } => {
             error!("realtek: BAR{} is of I/O type, address {:#x}", 2, address);

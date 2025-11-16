@@ -73,11 +73,10 @@ flash_miniloader() {
     else
         if [ $? -eq 124 ]; then
             warn "Timeout: Failed to download bootloader within 4 seconds"
-            error "Restart Maskrom mode and try again"
-        else
-            error "Failed to download bootloader"
+            # error "Restart Maskrom mode and try again"
+        # else
+        #     error "Failed to download bootloader"
         fi
-        exit 1
     fi
 }
 
