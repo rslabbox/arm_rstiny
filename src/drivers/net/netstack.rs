@@ -626,6 +626,32 @@ pub fn test_ping(mmio_base: memory_addr::PhysAddr, local_ip: [u8; 4]) {
             }
 
             info!("=== Ping test completed ===");
+            info!("=== Entering response mode for 30 seconds ===");
+            info!("NetStack: Now responding to ARP requests and ICMP pings from other devices");
+
+            // 进入轮询模式，持续响应其他设备的请求
+            let poll_cycles = 300; // 30 seconds with 100ms interval
+            for cycle in 0..poll_cycles {
+                // 延时 100ms
+                crate::drivers::timer::busy_wait(core::time::Duration::from_millis(100));
+                net.tick(100); // Update timestamp
+                
+                // Process any received packets (will auto-respond to ARP and ICMP)
+                let mut buf = [0u8; 1536];
+                if let Ok(len) = net.rtl.recv(&mut buf) {
+                    if len > 0 {
+                        let _ = net.handle_packet(&buf[..len]);
+                    }
+                }
+                
+                // 每5秒显示一次进度
+                if cycle % 50 == 0 {
+                    let elapsed = cycle / 10;
+                    info!("NetStack: Polling... ({} seconds elapsed)", elapsed);
+                }
+            }
+
+            info!("=== Response mode completed ===");
         }
         Err(e) => {
             error!("NetStack: Failed to initialize: {}", e);
