@@ -62,7 +62,9 @@ pub fn rust_main(_cpu_id: usize, _arg: usize) -> ! {
 
     println!("\nHello RustTinyOS!\n");
 
-    tests::rstiny_tests();
+    tests::run_allocator_tests();
+
+    drivers::net::test_rtl8125();
 
     loop {
         busy_wait(Duration::from_secs(1));

@@ -46,6 +46,9 @@ enum Commands {
 
     /// Build and run the project in QEMU
     Run(BuildOptions),
+
+    /// Reboot the target device by power cycling
+    Reboot,
 }
 
 fn main() {
@@ -88,6 +91,10 @@ fn try_main() -> TaskResult<()> {
         }
         Commands::Run(options) => {
             let task = plugins::run::RunTask::new(options, &config)?;
+            task.execute()?;
+        }
+        Commands::Reboot => {
+            let task = plugins::reboot::RebootTask::new()?;
             task.execute()?;
         }
     }

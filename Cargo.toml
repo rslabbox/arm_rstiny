@@ -38,6 +38,9 @@ smoltcp = { version = "0.12", default-features = false, features = [
     "medium-ethernet",
 ] }
 
+realtek-drivers = { path = "crates/realtek-drivers" }
+crate_interface = "0.1"
+
 [profile.dev]
 panic = "abort"
 

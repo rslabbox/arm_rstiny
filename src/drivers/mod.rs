@@ -10,6 +10,3 @@ pub mod uart;
 // Placeholder modules for future implementation
 pub mod block;
 pub mod net;
-
-#[cfg(feature = "pci")]
-pub mod pci;

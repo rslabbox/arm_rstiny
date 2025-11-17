@@ -33,6 +33,9 @@ impl TftpTask {
 
         // Copy file to TFTP directory
         let tftp_path = PathBuf::from(&self.tftp_config.tftp_path);
+
+        info!("    TFTP Path: {}", tftp_path.display());
+
         fs::copy(&uimg_path, &tftp_path)?;
         info!("    Copied to: {}", tftp_path.display());
         info!("    Upload successful!");

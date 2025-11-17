@@ -13,3 +13,4 @@ chrono = "0.4"
 clap = { version = "4", features = ["derive"] }
 figment = { version = "0.10", features = ["toml"] }
 xshell = "0.2"
+ureq = "2.10"

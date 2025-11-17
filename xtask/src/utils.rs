@@ -21,6 +21,8 @@ pub enum TaskError {
     Figment(#[from] figment::Error),
     #[error("xshell: {0}")]
     Shell(#[from] xshell::Error),
+    #[error("network: {0}")]
+    Network(String),
     #[error("Ok")]
     Ok,
 }
