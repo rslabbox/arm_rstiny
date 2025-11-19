@@ -86,7 +86,9 @@ fn ip_checksum(data: &[u8]) -> u16 {
         sum = (sum & 0xFFFF) + (sum >> 16);
     }
 
-    !sum as u16
+    let val = !sum as u16;
+
+    (val >> 8 & 0xFF)  | ((val << 8) & 0xFF00 )
 }
 
 /// Byte order conversion helpers

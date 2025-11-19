@@ -64,7 +64,7 @@ pub fn test_rtl8125() {
     info!("Testing RTL8125 Ethernet Driver");
 
     // MAC addresses and IP addresses
-    let my_mac: [u8; 6] = [0xff, 0xff, 0xff, 0xff, 0xff, 0xff];
+    let my_mac: [u8; 6] = [0x2e, 0xc3, 0x69, 0x34, 0x7d, 0x30];
     let remote_mac: [u8; 6] = [0x38, 0xf7, 0xcd, 0xc8, 0xd9, 0x32];
     let local_ip: [u8; 4] = [192, 168, 22, 102];
     let remote_ip: [u8; 4] = [192, 168, 22, 101];
