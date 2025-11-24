@@ -8,11 +8,9 @@ use arm_gic::{
     },
 };
 use core::ptr::NonNull;
-use memory_addr::pa;
+use memory_addr::VirtAddr;
 use spin::Mutex;
 
-use crate::mm::phys_to_virt;
-use crate::platform::config;
 use crate::TinyResult;
 use crate::error::TinyError;
 
@@ -110,16 +108,13 @@ pub fn irqset_disable(intid: IntId) {
 }
 
 /// Initialize the GICv3 interrupt controller.
-pub fn init() -> TinyResult<()> {
+pub fn init(gicd_virt: VirtAddr, gicr_virt: VirtAddr) -> TinyResult<()> {
     // Base addresses of the GICv3 distributor and redistributor.
-    let gicd_base_address: *mut Gicd = phys_to_virt(pa!(config::GICD_BASE)).as_mut_ptr_of();
-    let gicr_base_address: *mut GicrSgi =
-        phys_to_virt(pa!(config::GICR_BASE)).as_mut_ptr_of();
+    let gicd_base_address: *mut Gicd = gicd_virt.as_mut_ptr_of();
+    let gicr_base_address: *mut GicrSgi = gicr_virt.as_mut_ptr_of();
 
     let gicd = unsafe {
-        UniqueMmioPointer::new(
-            NonNull::new(gicd_base_address).ok_or(TinyError::InvalidGicPointer)?
-        )
+        UniqueMmioPointer::new(NonNull::new(gicd_base_address).ok_or(TinyError::InvalidGicPointer)?)
     };
     let gicr = NonNull::new(gicr_base_address).ok_or(TinyError::InvalidGicPointer)?;
 
@@ -131,6 +126,6 @@ pub fn init() -> TinyResult<()> {
     *GIC.lock() = Some(gic);
 
     arm_gic::irq_enable();
-    
+
     Ok(())
 }

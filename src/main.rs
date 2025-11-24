@@ -42,10 +42,14 @@ use crate::{drivers::timer::busy_wait, mm::phys_to_virt};
 fn kernel_init() {
     hal::init_exception();
     hal::clear_bss();
-    drivers::uart::init_early(phys_to_virt(pa!(platform::config::UART_PADDR)));
+    drivers::uart::init_early(phys_to_virt(pa!(config::UART_PADDR)));
     timer::init_early();
     drivers::power::init("hvc").expect("Failed to initialize PSCI");
-    drivers::irq::init().expect("Failed to initialize IRQ");
+    drivers::irq::init(
+        phys_to_virt(pa!(config::GICD_BASE)),
+        phys_to_virt(pa!(config::GICR_BASE)),
+    )
+    .expect("Failed to initialize IRQ");
 
     // Print build time
     println!(
@@ -53,7 +57,7 @@ fn kernel_init() {
         option_env!("BUILD_TIME").unwrap_or("unknown")
     );
 
-    println!("Board: {}", platform::config::BOARD_NAME);
+    println!("Board: {}", config::BOARD_NAME);
 
     console::init_logger().expect("Failed to initialize logger");
 }

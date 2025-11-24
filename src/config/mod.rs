@@ -4,3 +4,5 @@
 
 pub mod devices;
 pub mod kernel;
+
+pub use crate::platform::config::*;
