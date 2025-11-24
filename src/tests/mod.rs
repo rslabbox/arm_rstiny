@@ -3,12 +3,16 @@
 mod allocator;
 mod gicv3;
 
+fn logger_test() {
+    error!("This is an error message.");
+    warn!("This is a warning message.");
+    info!("This is an info message.");
+    debug!("This is a debug message.");
+    trace!("This is a trace message.");
+}
+
 pub fn rstiny_tests() {
-    info!("This is an info message for testing.");
-    error!("This is an error message for testing.");
-    debug!("This is a debug message for testing.");
-    trace!("This is a trace message for testing.");
-    warn!("This is a warning message for testing.");
+    logger_test();
 
     allocator::run_allocator_tests();
 
