@@ -2,6 +2,7 @@
 
 mod allocator;
 mod gicv3;
+mod scheduler;
 
 fn logger_test() {
     error!("This is an error message.");
@@ -17,6 +18,9 @@ pub fn rstiny_tests() {
     allocator::run_allocator_tests();
 
     gicv3::gicv3_tests();
+    
+    // Run scheduler tests
+    scheduler::run_scheduler_tests();
 
     #[cfg(feature = "opi5p")]
     crate::drivers::pci::test_dw_pcie_atu();

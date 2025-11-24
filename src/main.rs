@@ -14,6 +14,7 @@ mod drivers;
 mod hal;
 mod mm;
 mod platform;
+mod task;
 mod tests;
 
 // Future modules (placeholder)
@@ -57,6 +58,9 @@ fn kernel_init() {
 
     timer::init_early();
     drivers::power::init("hvc").expect("Failed to initialize PSCI");
+    
+    // Initialize task scheduler
+    task::init_scheduler();
 }
 
 #[unsafe(no_mangle)]

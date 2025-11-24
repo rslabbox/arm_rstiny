@@ -25,7 +25,10 @@ fn update_timer(_irq: usize) {
     NEXT_DEADLINE.store(next_deadline_ns, Ordering::Relaxed);
     set_oneshot_timer(next_deadline_ns);
     
-    // Trigger task scheduling
+    // Trigger task scheduling tick
+    if crate::task::is_initialized() {
+        crate::task::tick();
+    }
 }
 
 pub fn init_early() {
