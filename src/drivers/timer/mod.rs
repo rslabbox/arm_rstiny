@@ -24,6 +24,11 @@ fn update_timer(_irq: usize) {
     let next_deadline_ns = deadline + NANOS_PER_SEC;
     NEXT_DEADLINE.store(next_deadline_ns, Ordering::Relaxed);
     set_oneshot_timer(next_deadline_ns);
+    
+    // Trigger task scheduling
+    crate::task::scheduler::tick();
+
+    info!("Timer interrupt: current_ns = {}, next_deadline_ns = {}", current_ns, next_deadline_ns);
 }
 
 pub fn init_early() {

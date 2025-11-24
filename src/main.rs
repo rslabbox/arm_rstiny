@@ -33,23 +33,13 @@ extern crate alloc;
 pub use error::{TinyError, TinyResult};
 use memory_addr::pa;
 
-use core::time::Duration;
-
+use crate::mm::phys_to_virt;
 use drivers::timer;
 
-use crate::{drivers::timer::busy_wait, mm::phys_to_virt};
-
 fn kernel_init() {
-    hal::init_exception();
     hal::clear_bss();
+    hal::init_exception();
     drivers::uart::init_early(phys_to_virt(pa!(config::UART_PADDR)));
-    timer::init_early();
-    drivers::power::init("hvc").expect("Failed to initialize PSCI");
-    drivers::irq::init(
-        phys_to_virt(pa!(config::GICD_BASE)),
-        phys_to_virt(pa!(config::GICR_BASE)),
-    )
-    .expect("Failed to initialize IRQ");
 
     // Print build time
     println!(
@@ -60,6 +50,17 @@ fn kernel_init() {
     println!("Board: {}", config::BOARD_NAME);
 
     console::init_logger().expect("Failed to initialize logger");
+    drivers::irq::init(
+        phys_to_virt(pa!(config::GICD_BASE)),
+        phys_to_virt(pa!(config::GICR_BASE)),
+    )
+    .expect("Failed to initialize IRQ");
+
+    timer::init_early();
+    drivers::power::init("hvc").expect("Failed to initialize PSCI");
+
+    // Initialize task system
+    task::init();
 }
 
 #[unsafe(no_mangle)]
@@ -70,8 +71,10 @@ pub fn rust_main(_cpu_id: usize, _arg: usize) -> ! {
 
     tests::rstiny_tests();
 
+    // Main loop: just busy wait since we don't have proper idle task yet
+    info!("Main thread entering busy loop");
     loop {
-        busy_wait(Duration::from_secs(1));
+        core::hint::spin_loop();
     }
 }
 

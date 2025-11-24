@@ -1,8 +1,10 @@
 //! Test module.
 
 mod allocator;
+mod task;
 
 pub use allocator::run_allocator_tests;
+pub use task::run_task_tests;
 
 pub fn rstiny_tests() {
     info!("This is an info message for testing.");
@@ -12,6 +14,7 @@ pub fn rstiny_tests() {
     warn!("This is a warning message for testing.");
 
     run_allocator_tests();
+    run_task_tests();
 
     #[cfg(feature = "opi5p")]
     crate::drivers::pci::test_dw_pcie_atu();
