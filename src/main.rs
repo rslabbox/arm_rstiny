@@ -57,7 +57,6 @@ fn kernel_init() {
 
     timer::init_early();
     drivers::power::init("hvc").expect("Failed to initialize PSCI");
-
 }
 
 #[unsafe(no_mangle)]
@@ -68,18 +67,12 @@ pub fn rust_main(_cpu_id: usize, _arg: usize) -> ! {
 
     tests::rstiny_tests();
 
-    // Main loop: just busy wait since we don't have proper idle task yet
-    info!("Main thread entering busy loop");
-    loop {
-        core::hint::spin_loop();
-    }
+    drivers::power::system_off();
 }
 
 #[cfg(all(target_os = "none", not(test)))]
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
-    use drivers::power::system_off;
-
     println!("PANIC: {}", info);
-    system_off();
+    drivers::power::system_off();
 }
