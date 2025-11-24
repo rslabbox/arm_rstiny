@@ -160,12 +160,15 @@ impl Scheduler {
     pub fn tick(&mut self) {
         use core::sync::atomic::AtomicUsize;
         static TICK_COUNT: AtomicUsize = AtomicUsize::new(0);
-        
+
         let count = TICK_COUNT.fetch_add(1, Ordering::Relaxed);
         if count % 100 == 0 {
-            debug!("Timer tick count: {}, ready_bitmap: {:#x}", count, self.ready_bitmap);
+            debug!(
+                "Timer tick count: {}, ready_bitmap: {:#x}",
+                count, self.ready_bitmap
+            );
         }
-        
+
         if let Some(ref current) = self.current_task {
             let mut tcb = current.lock();
             if tcb.time_slice > 0 {
@@ -179,7 +182,10 @@ impl Scheduler {
         } else {
             // No current task, but check if there are ready tasks
             if self.ready_bitmap != 0 {
-                debug!("No current task, but ready_bitmap = {:#x}, triggering schedule", self.ready_bitmap);
+                debug!(
+                    "No current task, but ready_bitmap = {:#x}, triggering schedule",
+                    self.ready_bitmap
+                );
                 self.need_resched.store(true, Ordering::Release);
             }
         }
