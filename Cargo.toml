@@ -30,14 +30,6 @@ arm_pl011 = "0.1"
 
 tock-registers = "0.10.1"
 
-# Network stack
-smoltcp = { version = "0.12", default-features = false, features = [
-    "alloc",
-    "proto-ipv4",
-    "socket-icmp",
-    "medium-ethernet",
-] }
-
 [profile.dev]
 panic = "abort"
 

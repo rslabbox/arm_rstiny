@@ -71,12 +71,16 @@ impl RunTask {
             tcp_forward, udp_forward
         );
 
+        let nographic = if self.run_config.nographic {
+            "-nographic"
+        } else {
+            ""
+        };
+
         // Execute QEMU command
-        if self.run_config.nographic {
-            info!("    Mode: nographic");
-            cmd!(
-                sh,
-                "qemu-system-aarch64 
+        cmd!(
+            sh,
+            "qemu-system-aarch64 
                 -m {memory} 
                 -cpu {cpu} 
                 -machine {machine} 
@@ -85,24 +89,9 @@ impl RunTask {
                 -drive id=disk0,if=none,format=raw,file={disk_image} 
                 -device virtio-net-device,netdev=net0 
                 -netdev {netdev} 
-                -nographic"
-            )
-            .run()?;
-        } else {
-            cmd!(
-                sh,
-                "qemu-system-aarch64 
-                -m {memory} 
-                -cpu {cpu} 
-                -machine {machine} 
-                -kernel {bin_path} 
-                -device virtio-blk-device,drive=disk0 
-                -drive id=disk0,if=none,format=raw,file={disk_image} 
-                -device virtio-net-device,netdev=net0 
-                -netdev {netdev}"
-            )
-            .run()?;
-        }
+                {nographic}"
+        )
+        .run()?;
 
         Ok(())
     }
