@@ -10,7 +10,7 @@ pub use generic_timer::*;
 use crate::{config, drivers};
 
 // Setup timer interrupt handler
-const PERIODIC_INTERVAL_NANOS: u64 = NANOS_PER_SEC / config::kernel::TICKS_PER_SEC as u64;
+const PERIODIC_INTERVAL_NANOS: u64 = MICROS_PER_SEC / config::kernel::TICKS_PER_SEC as u64;
 
 static NEXT_DEADLINE: AtomicU64 = AtomicU64::new(0);
 
@@ -21,14 +21,11 @@ fn update_timer(_irq: usize) {
         deadline = current_ns + PERIODIC_INTERVAL_NANOS;
     }
     // Set the next timer deadline (1 second later)
-    let next_deadline_ns = deadline + NANOS_PER_SEC;
+    let next_deadline_ns = deadline + MICROS_PER_SEC;
     NEXT_DEADLINE.store(next_deadline_ns, Ordering::Relaxed);
     set_oneshot_timer(next_deadline_ns);
     
     // Trigger task scheduling
-    crate::task::scheduler::tick();
-
-    info!("Timer interrupt: current_ns = {}, next_deadline_ns = {}", current_ns, next_deadline_ns);
 }
 
 pub fn init_early() {

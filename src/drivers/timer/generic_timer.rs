@@ -77,7 +77,7 @@ pub fn init_early() {
 pub fn enable_irqs(timer_irq_num: IntId) {
     CNTP_CTL_EL0.write(CNTP_CTL_EL0::ENABLE::SET);
     CNTP_TVAL_EL0.set(0);
-    irqset_enable(timer_irq_num);
+    irqset_enable(timer_irq_num, 0x00);
 }
 
 /// Busy-wait for the specified duration.

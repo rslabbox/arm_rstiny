@@ -23,7 +23,6 @@ mod fs;
 mod net;
 mod sync;
 mod syscall;
-mod task;
 
 #[macro_use]
 extern crate log;
@@ -59,8 +58,6 @@ fn kernel_init() {
     timer::init_early();
     drivers::power::init("hvc").expect("Failed to initialize PSCI");
 
-    // Initialize task system
-    task::init();
 }
 
 #[unsafe(no_mangle)]

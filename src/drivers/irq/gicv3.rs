@@ -36,7 +36,6 @@ pub fn irq_handler() {
             return;
         }
     };
-    trace!("Handling IRQ: {:?}", intid);
 
     // Call the registered handler if exists
     let intid_val = u32::from(intid) as usize;
@@ -69,7 +68,7 @@ pub fn irqset_unregister(intid: IntId) {
 }
 
 /// Enable the given interrupt.
-pub fn irqset_enable(intid: IntId) {
+pub fn irqset_enable(intid: IntId, priority: u8) {
     let mut gic = GIC.lock();
     if let Some(ref mut gic) = *gic {
         let intid_val = u32::from(intid);
@@ -79,8 +78,11 @@ pub fn irqset_enable(intid: IntId) {
         } else {
             None // SPIs are shared
         };
-
-        let _ = gic.enable_interrupt(intid, core_id, true);
+        // Set interrupt priority
+        gic.set_interrupt_priority(intid, core_id, priority)
+            .unwrap_or_else(|e| error!("Failed to set priority for IRQ {:?}: {:?}", intid, e));
+        gic.enable_interrupt(intid, core_id, true)
+            .unwrap_or_else(|e| error!("Failed to enable IRQ {:?}: {:?}", intid, e));
         debug!("IRQ enabled: {:?}", intid);
     } else {
         warn!("GIC not initialized, cannot enable IRQ: {:?}", intid);
@@ -124,6 +126,9 @@ pub fn init(gicd_virt: VirtAddr, gicr_virt: VirtAddr) -> TinyResult<()> {
 
     // Store the GIC instance globally for later use
     *GIC.lock() = Some(gic);
+
+    // Set priority mask to allow all priorities
+    GicCpuInterface::set_priority_mask(0xff);
 
     arm_gic::irq_enable();
 
