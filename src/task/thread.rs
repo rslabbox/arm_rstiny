@@ -1,224 +1,89 @@
-//! High-level thread API for task creation and control.
+//! Thread API for task management.
 
 use alloc::boxed::Box;
 use core::time::Duration;
 
-use crate::drivers::timer::busy_wait;
+use super::task::TaskId;
 
-use super::task::{TaskId, TaskState};
-
-/// A handle to a spawned task.
+/// Spawn a new task with a closure.
 ///
-/// This handle can be used to wait for the task to complete via `join()`.
-pub struct JoinHandle {
-    task_id: TaskId,
-}
-
-impl JoinHandle {
-    /// Create a new join handle for a task.
-    fn new(task_id: TaskId) -> Self {
-        Self { task_id }
-    }
-
-    /// Wait for the task to complete.
-    ///
-    /// This function blocks until the task finishes execution.
-    pub fn join(self) {
-        loop {
-            // Check if task is dead
-            let is_dead = {
-                let guard = super::scheduler_lock();
-                if let Some(scheduler) = guard.as_ref() {
-                    if let Some(task) = scheduler.get_task(self.task_id) {
-                        task.state == TaskState::Dead
-                    } else {
-                        // Task not found (shouldn't happen)
-                        warn!("Task {} not found", self.task_id);
-                        true
-                    }
-                } else {
-                    false
-                }
-            };
-
-            if is_dead {
-                debug!("Task {} completed", self.task_id);
-                return;
-            }
-
-            // Use WFI to wait for next interrupt efficiently
-            // This allows timer interrupts to run and schedule tasks
-            #[cfg(target_arch = "aarch64")]
-            unsafe {
-                core::arch::asm!("wfi");
-            }
-            
-            // Small busy wait to allow multiple checks per interrupt
-            #[cfg(not(target_arch = "aarch64"))]
-            busy_wait(Duration::from_micros(10));
-        }
-    }
-
-    /// Get the task ID.
-    pub fn id(&self) -> TaskId {
-        self.task_id
-    }
-}
-
-/// Spawn a new task.
-///
-/// # Arguments
-/// * `f` - Closure to execute in the new task
-///
-/// # Returns
-/// A `JoinHandle` that can be used to wait for the task to complete.
-///
-/// # Examples
-/// ```no_run
-/// let handle = thread::spawn(|| {
+/// # Example
+/// ```
+/// let task_id = thread::spawn(|| {
 ///     println!("Hello from task!");
 /// });
-/// handle.join(); // Wait for task to complete
 /// ```
-pub fn spawn<F>(f: F) -> JoinHandle
+pub fn spawn<F>(f: F) -> TaskId
 where
     F: FnOnce() + Send + 'static,
 {
     // Box the closure on the heap
-    let boxed = Box::new(f);
-    let raw = Box::into_raw(boxed);
-
-    // Get scheduler and spawn task
-    let mut guard = super::scheduler_lock();
-    let scheduler = guard.as_mut().expect("Scheduler not initialized");
+    let closure = Box::new(f);
+    let closure_ptr = Box::into_raw(closure);
     
-    let next_tid = scheduler.next_task_id();
-    let tid = scheduler.spawn(
-        alloc::format!("task-{}", next_tid),
-        task_entry::<F> as usize,
-        raw as usize,
-    );
-
-    JoinHandle::new(tid)
+    // Get task manager and spawn task
+    super::with_task_manager(|tm| {
+        let parent_id = tm.current_task;
+        tm.spawn_with_parent(
+            alloc::format!("task-{}", tm.current_task.map(|id| id.as_usize()).unwrap_or(0)),
+            task_trampoline::<F> as usize,
+            closure_ptr as usize,
+            parent_id,
+        )
+    })
 }
 
-/// Yield the CPU to another task.
+/// Put current task to sleep for the specified duration.
 ///
-/// The current task will be moved to the back of the ready queue
-/// and another task will be scheduled.
+/// This will yield the CPU to other tasks.
 ///
-/// # Examples
-/// ```no_run
-/// loop {
-///     // Do some work
-///     thread::yield_now();
-/// }
+/// # Example
 /// ```
-pub fn yield_now() {
-    // This is a simplified implementation
-    // In a real system, this would trigger a syscall or software interrupt
-    // For now, we'll just wait for the next timer interrupt to trigger scheduling
-    warn!("yield_now: explicit yield not fully implemented yet, waiting for timer");
-}
-
-/// Sleep for the specified duration.
-///
-/// The current task will be blocked and woken up after the duration expires.
-/// If called from outside a task context (e.g., main thread), uses busy wait.
-///
-/// **Note:** Minimum sleep duration is 1ms due to scheduler tick granularity.
-///
-/// # Arguments
-/// * `duration` - How long to sleep (minimum 1ms)
-///
-/// # Examples
-/// ```no_run
-/// use core::time::Duration;
 /// thread::sleep(Duration::from_millis(100));
 /// ```
 pub fn sleep(duration: Duration) {
-    // Check if we're in a task context
-    let task_id = {
-        let guard = super::scheduler_lock();
-        guard.as_ref().and_then(|s| s.current_id())
-    };
-
-    if let Some(_tid) = task_id {
-        // We're in a task - use proper sleep mechanism
-        let duration_ns = duration.as_nanos() as u64;
-        
-        // Enforce minimum sleep time of 1ms (one scheduler tick)
-        const MIN_SLEEP_NS: u64 = 1_000_000; // 1ms in nanoseconds
-        let sleep_ns = duration_ns.max(MIN_SLEEP_NS);
-        
-        debug!("Task requesting sleep for {} ns", sleep_ns);
-        
-        // Set sleep request - the next timer interrupt will handle it
-        super::set_sleep_request(sleep_ns);
-        
-        // Busy wait for at least 2 timer ticks to ensure:
-        // 1. The sleep request is processed
-        // 2. We're properly blocked and scheduled out
-        // 3. We're woken up and scheduled back in
-        busy_wait(Duration::from_micros(2100)); // Just over 2ms
-    } else {
-        // We're in main thread - just busy wait
-        debug!("Main thread sleeping (busy wait) for {:?}", duration);
-        busy_wait(duration);
+    let task_id = current_task_id().expect("Cannot sleep without current task");
+    
+    // Register timer callback to wake up this task
+    crate::drivers::timer::set_timer(duration, move |_now| {
+        crate::task::wake_task(task_id);
+    });
+    
+    // Mark current task as sleeping
+    super::with_task_manager(|tm| {
+        tm.mark_sleeping(task_id);
+    });
+    
+    // Wait for interrupt to wake us up
+    unsafe {
+        core::arch::asm!("wfi");
     }
 }
 
 /// Get the current task ID.
 ///
-/// # Returns
-/// The current task's ID, or None if not in a task context.
-pub fn current() -> Option<TaskId> {
-    let guard = super::scheduler_lock();
-    let scheduler = guard.as_ref()?;
-    scheduler.current_id()
+/// Returns `None` if called before scheduler initialization.
+#[allow(dead_code)]
+pub fn current_task_id() -> Option<TaskId> {
+    super::with_task_manager(|tm| tm.current_task_id())
 }
 
-/// Task entry point wrapper.
+/// Task trampoline function.
 ///
-/// This function is called when a task starts. It executes the user's closure
-/// and marks the task as dead when it returns.
-///
-/// # Arguments
-/// * `arg` - Raw pointer to the boxed closure
-fn task_entry<F>(arg: usize) -> !
-where
-    F: FnOnce() + Send + 'static,
-{
-    // Reconstruct the box from the raw pointer
-    let boxed = unsafe { Box::from_raw(arg as *mut F) };
-
-    // Execute the task
-    boxed();
-
-    // Task finished - mark as dead and trigger scheduling
-    debug!("Task finished, marking as dead");
-    task_exit();
-}
-
-/// Mark the current task as dead and schedule another task.
-///
-/// This should be called when a task finishes execution.
-fn task_exit() -> ! {
-    // Mark current task as Dead in the scheduler
-    let mut guard = super::scheduler_lock();
-    if let Some(scheduler) = guard.as_mut() {
-        scheduler.exit_current();
-    }
-    drop(guard);
+/// This function is the actual entry point for spawned tasks.
+/// It takes ownership of the boxed closure, executes it, and then exits.
+extern "C" fn task_trampoline<F: FnOnce()>(closure_ptr: usize) -> ! {
+    // Reconstruct the box from raw pointer
+    let closure = unsafe { Box::from_raw(closure_ptr as *mut F) };
     
-    // Wait for next interrupt to switch to another task
-    // Use WFI (Wait For Interrupt) to save power
-    loop {
-        #[cfg(target_arch = "aarch64")]
-        unsafe {
-            core::arch::asm!("wfi");
-        }
-        #[cfg(not(target_arch = "aarch64"))]
-        core::hint::spin_loop();
-    }
+    // Execute the closure
+    closure();
+    
+    // Explicitly exit the task after closure completes
+    super::exit_current_task();
+}
+
+/// Get task trampoline function pointer (helper for spawn_main_task).
+pub(super) fn task_trampoline_fn() -> *const () {
+    task_trampoline::<Box<dyn FnOnce()>> as *const ()
 }

@@ -1,100 +1,120 @@
-//! Task control block and state management.
+//! Task control block and task management.
 
-use alloc::string::String;
-use alloc::vec::Vec;
+use alloc::{string::String, vec::Vec};
 
-use super::context::TaskContext;
+use crate::hal::TrapFrame;
 
-/// Task identifier.
-pub type TaskId = usize;
+/// Unique task identifier.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct TaskId(pub usize);
 
-/// Task state.
+impl TaskId {
+    pub const fn new(id: usize) -> Self {
+        Self(id)
+    }
+
+    pub const fn as_usize(&self) -> usize {
+        self.0
+    }
+}
+
+/// Task execution state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TaskState {
-    /// Ready to run, waiting in the ready queue.
+    /// Task is ready to run.
     Ready,
-    /// Currently running on the CPU.
+    /// Task is currently running.
     Running,
-    /// Blocked, waiting for an event (e.g., sleep).
-    Blocked,
-    /// Task has finished execution.
-    Dead,
+    /// Task is sleeping.
+    Sleeping,
+    /// Task has exited.
+    Exited,
 }
 
 /// Task control block.
+#[allow(dead_code)]
 pub struct Task {
-    /// Unique task identifier.
+    /// Task identifier.
     pub id: TaskId,
-    /// Task name for debugging.
+    /// Task name.
     pub name: String,
-    /// Saved CPU context.
-    pub context: TaskContext,
-    /// Task's kernel stack.
-    pub stack: Vec<u8>,
-    /// Current state.
+    /// Task state.
     pub state: TaskState,
-    /// Remaining time slice in ticks.
-    pub time_slice: usize,
-    /// Wakeup time in nanoseconds (for sleeping tasks).
-    pub wakeup_time: Option<u64>,
+    /// Saved task context.
+    pub context: TrapFrame,
+    /// Task stack.
+    pub stack: Vec<u8>,
+    /// Stack top pointer (used for context switching).
+    pub stack_top: usize,
+    /// Parent task ID.
+    pub parent_id: Option<TaskId>,
+    /// Child task IDs.
+    pub children: Vec<TaskId>,
+    /// Remaining time slice ticks.
+    pub ticks_remaining: usize,
 }
 
 impl Task {
-    /// Create a new task.
-    ///
-    /// # Arguments
-    /// * `id` - Unique task ID
-    /// * `name` - Task name for debugging
-    /// * `entry` - Task entry point address
-    /// * `arg` - Argument to pass to the task
-    /// * `stack_size` - Size of the task stack in bytes
-    pub fn new(id: TaskId, name: String, entry: usize, arg: usize, stack_size: usize) -> Self {
-        // Allocate task stack
-        let mut stack = Vec::with_capacity(stack_size);
-        stack.resize(stack_size, 0);
-
-        // Calculate stack top (stacks grow downward)
+    /// Create the idle task.
+    pub fn new_idle() -> Self {
+        let mut stack = Vec::with_capacity(crate::config::kernel::TASK_STACK_SIZE);
+        stack.resize(crate::config::kernel::TASK_STACK_SIZE, 0);
         let stack_top = stack.as_ptr() as usize + stack.len();
 
-        // Initialize task context
-        let context = TaskContext::new(entry, arg, stack_top);
+        Self {
+            id: TaskId::new(0),
+            name: String::from("idle"),
+            state: TaskState::Ready,
+            context: TrapFrame::default(),
+            stack,
+            stack_top,
+            parent_id: None,
+            children: Vec::new(),
+            ticks_remaining: crate::config::kernel::DEFAULT_TIME_SLICE,
+        }
+    }
+
+    /// Create a new task.
+    pub fn new(id: TaskId, name: String, parent_id: Option<TaskId>) -> Self {
+        let mut stack = Vec::with_capacity(crate::config::kernel::TASK_STACK_SIZE);
+        stack.resize(crate::config::kernel::TASK_STACK_SIZE, 0);
+        let stack_top = stack.as_ptr() as usize + stack.len();
 
         Self {
             id,
             name,
-            context,
-            stack,
             state: TaskState::Ready,
-            time_slice: 0, // Will be set by scheduler
-            wakeup_time: None,
+            context: TrapFrame::default(),
+            stack,
+            stack_top,
+            parent_id,
+            children: Vec::new(),
+            ticks_remaining: crate::config::kernel::DEFAULT_TIME_SLICE,
         }
     }
 
-    /// Check if the task is ready to run.
-    pub fn is_ready(&self) -> bool {
-        self.state == TaskState::Ready
-    }
-
-    /// Check if the task should be woken up.
-    pub fn should_wakeup(&self, current_time: u64) -> bool {
-        if let Some(wakeup) = self.wakeup_time {
-            current_time >= wakeup
-        } else {
-            false
-        }
-    }
-}
-
-impl core::fmt::Debug for Task {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("Task")
-            .field("id", &self.id)
-            .field("name", &self.name)
-            .field("state", &self.state)
-            .field("time_slice", &self.time_slice)
-            .field("wakeup_time", &self.wakeup_time)
-            .field("pc", &format_args!("{:#x}", self.context.pc))
-            .field("sp", &format_args!("{:#x}", self.context.sp))
-            .finish()
+    /// Initialize task context.
+    ///
+    /// Sets up the initial execution context for the task:
+    /// - PC (elr): entry point address
+    /// - SP: stack top pointer
+    /// - Argument register (x0): argument value
+    /// - Link register (x30): exit handler address
+    pub fn init_context(&mut self, entry: usize, arg: usize, exit_handler: usize) {
+        // Set program counter to entry point
+        self.context.elr = entry as u64;
+        
+        // Set stack pointer (aligned to 16 bytes)
+        self.context.usp = (self.stack_top & !0xf) as u64;
+        
+        // Set argument in x0
+        self.context.r[0] = arg as u64;
+        
+        // Set link register to exit handler
+        self.context.r[30] = exit_handler as u64;
+        
+        // Set SPSR to EL1h with interrupts enabled
+        // SPSR_EL1: M[4:0] = 0b00101 (EL1h), D=0, A=0, I=0, F=0
+        self.context.spsr = 0b00101;
     }
 }

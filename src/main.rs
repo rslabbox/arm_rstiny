@@ -60,25 +60,32 @@ fn kernel_init() {
     drivers::power::init("hvc").expect("Failed to initialize PSCI");
     
     // Initialize task scheduler
-    task::init_scheduler();
+    task::init();
+}
+
+/// User main task entry point.
+fn user_main() {
+
+    // Run tests in main task
+    tests::rstiny_tests();
+    
+    // Run scheduler tests
+    task::tests::run_scheduler_tests();
+
+    info!("User main task completed");
 }
 
 #[unsafe(no_mangle)]
 pub fn rust_main(_cpu_id: usize, _arg: usize) -> ! {
     kernel_init();
-
+    
     println!("\nHello RustTinyOS!\n");
 
-    // Run tests in main thread
-    tests::rstiny_tests();
-
-    timer::set_timer(core::time::Duration::from_secs(1), |_| {
-        info!("5 microseconds timer expired!, current_ns {}", timer::current_nanoseconds());
-    });
-
-    loop {}
-
-    drivers::power::system_off();
+    // Create main user task as child of ROOT
+    task::spawn_main_task(user_main);
+    
+    // Start scheduler, transfer control to ROOT
+    task::start_scheduling();
 }
 
 #[cfg(all(target_os = "none", not(test)))]
