@@ -34,6 +34,8 @@ tock-registers = "0.10.1"
 axwatchdog ={ path = "crates/axwatchdog" }
 axbacktrace = { path = "crates/axbacktrace", features = ["alloc", "dwarf"] }
 
+intrusive-collections = { version = "0.9.7", features = ["nightly"] }
+
 [profile.dev]
 panic = "abort"
 debug = 2

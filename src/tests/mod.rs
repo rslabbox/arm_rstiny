@@ -2,6 +2,7 @@
 
 mod allocator;
 mod gicv3;
+pub mod task;
 
 fn logger_test() {
     error!("This is an error message.");

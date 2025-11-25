@@ -34,26 +34,23 @@ fn invalid_exception(tf: &TrapFrame, kind: TrapKind, source: TrapSource) {
         kind, source, tf
     );
 
-    // Capture backtrace from trap context
-    // In AArch64: fp = x29 = r[29], lr = x30 = r[30]
-    let backtrace =
-        axbacktrace::Backtrace::capture_trap(tf.r[29] as usize, tf.elr as usize, tf.r[30] as usize);
-    error!("\n{}", backtrace);
+    error!("\n{}", tf.backtrace());
 
     panic!("Invalid exception {:?} from {:?}", kind, source);
 }
 
 #[unsafe(no_mangle)]
-fn handle_irq_exception(tf: &mut TrapFrame) {
+fn handle_irq_exception(_tf: &mut TrapFrame) {
+    trace!("handle_irq_exception");
     crate::drivers::irq::gicv3::irq_handler();
 
     // After handling interrupt, check if we need to schedule
     if crate::task::is_initialized() {
-        crate::task::schedule(tf);
+        crate::task::schedule();
     }
 }
 
-fn handle_instruction_abort(tf: &TrapFrame, _iss: u64) {
+fn handle_instruction_abort(_tf: &TrapFrame, _iss: u64) {
  
 }
 
@@ -66,11 +63,7 @@ fn handle_data_abort(tf: &TrapFrame, _iss: u64) {
         tf,
     );
 
-    // Capture backtrace from trap context
-    // In AArch64: fp = x29 = r[29], lr = x30 = r[30]
-    let backtrace =
-        axbacktrace::Backtrace::capture_trap(tf.r[29] as usize, tf.elr as usize, tf.r[30] as usize);
-    error!("\n{}", backtrace);
+    error!("\n{}", tf.backtrace());
 
     panic!("Data Abort encountered");
 }

@@ -1,120 +1,212 @@
-//! Task control block and task management.
+//! Task definition and related types.
 
-use alloc::{string::String, vec::Vec};
+use alloc::boxed::Box;
+use alloc::sync::Arc;
+use alloc::vec::Vec;
+use core::cell::UnsafeCell;
+use core::sync::atomic::{AtomicU8, Ordering};
 
-use crate::hal::TrapFrame;
+use kspin::SpinNoIrq;
 
-/// Unique task identifier.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct TaskId(pub usize);
+use crate::config::kernel::TASK_STACK_SIZE;
+use crate::hal::context::TaskContext;
 
-impl TaskId {
-    pub const fn new(id: usize) -> Self {
-        Self(id)
-    }
+use super::scheduler::fifo_scheduler::FifoTask;
 
-    pub const fn as_usize(&self) -> usize {
-        self.0
-    }
-}
+/// Task identifier type.
+pub type TaskId = usize;
 
-/// Task execution state.
+/// Root task ID (idle task).
+pub const ROOT_ID: TaskId = 0;
+
+/// Main user task ID.
+pub const MAIN_TASK_ID: TaskId = 1;
+
+/// Task state enumeration.
+#[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TaskState {
-    /// Task is ready to run.
-    Ready,
-    /// Task is currently running.
-    Running,
-    /// Task is sleeping.
-    Sleeping,
-    /// Task has exited.
-    Exited,
+    /// Task is in the ready queue, waiting to be scheduled.
+    Ready = 0,
+    /// Task is currently running on CPU.
+    Running = 1,
+    /// Task is sleeping, waiting for a timer.
+    Sleeping = 2,
+    /// Task has exited and is waiting for cleanup.
+    Exited = 3,
 }
 
-/// Task control block.
-#[allow(dead_code)]
-pub struct Task {
-    /// Task identifier.
-    pub id: TaskId,
-    /// Task name.
-    pub name: String,
-    /// Task state.
-    pub state: TaskState,
-    /// Saved task context.
-    pub context: TrapFrame,
-    /// Task stack.
-    pub stack: Vec<u8>,
-    /// Stack top pointer (used for context switching).
-    pub stack_top: usize,
+impl From<u8> for TaskState {
+    fn from(val: u8) -> Self {
+        match val {
+            0 => TaskState::Ready,
+            1 => TaskState::Running,
+            2 => TaskState::Sleeping,
+            3 => TaskState::Exited,
+            _ => TaskState::Ready,
+        }
+    }
+}
+
+/// Inner task structure containing all task metadata.
+pub struct TaskInner {
+    /// Unique task identifier.
+    id: TaskId,
+    /// Task name for debugging.
+    name: &'static str,
+    /// Current task state (atomic for safe concurrent access).
+    state: AtomicU8,
     /// Parent task ID.
-    pub parent_id: Option<TaskId>,
-    /// Child task IDs.
-    pub children: Vec<TaskId>,
-    /// Remaining time slice ticks.
-    pub ticks_remaining: usize,
+    parent_id: TaskId,
+    /// List of child task IDs.
+    children: SpinNoIrq<Vec<TaskId>>,
+    /// Task context (registers, stack pointer, etc.).
+    context: UnsafeCell<TaskContext>,
+    /// Kernel stack for this task. None for ROOT which uses bootstrap stack.
+    kstack: Option<Box<[u8]>>,
+    /// Entry function pointer.
+    entry: Option<fn()>,
 }
 
-impl Task {
-    /// Create the idle task.
-    pub fn new_idle() -> Self {
-        let mut stack = Vec::with_capacity(crate::config::kernel::TASK_STACK_SIZE);
-        stack.resize(crate::config::kernel::TASK_STACK_SIZE, 0);
-        let stack_top = stack.as_ptr() as usize + stack.len();
+// Safety: TaskInner is designed to be shared across threads with proper synchronization.
+unsafe impl Send for TaskInner {}
+unsafe impl Sync for TaskInner {}
 
+impl TaskInner {
+    /// Creates the ROOT (idle) task.
+    /// 
+    /// The ROOT task reuses the bootstrap stack and has no parent.
+    pub fn new_root() -> Self {
         Self {
-            id: TaskId::new(0),
-            name: String::from("idle"),
-            state: TaskState::Ready,
-            context: TrapFrame::default(),
-            stack,
-            stack_top,
-            parent_id: None,
-            children: Vec::new(),
-            ticks_remaining: crate::config::kernel::DEFAULT_TIME_SLICE,
+            id: ROOT_ID,
+            name: "ROOT",
+            state: AtomicU8::new(TaskState::Running as u8),
+            parent_id: ROOT_ID, // ROOT is its own parent
+            children: SpinNoIrq::new(Vec::new()),
+            context: UnsafeCell::new(TaskContext::new()),
+            kstack: None, // Reuse bootstrap stack
+            entry: None,
         }
     }
 
-    /// Create a new task.
-    pub fn new(id: TaskId, name: String, parent_id: Option<TaskId>) -> Self {
-        let mut stack = Vec::with_capacity(crate::config::kernel::TASK_STACK_SIZE);
-        stack.resize(crate::config::kernel::TASK_STACK_SIZE, 0);
-        let stack_top = stack.as_ptr() as usize + stack.len();
+    /// Creates a new task with the given parameters.
+    pub fn new(id: TaskId, name: &'static str, parent_id: TaskId, entry: fn()) -> Self {
+        // Allocate kernel stack
+        let kstack = alloc::vec![0u8; TASK_STACK_SIZE].into_boxed_slice();
+        let kstack_top = kstack.as_ptr() as usize + TASK_STACK_SIZE;
+
+        let mut context = TaskContext::new();
+        // Initialize context with entry point and stack
+        context.init(
+            task_entry_trampoline as usize,
+            memory_addr::VirtAddr::from(kstack_top),
+            memory_addr::VirtAddr::from(0usize), // No TLS for now
+        );
 
         Self {
             id,
             name,
-            state: TaskState::Ready,
-            context: TrapFrame::default(),
-            stack,
-            stack_top,
+            state: AtomicU8::new(TaskState::Ready as u8),
             parent_id,
-            children: Vec::new(),
-            ticks_remaining: crate::config::kernel::DEFAULT_TIME_SLICE,
+            children: SpinNoIrq::new(Vec::new()),
+            context: UnsafeCell::new(context),
+            kstack: Some(kstack),
+            entry: Some(entry),
         }
     }
 
-    /// Initialize task context.
-    ///
-    /// Sets up the initial execution context for the task:
-    /// - PC (elr): entry point address
-    /// - SP: stack top pointer
-    /// - Argument register (x0): argument value
-    /// - Link register (x30): exit handler address
-    pub fn init_context(&mut self, entry: usize, arg: usize, exit_handler: usize) {
-        // Set program counter to entry point
-        self.context.elr = entry as u64;
-        
-        // Set stack pointer (aligned to 16 bytes)
-        self.context.usp = (self.stack_top & !0xf) as u64;
-        
-        // Set argument in x0
-        self.context.r[0] = arg as u64;
-        
-        // Set link register to exit handler
-        self.context.r[30] = exit_handler as u64;
-        
-        // Set SPSR to EL1h with interrupts enabled
-        // SPSR_EL1: M[4:0] = 0b00101 (EL1h), D=0, A=0, I=0, F=0
-        self.context.spsr = 0b00101;
+    /// Returns the task ID.
+    #[inline]
+    pub fn id(&self) -> TaskId {
+        self.id
     }
+
+    /// Returns the task name.
+    #[inline]
+    pub fn name(&self) -> &'static str {
+        self.name
+    }
+
+    /// Returns the current task state.
+    #[inline]
+    pub fn state(&self) -> TaskState {
+        TaskState::from(self.state.load(Ordering::Acquire))
+    }
+
+    /// Sets the task state.
+    #[inline]
+    pub fn set_state(&self, state: TaskState) {
+        self.state.store(state as u8, Ordering::Release);
+    }
+
+    /// Returns the parent task ID.
+    #[inline]
+    pub fn parent_id(&self) -> TaskId {
+        self.parent_id
+    }
+
+    /// Adds a child task ID.
+    pub fn add_child(&self, child_id: TaskId) {
+        self.children.lock().push(child_id);
+    }
+
+    /// Removes a child task ID.
+    pub fn remove_child(&self, child_id: TaskId) {
+        self.children.lock().retain(|&id| id != child_id);
+    }
+
+    /// Takes all children IDs (used when task exits).
+    pub fn take_children(&self) -> Vec<TaskId> {
+        core::mem::take(&mut *self.children.lock())
+    }
+
+    /// Returns a mutable reference to the task context.
+    /// 
+    /// # Safety
+    /// Caller must ensure exclusive access to the context.
+    #[inline]
+    pub unsafe fn context_mut(&self) -> &mut TaskContext {
+        unsafe { &mut *self.context.get() }
+    }
+
+    /// Returns a reference to the task context.
+    #[inline]
+    pub fn context(&self) -> &TaskContext {
+        unsafe { &*self.context.get() }
+    }
+
+    /// Returns the entry function if any.
+    #[inline]
+    pub fn entry(&self) -> Option<fn()> {
+        self.entry
+    }
+
+    /// Checks if this is the ROOT task.
+    #[inline]
+    pub fn is_root(&self) -> bool {
+        self.id == ROOT_ID
+    }
+}
+
+/// Type alias for schedulable task (wrapped in FifoTask for intrusive list).
+pub type SchedulableTask = FifoTask<TaskInner>;
+
+/// Type alias for task reference (Arc-wrapped schedulable task).
+pub type TaskRef = Arc<SchedulableTask>;
+
+/// Task entry trampoline function.
+/// 
+/// This function is the actual entry point for all tasks. It retrieves
+/// the task's entry function and calls it, then handles task exit.
+#[unsafe(no_mangle)]
+extern "C" fn task_entry_trampoline() {
+    let task = super::current_task();
+    
+    // Call the actual entry function
+    if let Some(entry) = task.entry() {
+        entry();
+    }
+    
+    // Task completed, exit
+    super::exit_current_task();
 }

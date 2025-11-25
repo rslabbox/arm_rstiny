@@ -92,7 +92,7 @@ fn user_main() {
     tests::rstiny_tests();
 
     // Run scheduler tests
-    task::tests::run_scheduler_tests();
+    tests::task::run_scheduler_tests();
 
     info!("User main task completed");
 }
@@ -104,10 +104,12 @@ pub fn rust_main(_cpu_id: usize, _arg: usize) -> ! {
     println!("\nHello RustTinyOS!\n");
 
     // Create main user task as child of ROOT
-    task::spawn_main_task(user_main);
+    task::spawn(user_main);
 
     // Start scheduler, transfer control to ROOT
     task::start_scheduling();
+
+    loop {}
 }
 
 #[cfg(all(target_os = "none", not(test)))]
