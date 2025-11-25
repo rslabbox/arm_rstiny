@@ -29,27 +29,24 @@ enum TrapSource {
 
 #[unsafe(no_mangle)]
 fn invalid_exception(tf: &TrapFrame, kind: TrapKind, source: TrapSource) {
-    error!("Invalid exception {:?} from {:?}:\n{:#x?}", kind, source, tf);
-    
+    error!(
+        "Invalid exception {:?} from {:?}:\n{:#x?}",
+        kind, source, tf
+    );
+
     // Capture backtrace from trap context
     // In AArch64: fp = x29 = r[29], lr = x30 = r[30]
-    let backtrace = axbacktrace::Backtrace::capture_trap(
-        tf.r[29] as usize, 
-        tf.elr as usize, 
-        tf.r[30] as usize
-    );
+    let backtrace =
+        axbacktrace::Backtrace::capture_trap(tf.r[29] as usize, tf.elr as usize, tf.r[30] as usize);
     error!("\n{}", backtrace);
-    
-    panic!(
-        "Invalid exception {:?} from {:?}",
-        kind, source
-    );
+
+    panic!("Invalid exception {:?} from {:?}", kind, source);
 }
 
 #[unsafe(no_mangle)]
 fn handle_irq_exception(tf: &mut TrapFrame) {
     crate::drivers::irq::gicv3::irq_handler();
-    
+
     // After handling interrupt, check if we need to schedule
     if crate::task::is_initialized() {
         crate::task::schedule(tf);
@@ -57,23 +54,7 @@ fn handle_irq_exception(tf: &mut TrapFrame) {
 }
 
 fn handle_instruction_abort(tf: &TrapFrame, _iss: u64) {
-    error!(
-        "Instruction Abort @ {:#x}, ESR={:#x}:\n{:#x?}",
-        tf.elr,
-        ESR_EL1.get(),
-        tf,
-    );
-    
-    // Capture backtrace from trap context
-    // In AArch64: fp = x29 = r[29], lr = x30 = r[30]
-    let backtrace = axbacktrace::Backtrace::capture_trap(
-        tf.r[29] as usize, 
-        tf.elr as usize, 
-        tf.r[30] as usize
-    );
-    error!("\n{}", backtrace);
-
-    panic!("Instruction Abort encountered");
+ 
 }
 
 fn handle_data_abort(tf: &TrapFrame, _iss: u64) {
@@ -87,11 +68,8 @@ fn handle_data_abort(tf: &TrapFrame, _iss: u64) {
 
     // Capture backtrace from trap context
     // In AArch64: fp = x29 = r[29], lr = x30 = r[30]
-    let backtrace = axbacktrace::Backtrace::capture_trap(
-        tf.r[29] as usize, 
-        tf.elr as usize, 
-        tf.r[30] as usize
-    );
+    let backtrace =
+        axbacktrace::Backtrace::capture_trap(tf.r[29] as usize, tf.elr as usize, tf.r[30] as usize);
     error!("\n{}", backtrace);
 
     panic!("Data Abort encountered");
@@ -102,7 +80,7 @@ fn handle_sync_exception(tf: &mut TrapFrame) {
     let esr = ESR_EL1.extract();
     let iss = esr.read(ESR_EL1::ISS);
     match esr.read_as_enum(ESR_EL1::EC) {
-        Some(ESR_EL1::EC::Value::InstrAbortCurrentEL) => handle_instruction_abort(tf, iss),
+        // Some(ESR_EL1::EC::Value::InstrAbortCurrentEL) => handle_instruction_abort(tf, iss),
         Some(ESR_EL1::EC::Value::DataAbortCurrentEL) => handle_data_abort(tf, iss),
         Some(ESR_EL1::EC::Value::Brk64) => {
             debug!("BRK #{:#x} @ {:#x} ", iss, tf.elr);

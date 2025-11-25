@@ -3,10 +3,9 @@
 //! This module provides cooperative multitasking with time-slice round-robin scheduling.
 
 mod manager;
-mod switch;
 mod task;
-pub mod thread;
 pub mod tests;
+pub mod thread;
 
 use alloc::boxed::Box;
 
@@ -25,16 +24,16 @@ static mut INITIALIZED: bool = false;
 /// Initialize the task manager.
 ///
 /// Creates the ROOT task and prepares the task manager for use.
-pub fn init() {
+pub fn init_taskmanager() {
     info!("Initializing task manager...");
-    
+
     let task_manager = TaskManager::new();
     TASK_MANAGER.init_once(SpinNoIrq::new(task_manager));
-    
+
     unsafe {
         INITIALIZED = true;
     }
-    
+
     info!("Task manager initialized");
 }
 
@@ -51,7 +50,7 @@ pub fn is_initialized() -> bool {
 /// * `main_fn` - The entry point function for the main task
 pub fn spawn_main_task(main_fn: fn()) -> task::TaskId {
     info!("Creating main user task...");
-    
+
     with_task_manager(|tm| {
         // Create a wrapper closure
         let closure_ptr = Box::into_raw(Box::new(move || {
@@ -62,7 +61,7 @@ pub fn spawn_main_task(main_fn: fn()) -> task::TaskId {
                 thread::sleep(core::time::Duration::from_secs(3600));
             }
         })) as usize;
-        
+
         // Spawn with ROOT as parent
         let task_id = tm.spawn_with_parent(
             alloc::string::String::from("user_main"),
@@ -70,7 +69,7 @@ pub fn spawn_main_task(main_fn: fn()) -> task::TaskId {
             closure_ptr,
             Some(tm.root_task_id),
         );
-        
+
         info!("Main user task created with ID: {}", task_id.as_usize());
         task_id
     })
@@ -167,19 +166,4 @@ where
 {
     let mut tm = TASK_MANAGER.lock();
     f(&mut tm)
-}
-
-/// ROOT task idle loop.
-fn idle_loop() -> ! {
-    info!("ROOT task running");
-    loop {
-        unsafe {
-            core::arch::asm!("wfi");
-        }
-    }
-}
-
-/// ROOT task exit handler (should never be called).
-extern "C" fn root_exit_handler() -> ! {
-    panic!("ROOT task should never exit!");
 }

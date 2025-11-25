@@ -3,6 +3,8 @@
 use aarch64_cpu::asm::barrier;
 use aarch64_cpu::registers::*;
 
+use crate::config::kernel::PHYS_VIRT_OFFSET;
+
 /// Enable FP/SIMD instructions by setting the `FPEN` field in `CPACR_EL1`.
 pub fn enable_fp() {
     CPACR_EL1.write(CPACR_EL1::FPEN::TrapNothing);
@@ -108,6 +110,9 @@ unsafe extern "C" fn _start_primary() -> ! {
         adrp    x0, {boot_pt}
         bl      {init_mmu}            // setup MMU
 
+        mov     x8, {phys_virt_offset}  // set SP to the high address
+        add     sp, sp, x8
+
         mov     x0, x19                 // call_main(cpu_id, dtb)
         mov     x1, x20
         ldr     x8, ={rust_main}
@@ -119,6 +124,7 @@ unsafe extern "C" fn _start_primary() -> ! {
         init_boot_page_table = sym super::init::init_boot_page_table,
         boot_stack = sym super::init::BOOT_STACK,
         boot_pt = sym super::init::BOOT_PT_L0,
+        phys_virt_offset = const PHYS_VIRT_OFFSET,
         boot_stack_size = const crate::config::kernel::BOOT_STACK_SIZE,
         rust_main = sym crate::rust_main,
     )

@@ -69,7 +69,8 @@ fn kernel_init() {
         start: _edata.as_ptr() as usize,
         end: usize::MAX,
     };
-
+    info!("ip_range: {:#x} - {:#x}", ip_range.start, ip_range.end);
+    info!("fp_range: {:#x} - {:#x}", fp_range.start, fp_range.end);
     axbacktrace::init(ip_range, fp_range);
 
     drivers::irq::init(
@@ -82,7 +83,7 @@ fn kernel_init() {
     drivers::power::init("hvc").expect("Failed to initialize PSCI");
 
     // Initialize task scheduler
-    task::init();
+    task::init_taskmanager();
 }
 
 /// User main task entry point.
@@ -115,8 +116,7 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
     error!("{}", info);
 
     // Capture and display backtrace
-    let backtrace = axbacktrace::Backtrace::capture();
-    error!("\n{}", backtrace);
+    error!("\n{}", axbacktrace::Backtrace::capture());
 
     drivers::power::system_off();
 }
