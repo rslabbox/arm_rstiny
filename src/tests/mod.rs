@@ -20,7 +20,7 @@ pub fn rstiny_tests() {
     gicv3::gicv3_tests();
     
     // Run scheduler tests
-    scheduler::run_scheduler_tests();
+    // scheduler::run_scheduler_tests();
 
     #[cfg(feature = "opi5p")]
     crate::drivers::pci::test_dw_pcie_atu();

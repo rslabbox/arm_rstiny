@@ -69,7 +69,14 @@ pub fn rust_main(_cpu_id: usize, _arg: usize) -> ! {
 
     println!("\nHello RustTinyOS!\n");
 
+    // Run tests in main thread
     tests::rstiny_tests();
+
+    timer::set_timer(core::time::Duration::from_secs(1), |_| {
+        info!("5 microseconds timer expired!, current_ns {}", timer::current_nanoseconds());
+    });
+
+    loop {}
 
     drivers::power::system_off();
 }

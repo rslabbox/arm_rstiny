@@ -30,9 +30,14 @@ pub fn current_ticks() -> u64 {
     CNTPCT_EL0.get()
 }
 
-/// Get ticks since boot.
-pub fn boot_ticks() -> u64 {
-    current_ticks() - BOOT_TICKS.load(Ordering::Relaxed)
+/// Get current nanoseconds.
+pub fn current_nanoseconds() -> u64 {
+    ticks_to_nanos(current_ticks())
+}
+
+/// Get nanoseconds since boot.
+pub fn boot_nanoseconds() -> u64 {
+    ticks_to_nanos(current_ticks() - BOOT_TICKS.load(Ordering::Relaxed))
 }
 
 /// Converts hardware ticks to nanoseconds.

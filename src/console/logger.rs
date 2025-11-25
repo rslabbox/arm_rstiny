@@ -54,8 +54,7 @@ impl Log for SimpleLogger {
             Level::Trace => (ColorCode::BrightBlack, ColorCode::BrightBlack),
         };
 
-        let current_ticks = crate::drivers::timer::boot_ticks();
-        let current_nanos = crate::drivers::timer::ticks_to_nanos(current_ticks);
+        let current_nanos = crate::drivers::timer::boot_nanoseconds();
         let secs = (current_nanos as f64) / (crate::drivers::timer::NANOS_PER_SEC as f64);
 
         // 彩色输出格式：[时间 文件:行号] 消息

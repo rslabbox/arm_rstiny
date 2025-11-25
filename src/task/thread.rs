@@ -26,23 +26,36 @@ impl JoinHandle {
     pub fn join(self) {
         loop {
             // Check if task is dead
-            let guard = super::scheduler_lock();
-            if let Some(scheduler) = guard.as_ref() {
-                if let Some(task) = scheduler.get_task(self.task_id) {
-                    if task.state == TaskState::Dead {
-                        debug!("Task {} completed", self.task_id);
-                        return;
+            let is_dead = {
+                let guard = super::scheduler_lock();
+                if let Some(scheduler) = guard.as_ref() {
+                    if let Some(task) = scheduler.get_task(self.task_id) {
+                        task.state == TaskState::Dead
+                    } else {
+                        // Task not found (shouldn't happen)
+                        warn!("Task {} not found", self.task_id);
+                        true
                     }
                 } else {
-                    // Task not found (shouldn't happen)
-                    warn!("Task {} not found", self.task_id);
-                    return;
+                    false
                 }
-            }
-            drop(guard);
+            };
 
-            // Yield to let other tasks run
-            busy_wait(Duration::from_micros(100));
+            if is_dead {
+                debug!("Task {} completed", self.task_id);
+                return;
+            }
+
+            // Use WFI to wait for next interrupt efficiently
+            // This allows timer interrupts to run and schedule tasks
+            #[cfg(target_arch = "aarch64")]
+            unsafe {
+                core::arch::asm!("wfi");
+            }
+            
+            // Small busy wait to allow multiple checks per interrupt
+            #[cfg(not(target_arch = "aarch64"))]
+            busy_wait(Duration::from_micros(10));
         }
     }
 
@@ -111,9 +124,12 @@ pub fn yield_now() {
 /// Sleep for the specified duration.
 ///
 /// The current task will be blocked and woken up after the duration expires.
+/// If called from outside a task context (e.g., main thread), uses busy wait.
+///
+/// **Note:** Minimum sleep duration is 1ms due to scheduler tick granularity.
 ///
 /// # Arguments
-/// * `duration` - How long to sleep
+/// * `duration` - How long to sleep (minimum 1ms)
 ///
 /// # Examples
 /// ```no_run
@@ -121,16 +137,35 @@ pub fn yield_now() {
 /// thread::sleep(Duration::from_millis(100));
 /// ```
 pub fn sleep(duration: Duration) {
-    // This is a simplified implementation
-    // In a real system, this would trigger a syscall
-    // For now, we store the request and let the next interrupt handle it
-    
-    let duration_ns = duration.as_nanos() as u64;
-    debug!("Task requesting sleep for {} ns", duration_ns);
-    
-    // Store sleep request in thread-local or global state
-    // The actual sleep will be handled on the next timer interrupt
-    super::set_sleep_request(duration_ns);
+    // Check if we're in a task context
+    let task_id = {
+        let guard = super::scheduler_lock();
+        guard.as_ref().and_then(|s| s.current_id())
+    };
+
+    if let Some(_tid) = task_id {
+        // We're in a task - use proper sleep mechanism
+        let duration_ns = duration.as_nanos() as u64;
+        
+        // Enforce minimum sleep time of 1ms (one scheduler tick)
+        const MIN_SLEEP_NS: u64 = 1_000_000; // 1ms in nanoseconds
+        let sleep_ns = duration_ns.max(MIN_SLEEP_NS);
+        
+        debug!("Task requesting sleep for {} ns", sleep_ns);
+        
+        // Set sleep request - the next timer interrupt will handle it
+        super::set_sleep_request(sleep_ns);
+        
+        // Busy wait for at least 2 timer ticks to ensure:
+        // 1. The sleep request is processed
+        // 2. We're properly blocked and scheduled out
+        // 3. We're woken up and scheduled back in
+        busy_wait(Duration::from_micros(2100)); // Just over 2ms
+    } else {
+        // We're in main thread - just busy wait
+        debug!("Main thread sleeping (busy wait) for {:?}", duration);
+        busy_wait(duration);
+    }
 }
 
 /// Get the current task ID.

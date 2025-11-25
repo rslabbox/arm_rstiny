@@ -125,6 +125,7 @@ impl Scheduler {
                 }
             } else if task.state == TaskState::Dead {
                 // Task finished, remove from current
+                debug!("Current task {} is Dead, clearing current", task.id);
                 self.current = None;
             }
         }
@@ -137,9 +138,11 @@ impl Scheduler {
             }
         }
 
-        // No ready task - just return without switching
-        // This allows the main thread to continue executing
-        // debug!("No ready tasks, returning to main context");
+        // No ready task - return without modifying TrapFrame
+        // This allows returning to the interrupted context (main thread or sleeping task)
+        if self.current.is_none() {
+            trace!("No ready tasks and no current task, returning to interrupted context");
+        }
     }
 
     /// Yield the current task voluntarily.
@@ -239,8 +242,6 @@ impl Scheduler {
         task.state = TaskState::Running;
         task.context.to_trap_frame(tf);
         self.current = Some(next_idx);
-
-        debug!("Switching to task {}: {}", task.id, task.name);
     }
 
     /// Dump all tasks for debugging.
