@@ -29,6 +29,7 @@ mod syscall;
 extern crate log;
 
 extern crate alloc;
+extern crate axbacktrace;
 
 pub use error::{TinyError, TinyResult};
 use memory_addr::pa;
@@ -43,13 +44,34 @@ fn kernel_init() {
 
     // Print build time
     println!(
-        "\n\nBuild time: {}",
+        "\nBuild time: {}",
         option_env!("BUILD_TIME").unwrap_or("unknown")
     );
 
     println!("Board: {}", config::BOARD_NAME);
 
     console::init_logger().expect("Failed to initialize logger");
+
+    use core::ops::Range;
+
+    unsafe extern "C" {
+        safe static _stext: [u8; 0];
+        safe static _etext: [u8; 0];
+        safe static _edata: [u8; 0];
+    }
+
+    let ip_range = Range {
+        start: _stext.as_ptr() as usize,
+        end: _etext.as_ptr() as usize,
+    };
+
+    let fp_range = Range {
+        start: _edata.as_ptr() as usize,
+        end: usize::MAX,
+    };
+
+    axbacktrace::init(ip_range, fp_range);
+
     drivers::irq::init(
         phys_to_virt(pa!(config::GICD_BASE)),
         phys_to_virt(pa!(config::GICR_BASE)),
@@ -58,17 +80,16 @@ fn kernel_init() {
 
     timer::init_early();
     drivers::power::init("hvc").expect("Failed to initialize PSCI");
-    
+
     // Initialize task scheduler
     task::init();
 }
 
 /// User main task entry point.
 fn user_main() {
-
     // Run tests in main task
     tests::rstiny_tests();
-    
+
     // Run scheduler tests
     task::tests::run_scheduler_tests();
 
@@ -78,12 +99,12 @@ fn user_main() {
 #[unsafe(no_mangle)]
 pub fn rust_main(_cpu_id: usize, _arg: usize) -> ! {
     kernel_init();
-    
+
     println!("\nHello RustTinyOS!\n");
 
     // Create main user task as child of ROOT
     task::spawn_main_task(user_main);
-    
+
     // Start scheduler, transfer control to ROOT
     task::start_scheduling();
 }
@@ -91,6 +112,11 @@ pub fn rust_main(_cpu_id: usize, _arg: usize) -> ! {
 #[cfg(all(target_os = "none", not(test)))]
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
-    println!("PANIC: {}", info);
+    error!("{}", info);
+
+    // Capture and display backtrace
+    let backtrace = axbacktrace::Backtrace::capture();
+    error!("\n{}", backtrace);
+
     drivers::power::system_off();
 }

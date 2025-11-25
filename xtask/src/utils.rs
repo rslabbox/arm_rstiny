@@ -13,6 +13,8 @@ pub enum TaskError {
     ExecutionFailed(String),
     #[error("Unknown argument: {0}")]
     UnknownArgument(String),
+    #[error("Not found: {0}")]
+    NotFound(String),
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
     #[error("toml: {0}")]
@@ -21,6 +23,8 @@ pub enum TaskError {
     Figment(#[from] figment::Error),
     #[error("xshell: {0}")]
     Shell(#[from] xshell::Error),
+    #[error("Other: {0}")]
+    Other(String),
     #[error("Ok")]
     Ok,
 }

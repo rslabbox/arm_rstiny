@@ -6,6 +6,7 @@ mod utils;
 use utils::{project_root, TaskResult};
 
 mod plugins;
+mod dwarf;
 
 #[macro_use]
 extern crate log;

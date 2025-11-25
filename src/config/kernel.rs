@@ -8,4 +8,3 @@ pub const TICKS_PER_SEC: usize = 1000; // 1000 ticks per second (1ms per tick)
 // Task scheduling configuration
 pub const DEFAULT_TIME_SLICE: usize = 10; // 10 ticks = 10ms
 pub const TASK_STACK_SIZE: usize = 0x10000; // 64KB per task
-pub const MAX_TASKS: usize = 64; // Maximum number of tasks

@@ -29,9 +29,20 @@ enum TrapSource {
 
 #[unsafe(no_mangle)]
 fn invalid_exception(tf: &TrapFrame, kind: TrapKind, source: TrapSource) {
+    error!("Invalid exception {:?} from {:?}:\n{:#x?}", kind, source, tf);
+    
+    // Capture backtrace from trap context
+    // In AArch64: fp = x29 = r[29], lr = x30 = r[30]
+    let backtrace = axbacktrace::Backtrace::capture_trap(
+        tf.r[29] as usize, 
+        tf.elr as usize, 
+        tf.r[30] as usize
+    );
+    error!("\n{}", backtrace);
+    
     panic!(
-        "Invalid exception {:?} from {:?}:\n{:#x?}",
-        kind, source, tf
+        "Invalid exception {:?} from {:?}",
+        kind, source
     );
 }
 
@@ -52,6 +63,17 @@ fn handle_instruction_abort(tf: &TrapFrame, _iss: u64) {
         ESR_EL1.get(),
         tf,
     );
+    
+    // Capture backtrace from trap context
+    // In AArch64: fp = x29 = r[29], lr = x30 = r[30]
+    let backtrace = axbacktrace::Backtrace::capture_trap(
+        tf.r[29] as usize, 
+        tf.elr as usize, 
+        tf.r[30] as usize
+    );
+    error!("\n{}", backtrace);
+
+    panic!("Instruction Abort encountered");
 }
 
 fn handle_data_abort(tf: &TrapFrame, _iss: u64) {
@@ -62,6 +84,15 @@ fn handle_data_abort(tf: &TrapFrame, _iss: u64) {
         FAR_EL1.get(),
         tf,
     );
+
+    // Capture backtrace from trap context
+    // In AArch64: fp = x29 = r[29], lr = x30 = r[30]
+    let backtrace = axbacktrace::Backtrace::capture_trap(
+        tf.r[29] as usize, 
+        tf.elr as usize, 
+        tf.r[30] as usize
+    );
+    error!("\n{}", backtrace);
 
     panic!("Data Abort encountered");
 }

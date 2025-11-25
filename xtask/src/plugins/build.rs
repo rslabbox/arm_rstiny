@@ -86,7 +86,7 @@ impl BuildTask {
 
         // Prepare environment variables
         let linker_path = "link.lds";
-        let rustflags = format!("-C link-arg=-T{}", linker_path);
+        let rustflags = format!("-C link-arg=-T{} -C force-frame-pointers=yes", linker_path);
         let log_level = &self.build_config.log;
         let build_time = chrono::Local::now().to_string();
 
@@ -117,6 +117,12 @@ impl BuildTask {
 
         info!("==> Build succeeded!");
         info!("    ELF file: {}", self.elf_name().display());
+
+        // Process debug sections for runtime backtrace support
+        info!("==> Processing debug sections");
+        let elf_path = self.elf_name();
+        crate::dwarf::process_debug_sections(&elf_path)?;
+        info!("    Debug sections processed");
 
         // Generate binary file
         info!("==> Copy binary");
