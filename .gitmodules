@@ -1,0 +1,6 @@
+[submodule "crates/axwatchdog"]
+	path = crates/axwatchdog
+	url = https://github.com/kylin-x-kernel/axwatchdog.git
+[submodule "crates/axbacktrace"]
+	path = crates/axbacktrace
+	url = https://github.com/Starry-OS/axbacktrace.git
