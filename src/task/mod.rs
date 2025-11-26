@@ -29,7 +29,6 @@ pub use manager::{
     start_scheduling, yield_now,
 };
 pub use crate::hal::percpu::{current_task};
-pub use task::{TaskId, TaskRef, TaskState, ROOT_ID};
 
 /// Spawns a new task with the given entry function.
 ///

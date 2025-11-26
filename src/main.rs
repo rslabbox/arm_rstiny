@@ -109,8 +109,6 @@ pub fn rust_main(_cpu_id: usize, _arg: usize) -> ! {
 
     // Start scheduler, transfer control to ROOT
     task::start_scheduling();
-
-    loop {}
 }
 
 #[cfg(all(target_os = "none", not(test)))]

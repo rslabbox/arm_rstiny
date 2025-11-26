@@ -12,4 +12,3 @@ pub mod percpu;
 pub use context::TrapFrame;
 pub use cpu::{clear_bss, flush_tlb};
 pub use exception::init_exception;
-pub use percpu::{current_task, cpu_id};

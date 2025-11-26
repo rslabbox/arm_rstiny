@@ -4,6 +4,7 @@ pub mod fifo_scheduler;
 ///
 /// All tasks in the scheduler are considered runnable. If a task is go to
 /// sleep, it should be removed from the scheduler.
+#[allow(unused)]
 pub trait BaseScheduler {
     /// Type of scheduled entities. Often a task struct.
     type SchedItem;

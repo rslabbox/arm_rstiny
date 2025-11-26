@@ -50,7 +50,15 @@ fn handle_irq_exception(_tf: &mut TrapFrame) {
     }
 }
 
-fn handle_instruction_abort(_tf: &TrapFrame, _iss: u64) {}
+fn handle_instruction_abort(tf: &TrapFrame, _iss: u64) {
+    panic!(
+        "Instruction Abort @ {:#x}, ESR={:#x}, FAR={:#x}:\n{:#x?}",
+        tf.elr,
+        ESR_EL1.get(),
+        FAR_EL1.get(),
+        tf,
+    );
+}
 
 fn handle_data_abort(tf: &TrapFrame, _iss: u64) {
     error!(
@@ -71,7 +79,7 @@ fn handle_sync_exception(tf: &mut TrapFrame) {
     let esr = ESR_EL1.extract();
     let iss = esr.read(ESR_EL1::ISS);
     match esr.read_as_enum(ESR_EL1::EC) {
-        // Some(ESR_EL1::EC::Value::InstrAbortCurrentEL) => handle_instruction_abort(tf, iss),
+        Some(ESR_EL1::EC::Value::InstrAbortCurrentEL) => handle_instruction_abort(tf, iss),
         Some(ESR_EL1::EC::Value::DataAbortCurrentEL) => handle_data_abort(tf, iss),
         Some(ESR_EL1::EC::Value::Brk64) => {
             debug!("BRK #{:#x} @ {:#x} ", iss, tf.elr);

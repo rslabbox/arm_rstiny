@@ -6,20 +6,27 @@ use crate::task::thread;
 
 /// Task 1: Print every 500ms, 10 times
 fn task1_periodic() {
+    let id = thread::current_id();
     for i in 0..10 {
-        info!("[Task 1] Iteration {}/10", i + 1);
-        thread::sleep(Duration::from_millis(500));
+        info!("[Task {id}] Iteration {}/10", i + 1);
+        if i > 5 {
+            thread::yield_now();
+        } else {
+            thread::sleep(Duration::from_millis(500));
+        }
+        
     }
     info!("[Task 1] Completed!");
 }
 
 /// Task 2: Print every 1000ms, 10 times  
 fn task2_periodic() {
+    let id = thread::current_id();
     for i in 0..10 {
-        info!("[Task 2] Iteration {}/10", i + 1);
+        info!("[Task {id}] Iteration {}/10", i + 1);
         thread::sleep(Duration::from_millis(1000));
     }
-    info!("[Task 2] Completed!");
+    info!("[Task {id}] Completed!");
 }
 
 /// Test two tasks with periodic printing.

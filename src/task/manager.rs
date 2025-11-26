@@ -35,6 +35,8 @@ impl TaskManager {
         let mut scheduler = Scheduler::new();
         scheduler.init();
 
+        info!("Scheduler used: {}", Scheduler::scheduler_name());
+
         Self {
             scheduler,
             next_id: 1, // Start from 1, ROOT is 0
@@ -42,8 +44,8 @@ impl TaskManager {
     }
 
     /// Handles scheduler timer tick.
-    pub fn scheduler_timer_tick(&mut self) {
-        self.scheduler.task_tick(&percpu::current_task());
+    pub fn scheduler_timer_tick(&mut self) -> bool {
+        self.scheduler.task_tick(&percpu::current_task())
     }
 
     /// Adds a ready task to the scheduler.
@@ -115,7 +117,7 @@ impl TaskManager {
     /// Returns true if the task was successfully unblocked.
     pub fn unblock_task(&mut self, task: TaskRef) -> bool {
         if task.state() == TaskState::Sleeping {
-            debug!("Unblocking task {} ({})", task.id(), task.name());
+            trace!("Unblocking task {} ({})", task.id(), task.name());
             task.set_state(TaskState::Ready);
             self.scheduler.add_task(task);
             true
@@ -155,7 +157,6 @@ impl TaskManager {
         // Set a timer to unblock the task
         crate::drivers::timer::set_timer(duration, move |_| {
             TASK_MANAGER.lock().as_mut().map(|manager| {
-                debug!("Waking up task {} ({}) from sleep", task_clone.id(), task_clone.name());
                 manager.unblock_task(task_clone);
             });
         });
@@ -182,10 +183,7 @@ impl TaskManager {
     pub fn timer_tick(&mut self) {
         let curr_task = percpu::current_task();
 
-        // Check if current task should be preempted
-        let should_preempt = self.scheduler.task_tick(&curr_task);
-
-        if should_preempt {
+        if self.scheduler_timer_tick() {
             // Put current task back if it's still running
             if curr_task.state() == TaskState::Running {
                 curr_task.set_state(TaskState::Ready);
