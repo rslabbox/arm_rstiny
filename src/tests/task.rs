@@ -12,7 +12,7 @@ fn task1_periodic() {
         if i > 5 {
             thread::yield_now();
         } else {
-            thread::sleep(Duration::from_millis(500));
+            thread::sleep(Duration::from_millis(50));
         }
         
     }
@@ -24,7 +24,7 @@ fn task2_periodic() {
     let id = thread::current_id();
     for i in 0..10 {
         info!("[Task {id}] Iteration {}/10", i + 1);
-        thread::sleep(Duration::from_millis(1000));
+        thread::sleep(Duration::from_millis(100));
     }
     info!("[Task {id}] Completed!");
 }
