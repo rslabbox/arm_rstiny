@@ -186,6 +186,12 @@ impl TaskInner {
     pub fn is_root(&self) -> bool {
         self.id == ROOT_ID
     }
+
+    /// Checks if this is the idle task (alias for is_root).
+    #[inline]
+    pub fn is_idle(&self) -> bool {
+        self.id == ROOT_ID
+    }
 }
 
 /// Type alias for schedulable task (wrapped in FifoTask for intrusive list).

@@ -4,6 +4,8 @@
 
 use core::time::Duration;
 
+use crate::hal::percpu;
+
 use super::manager;
 use super::task::TaskId;
 
@@ -27,5 +29,5 @@ pub fn yield_now() {
 
 /// Returns the current thread's task ID.
 pub fn current_id() -> TaskId {
-    manager::current_task().id()
+    percpu::current_task().id()
 }

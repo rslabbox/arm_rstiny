@@ -1,224 +1,199 @@
 //! Task manager implementation.
+//!
+//! This module provides a clean task management architecture with:
+//! - Unified block/unblock mechanism
+//! - Single scheduling entry point (resched)
+//! - Timer-based sleep using block_current + unblock_task
 
-use alloc::collections::BTreeMap;
 use alloc::sync::Arc;
+use core::time::Duration;
 
-use kspin::SpinNoIrq;
+use kspin::SpinRaw;
 
 use crate::drivers::timer::current_nanoseconds;
+use crate::hal::percpu;
 
-use super::scheduler::fifo_scheduler::FifoTask;
-use super::scheduler::BaseScheduler;
-use super::task::{TaskId, TaskInner, TaskRef, TaskState, ROOT_ID};
-use super::wait_queue::WaitQueue;
 use super::Scheduler;
+use super::scheduler::BaseScheduler;
+use super::scheduler::fifo_scheduler::FifoTask;
+use super::task::{TaskId, TaskInner, TaskRef, TaskState};
 
 /// Global task manager instance.
-static TASK_MANAGER: SpinNoIrq<Option<TaskManager>> = SpinNoIrq::new(None);
+static TASK_MANAGER: SpinRaw<Option<TaskManager>> = SpinRaw::new(None);
 
-/// Task manager that handles all task-related operations.
+/// Task manager that handles all task scheduling operations.
 pub struct TaskManager {
-    /// Currently running task.
-    current: TaskRef,
-    /// FIFO scheduler for ready tasks.
+    /// Scheduler for ready tasks.
     scheduler: Scheduler,
-    /// Wait queue for sleeping tasks.
-    wait_queue: WaitQueue,
-    /// Map of all tasks by ID.
-    tasks: BTreeMap<TaskId, TaskRef>,
     /// Next available task ID.
     next_id: TaskId,
-    /// Whether the task manager has been initialized.
-    initialized: bool,
-    /// Whether scheduling has started (after start_scheduling is called).
-    scheduling_started: bool,
 }
 
 impl TaskManager {
-    /// Creates a new task manager with ROOT task.
+    /// Creates a new task manager.
     fn new() -> Self {
-        // Create ROOT task
-        let root_inner = TaskInner::new_root();
-        let root_task = Arc::new(FifoTask::new(root_inner));
-        
-        let mut tasks = BTreeMap::new();
-        tasks.insert(ROOT_ID, root_task.clone());
-        
         let mut scheduler = Scheduler::new();
         scheduler.init();
-        
+
         Self {
-            current: root_task,
             scheduler,
-            wait_queue: WaitQueue::new(),
-            tasks,
             next_id: 1, // Start from 1, ROOT is 0
-            initialized: true,
-            scheduling_started: false,
         }
     }
 
-    /// Returns whether the task manager is initialized.
-    pub fn is_initialized(&self) -> bool {
-        self.initialized
+    /// Handles scheduler timer tick.
+    pub fn scheduler_timer_tick(&mut self) {
+        self.scheduler.task_tick(&percpu::current_task());
     }
 
-    /// Returns a reference to the current task.
-    pub fn current(&self) -> &TaskRef {
-        &self.current
-    }
-
-    /// Spawns a new task with the given entry function.
-    /// 
-    /// The new task becomes a child of the current task.
-    pub fn spawn(&mut self, name: &'static str, entry: fn()) -> TaskId {
-        let id = self.next_id;
-        self.next_id += 1;
-        
-        let parent_id = self.current.id();
-        let task_inner = TaskInner::new(id, name, parent_id, entry);
-        let task = Arc::new(FifoTask::new(task_inner));
-        
-        // Add to tasks map
-        self.tasks.insert(id, task.clone());
-        
-        // Add as child of current task
-        self.current.add_child(id);
-        
-        // Add to scheduler ready queue
+    /// Adds a ready task to the scheduler.
+    pub fn spawn(&mut self, task: TaskRef) {
+        assert!(task.state() == TaskState::Ready);
         self.scheduler.add_task(task);
-        
-        info!("Task {} ({}) spawned, parent: {}", id, name, parent_id);
-        
-        id
     }
 
-    /// Puts the current task to sleep for the specified duration.
-    pub fn sleep_current(&mut self, duration_ns: u64) {
-        let wake_time = current_nanoseconds() + duration_ns;
-        
-        // Set current task state to sleeping
-        self.current.set_state(TaskState::Sleeping);
-        
-        // Add to wait queue
-        self.wait_queue.add(self.current.clone(), wake_time);
-        
-        // Schedule next task
-        self.schedule_next();
+    /// Switches context from current task to next task.
+    fn switch_to(&self, curr_task: &TaskRef, next_task: TaskRef) {
+        trace!(
+            "context switch: {} ({}) -> {} ({})",
+            curr_task.id(),
+            curr_task.name(),
+            next_task.id(),
+            next_task.name()
+        );
+
+        next_task.set_state(TaskState::Running);
+
+        // If switching to the same task, do nothing
+        if Arc::ptr_eq(curr_task, &next_task) {
+            return;
+        }
+
+        let next_ctx = next_task.context();
+
+        // Update percpu with next task before context switch
+        percpu::set_current_task(&next_task);
+
+        // Context switch
+        unsafe {
+            (*curr_task.context_mut()).switch_to(next_ctx);
+        }
+    }
+
+    /// Reschedules - picks next task and switches to it.
+    ///
+    /// Precondition: current task state is NOT Running.
+    fn resched(&mut self, curr_task: &TaskRef) {
+        assert!(curr_task.state() != TaskState::Running);
+
+        let next_task = if let Some(task) = self.scheduler.pick_next_task() {
+            task
+        } else {
+            // No ready tasks, switch to idle task
+            percpu::idle_task()
+        };
+
+        self.switch_to(curr_task, next_task);
     }
 
     /// Current task voluntarily yields CPU.
-    pub fn yield_current(&mut self) {
-        // Put current back to ready queue
-        self.current.set_state(TaskState::Ready);
-        self.scheduler.put_prev_task(self.current.clone(), false);
-        
-        // Schedule next task
-        self.schedule_next();
+    pub fn yield_current(&mut self, curr_task: &TaskRef) {
+        assert!(curr_task.state() == TaskState::Running);
+
+        curr_task.set_state(TaskState::Ready);
+
+        // Don't put idle task back to queue
+        if !curr_task.is_idle() {
+            self.scheduler.put_prev_task(curr_task.clone(), false);
+        }
+
+        self.resched(curr_task);
+    }
+
+    /// Unblocks a sleeping task by adding it back to the scheduler.
+    ///
+    /// Returns true if the task was successfully unblocked.
+    pub fn unblock_task(&mut self, task: TaskRef) -> bool {
+        if task.state() == TaskState::Sleeping {
+            debug!("Unblocking task {} ({})", task.id(), task.name());
+            task.set_state(TaskState::Ready);
+            self.scheduler.add_task(task);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Blocks the current task (sets state to Sleeping and reschedules).
+    ///
+    /// The task will remain blocked until unblock_task is called.
+    pub fn block_current(&mut self, curr_task: &TaskRef) {
+        assert!(curr_task.state() == TaskState::Running);
+        assert!(!curr_task.is_idle());
+
+        curr_task.set_state(TaskState::Sleeping);
+        self.resched(curr_task);
+    }
+
+    /// Puts the current task to sleep until the specified deadline.
+    pub fn sleep_current(&mut self, curr_task: &TaskRef, deadline_ns: u64) {
+        assert!(curr_task.state() == TaskState::Running);
+        assert!(!curr_task.is_idle());
+
+        // If deadline already passed, don't sleep
+        if current_nanoseconds() >= deadline_ns {
+            return;
+        }
+
+        // Clone task reference for the timer callback
+        let task_clone = curr_task.clone();
+
+        // Calculate duration from now to deadline
+        let now = current_nanoseconds();
+        let duration = Duration::from_nanos(deadline_ns - now);
+
+        // Set a timer to unblock the task
+        crate::drivers::timer::set_timer(duration, move |_| {
+            TASK_MANAGER.lock().as_mut().map(|manager| {
+                debug!("Waking up task {} ({}) from sleep", task_clone.id(), task_clone.name());
+                manager.unblock_task(task_clone);
+            });
+        });
+
+        // Block the current task
+        self.block_current(curr_task);
     }
 
     /// Exits the current task.
-    pub fn exit_current(&mut self) {
-        let current_id = self.current.id();
-        
-        if current_id == ROOT_ID {
-            panic!("Cannot exit ROOT task!");
-        }
-        
-        info!("Task {} ({}) exiting", current_id, self.current.name());
-        
-        // Set state to exited
-        self.current.set_state(TaskState::Exited);
-        
-        // Transfer children to ROOT
-        let children = self.current.take_children();
-        if !children.is_empty() {
-            if let Some(root) = self.tasks.get(&ROOT_ID) {
-                for child_id in children {
-                    root.add_child(child_id);
-                    // Update child's parent reference if needed
-                    // (we don't store mutable parent_id, so this is informational only)
-                }
-            }
-        }
-        
-        // Remove from parent's children list
-        let parent_id = self.current.parent_id();
-        if let Some(parent) = self.tasks.get(&parent_id) {
-            parent.remove_child(current_id);
-        }
-        
-        // Remove from tasks map
-        self.tasks.remove(&current_id);
-        
-        // Schedule next task (current will be dropped when no more references)
-        self.schedule_next();
+    pub fn exit_current(&mut self, curr_task: &TaskRef) -> ! {
+        assert!(!curr_task.is_idle());
+        assert!(curr_task.state() == TaskState::Running);
+
+        info!("Task {} ({}) exiting", curr_task.id(), curr_task.name());
+
+        curr_task.set_state(TaskState::Exited);
+
+        self.resched(curr_task);
+
+        unreachable!("task exited!");
     }
 
-    /// Wakes up expired tasks from the wait queue.
-    fn wake_expired_tasks(&mut self) {
-        let current_ns = current_nanoseconds();
-        let woken = self.wait_queue.wake_expired(current_ns);
-        
-        for task in woken {
-            task.set_state(TaskState::Ready);
-            self.scheduler.add_task(task);
-        }
-    }
-
-    /// Schedules the next task to run.
-    fn schedule_next(&mut self) {
-        // First, wake up any expired sleeping tasks
-        self.wake_expired_tasks();
-        
-        // Try to pick next task from scheduler
-        let next = self.scheduler.pick_next_task();
-        
-        let next_task = match next {
-            Some(task) => task,
-            None => {
-                // No ready tasks, switch to ROOT (idle)
-                self.tasks.get(&ROOT_ID).expect("ROOT task must exist").clone()
-            }
-        };
-        
-        // If switching to the same task, do nothing
-        if Arc::ptr_eq(&self.current, &next_task) {
-            self.current.set_state(TaskState::Running);
-            return;
-        }
-        
-        // Perform context switch
-        let prev = core::mem::replace(&mut self.current, next_task);
-        self.current.set_state(TaskState::Running);
-        
-        // Context switch
-        unsafe {
-            prev.context_mut().switch_to(self.current.context());
-        }
-    }
-
-    /// Called from timer interrupt to check for scheduling.
+    /// Called from timer interrupt to check for preemption.
     pub fn timer_tick(&mut self) {
-        // Don't schedule if scheduling hasn't started yet
-        if !self.scheduling_started {
-            return;
-        }
+        let curr_task = percpu::current_task();
 
-        // Wake expired tasks
-        self.wake_expired_tasks();
-        
         // Check if current task should be preempted
-        let should_preempt = self.scheduler.task_tick(&self.current);
-        
-        if should_preempt || self.current.state() != TaskState::Running {
+        let should_preempt = self.scheduler.task_tick(&curr_task);
+
+        if should_preempt {
             // Put current task back if it's still running
-            if self.current.state() == TaskState::Running {
-                self.current.set_state(TaskState::Ready);
-                self.scheduler.put_prev_task(self.current.clone(), true);
+            if curr_task.state() == TaskState::Running {
+                curr_task.set_state(TaskState::Ready);
+                if !curr_task.is_idle() {
+                    self.scheduler.put_prev_task(curr_task.clone(), true);
+                }
+                self.resched(&curr_task);
             }
-            
-            self.schedule_next();
         }
     }
 
@@ -226,25 +201,40 @@ impl TaskManager {
     /// This function never returns.
     pub fn start(&mut self) -> ! {
         info!("Starting scheduler...");
-        
-        // Mark scheduling as started
-        self.scheduling_started = true;
-        
+
         // Get first task from scheduler
         if let Some(first_task) = self.scheduler.pick_next_task() {
-            let prev = core::mem::replace(&mut self.current, first_task);
-            self.current.set_state(TaskState::Running);
-            
-            info!("Switching to task {} ({})", self.current.id(), self.current.name());
-            
-            // Context switch from ROOT to first task
-            unsafe {
-                prev.context_mut().switch_to(self.current.context());
-            }
+            let idle = percpu::idle_task();
+
+            info!(
+                "Switching to task {} ({})",
+                first_task.id(),
+                first_task.name()
+            );
+
+            self.switch_to(&idle, first_task);
         }
-        
+
         // If no tasks, just idle
         idle_loop();
+    }
+
+    /// Creates a new task and returns its ID.
+    pub fn create_task(&mut self, name: &'static str, entry: fn()) -> TaskId {
+        let id = self.next_id;
+        self.next_id += 1;
+
+        let current = percpu::current_task();
+        let parent_id = current.id();
+        let task_inner = TaskInner::new(id, name, parent_id, entry);
+        let task = Arc::new(FifoTask::new(task_inner));
+
+        info!("Task {} ({}) spawned, parent: {}", id, name, parent_id);
+
+        // Add to scheduler ready queue
+        self.spawn(task);
+
+        id
     }
 }
 
@@ -263,57 +253,73 @@ fn idle_loop() -> ! {
 /// Initializes the task manager.
 pub fn init() {
     info!("Initializing task manager...");
-    
+
+    // Initialize percpu for CPU 0
+    unsafe {
+        percpu::init(0);
+    }
+
+    // Create ROOT (idle) task
+    let root_inner = TaskInner::new_root();
+    let root_task = Arc::new(FifoTask::new(root_inner));
+
+    // Set ROOT as current task and idle task via percpu
+    percpu::set_current_task(&root_task);
+    percpu::set_idle_task(&root_task);
+
+    // Create task manager
     let manager = TaskManager::new();
     *TASK_MANAGER.lock() = Some(manager);
-    
+
     info!("Task manager initialized");
 }
 
 /// Returns whether the task manager is initialized.
 pub fn is_initialized() -> bool {
-    TASK_MANAGER.lock().as_ref().map_or(false, |m| m.is_initialized())
-}
-
-/// Returns the current task reference.
-pub fn current_task() -> TaskRef {
-    TASK_MANAGER.lock()
-        .as_ref()
-        .expect("Task manager not initialized")
-        .current()
-        .clone()
+    TASK_MANAGER.lock().is_some()
 }
 
 /// Spawns a new task.
 pub fn spawn(name: &'static str, entry: fn()) -> TaskId {
-    TASK_MANAGER.lock()
+    TASK_MANAGER
+        .lock()
         .as_mut()
         .expect("Task manager not initialized")
-        .spawn(name, entry)
+        .create_task(name, entry)
 }
 
-/// Puts the current task to sleep.
+/// Puts the current task to sleep for the specified duration in nanoseconds.
 pub fn sleep(duration_ns: u64) {
-    TASK_MANAGER.lock()
+    let curr_task = percpu::current_task();
+    let deadline_ns = current_nanoseconds() + duration_ns;
+
+    TASK_MANAGER
+        .lock()
         .as_mut()
         .expect("Task manager not initialized")
-        .sleep_current(duration_ns);
+        .sleep_current(&curr_task, deadline_ns);
 }
 
 /// Current task yields CPU.
 pub fn yield_now() {
-    TASK_MANAGER.lock()
+    let curr_task = percpu::current_task();
+
+    TASK_MANAGER
+        .lock()
         .as_mut()
         .expect("Task manager not initialized")
-        .yield_current();
+        .yield_current(&curr_task);
 }
 
 /// Exits the current task.
-pub fn exit_current() {
-    TASK_MANAGER.lock()
+pub fn exit_current() -> ! {
+    let curr_task = percpu::current_task();
+
+    TASK_MANAGER
+        .lock()
         .as_mut()
         .expect("Task manager not initialized")
-        .exit_current();
+        .exit_current(&curr_task);
 }
 
 /// Called from timer interrupt.
@@ -325,7 +331,8 @@ pub fn on_timer_tick() {
 
 /// Starts the scheduler. Never returns.
 pub fn start_scheduling() -> ! {
-    TASK_MANAGER.lock()
+    TASK_MANAGER
+        .lock()
         .as_mut()
         .expect("Task manager not initialized")
         .start()

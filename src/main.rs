@@ -23,7 +23,6 @@ mod fs;
 #[cfg(feature = "net")]
 mod net;
 mod sync;
-mod syscall;
 
 #[macro_use]
 extern crate log;
@@ -37,21 +36,7 @@ use memory_addr::pa;
 use crate::mm::phys_to_virt;
 use drivers::timer;
 
-fn kernel_init() {
-    hal::clear_bss();
-    hal::init_exception();
-    drivers::uart::init_early(phys_to_virt(pa!(config::UART_PADDR)));
-
-    // Print build time
-    println!(
-        "\nBuild time: {}",
-        option_env!("BUILD_TIME").unwrap_or("unknown")
-    );
-
-    println!("Board: {}", config::BOARD_NAME);
-
-    console::init_logger().expect("Failed to initialize logger");
-
+fn backtrace_init() {
     use core::ops::Range;
 
     unsafe extern "C" {
@@ -69,9 +54,25 @@ fn kernel_init() {
         start: _edata.as_ptr() as usize,
         end: usize::MAX,
     };
-    info!("ip_range: {:#x} - {:#x}", ip_range.start, ip_range.end);
-    info!("fp_range: {:#x} - {:#x}", fp_range.start, fp_range.end);
     axbacktrace::init(ip_range, fp_range);
+}
+
+fn kernel_init() {
+    hal::clear_bss();
+    hal::init_exception();
+    drivers::uart::init_early(phys_to_virt(pa!(config::UART_PADDR)));
+
+    // Print build time
+    println!(
+        "\nBuild time: {}",
+        option_env!("BUILD_TIME").unwrap_or("unknown")
+    );
+
+    println!("Board: {}", config::BOARD_NAME);
+
+    console::init_logger().expect("Failed to initialize logger");
+
+    backtrace_init();
 
     drivers::irq::init(
         phys_to_virt(pa!(config::GICD_BASE)),

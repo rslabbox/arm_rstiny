@@ -50,9 +50,7 @@ fn handle_irq_exception(_tf: &mut TrapFrame) {
     }
 }
 
-fn handle_instruction_abort(_tf: &TrapFrame, _iss: u64) {
- 
-}
+fn handle_instruction_abort(_tf: &TrapFrame, _iss: u64) {}
 
 fn handle_data_abort(tf: &TrapFrame, _iss: u64) {
     error!(
@@ -81,11 +79,12 @@ fn handle_sync_exception(tf: &mut TrapFrame) {
         }
         _ => {
             panic!(
-                "Unhandled synchronous exception @ {:#x}: ESR={:#x} (EC {:#08b}, ISS {:#x})",
+                "Unhandled synchronous exception @ {:#x}: ESR={:#x} (EC {:#08b}, ISS {:#x}), tf ={:#x?}",
                 tf.elr,
                 esr.get(),
                 esr.read(ESR_EL1::EC),
                 esr.read(ESR_EL1::ISS),
+                tf
             );
         }
     }

@@ -1,7 +1,27 @@
 //! CPU-related operations and utilities.
 
+use aarch64_cpu::registers::TPIDR_EL1;
 use core::arch::asm;
 use memory_addr::VirtAddr;
+use tock_registers::interfaces::{Readable, Writeable};
+
+/// Gets the current CPU's thread pointer (TPIDR_EL1).
+///
+/// This is used to store a pointer to the per-CPU data structure.
+#[inline]
+pub fn thread_pointer() -> usize {
+    TPIDR_EL1.get() as _
+}
+
+/// Sets the current CPU's thread pointer (TPIDR_EL1).
+///
+/// # Safety
+///
+/// The caller must ensure that `tp` points to a valid PerCpu structure.
+#[inline]
+pub unsafe fn set_thread_pointer(tp: usize) {
+    TPIDR_EL1.set(tp as _)
+}
 
 /// Flushes the TLB.
 ///
