@@ -23,6 +23,7 @@ use task::TaskInner;
 pub type Scheduler = FifoScheduler<TaskInner>;
 
 // Re-export commonly used types and functions
+#[allow(unused)]
 pub use manager::{
     exit_current as exit_current_task, init as init_taskmanager,
     is_initialized, on_timer_tick as schedule, sleep, spawn as spawn_task,

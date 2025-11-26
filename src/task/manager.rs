@@ -27,6 +27,8 @@ pub struct TaskManager {
     scheduler: Scheduler,
     /// Next available task ID.
     next_id: TaskId,
+    /// Number of active tasks (excluding ROOT/idle).
+    active_task_count: usize,
 }
 
 impl TaskManager {
@@ -40,6 +42,7 @@ impl TaskManager {
         Self {
             scheduler,
             next_id: 1, // Start from 1, ROOT is 0
+            active_task_count: 0,
         }
     }
 
@@ -172,6 +175,14 @@ impl TaskManager {
 
         info!("Task {} ({}) exiting", curr_task.id(), curr_task.name());
 
+        // Decrement active task count
+        self.active_task_count -= 1;
+
+        if self.active_task_count <= 0 {
+            info!("All tasks exited, shutting down...");
+            crate::drivers::power::system_off();
+        }
+
         curr_task.set_state(TaskState::Exited);
 
         self.resched(curr_task);
@@ -226,6 +237,9 @@ impl TaskManager {
         let parent_id = current.id();
         let task_inner = TaskInner::new(id, name, parent_id, entry);
         let task = Arc::new(FifoTask::new(task_inner));
+
+        // Increment active task count
+        self.active_task_count += 1;
 
         info!("Task {} ({}) spawned, parent: {}", id, name, parent_id);
 

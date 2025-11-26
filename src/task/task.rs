@@ -19,9 +19,6 @@ pub type TaskId = usize;
 /// Root task ID (idle task).
 pub const ROOT_ID: TaskId = 0;
 
-/// Main user task ID.
-pub const MAIN_TASK_ID: TaskId = 1;
-
 /// Task state enumeration.
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,6 +46,7 @@ impl From<u8> for TaskState {
 }
 
 /// Inner task structure containing all task metadata.
+#[allow(unused)]
 pub struct TaskInner {
     /// Unique task identifier.
     id: TaskId,
@@ -139,27 +137,6 @@ impl TaskInner {
         self.state.store(state as u8, Ordering::Release);
     }
 
-    /// Returns the parent task ID.
-    #[inline]
-    pub fn parent_id(&self) -> TaskId {
-        self.parent_id
-    }
-
-    /// Adds a child task ID.
-    pub fn add_child(&self, child_id: TaskId) {
-        self.children.lock().push(child_id);
-    }
-
-    /// Removes a child task ID.
-    pub fn remove_child(&self, child_id: TaskId) {
-        self.children.lock().retain(|&id| id != child_id);
-    }
-
-    /// Takes all children IDs (used when task exits).
-    pub fn take_children(&self) -> Vec<TaskId> {
-        core::mem::take(&mut *self.children.lock())
-    }
-
     /// Returns a mutable reference to the task context.
     /// 
     /// # Safety
@@ -179,12 +156,6 @@ impl TaskInner {
     #[inline]
     pub fn entry(&self) -> Option<fn()> {
         self.entry
-    }
-
-    /// Checks if this is the ROOT task.
-    #[inline]
-    pub fn is_root(&self) -> bool {
-        self.id == ROOT_ID
     }
 
     /// Checks if this is the idle task (alias for is_root).

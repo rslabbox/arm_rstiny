@@ -36,12 +36,6 @@ static mut PERCPU_AREA: PerCpu = PerCpu {
 };
 
 impl PerCpu {
-    /// Returns the CPU ID.
-    #[inline]
-    pub fn cpu_id(&self) -> usize {
-        self.cpu_id
-    }
-
     /// Returns the current task pointer.
     #[inline]
     pub fn current_task_ptr(&self) -> *const SchedulableTask {
@@ -103,12 +97,6 @@ unsafe fn current_cpu_mut() -> &'static mut PerCpu {
     unsafe { &mut *ptr }
 }
 
-/// Returns the current CPU's ID.
-#[inline]
-pub fn cpu_id() -> usize {
-    current_cpu().cpu_id
-}
-
 /// Returns the current task's raw pointer.
 ///
 /// This is a fast path that doesn't increment the reference count.
@@ -163,12 +151,6 @@ pub fn set_current_task(task: &TaskRef) {
     unsafe {
         set_current_task_ptr(ptr);
     }
-}
-
-/// Checks if the per-CPU data has been initialized.
-#[inline]
-pub fn is_initialized() -> bool {
-    thread_pointer() != 0
 }
 
 /// Sets the idle task for this CPU.
