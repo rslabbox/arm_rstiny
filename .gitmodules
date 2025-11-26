@@ -4,3 +4,6 @@
 [submodule "crates/axbacktrace"]
 	path = crates/axbacktrace
 	url = https://github.com/Starry-OS/axbacktrace.git
+[submodule "crates/aarch64-pmu"]
+	path = crates/aarch64-pmu
+	url = https://github.com/kylin-x-kernel/aarch64-pmu.git
