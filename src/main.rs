@@ -17,13 +17,6 @@ mod platform;
 mod task;
 mod tests;
 
-// Future modules (placeholder)
-mod fs;
-
-#[cfg(feature = "net")]
-mod net;
-mod sync;
-
 #[macro_use]
 extern crate log;
 
