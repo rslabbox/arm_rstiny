@@ -139,6 +139,10 @@ pub enum TinyError {
     /// Generic operation failed
     #[error("Operation failed: {0}")]
     OperationFailed(&'static str),
+
+    /// Thread join failed
+    #[error("Thread Self join failed")]
+    ThreadSelfJoinFailed,
 }
 
 /// Type alias for Result with TinyError as the error type.

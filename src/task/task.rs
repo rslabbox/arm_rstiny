@@ -13,6 +13,9 @@ use crate::hal::context::TaskContext;
 
 use super::scheduler::fifo_scheduler::FifoTask;
 
+// Forward declaration for TaskRef used in waiters
+type WaiterRef = Arc<FifoTask<TaskInner>>;
+
 /// Task identifier type.
 pub type TaskId = usize;
 
@@ -64,6 +67,8 @@ pub struct TaskInner {
     kstack: Option<Box<[u8]>>,
     /// Entry function pointer.
     entry: Option<fn()>,
+    /// Tasks waiting for this task to exit (for join support).
+    waiters: SpinNoIrq<Vec<WaiterRef>>,
 }
 
 // Safety: TaskInner is designed to be shared across threads with proper synchronization.
@@ -84,6 +89,7 @@ impl TaskInner {
             context: UnsafeCell::new(TaskContext::new()),
             kstack: None, // Reuse bootstrap stack
             entry: None,
+            waiters: SpinNoIrq::new(Vec::new()),
         }
     }
 
@@ -110,6 +116,7 @@ impl TaskInner {
             context: UnsafeCell::new(context),
             kstack: Some(kstack),
             entry: Some(entry),
+            waiters: SpinNoIrq::new(Vec::new()),
         }
     }
 
@@ -162,6 +169,16 @@ impl TaskInner {
     #[inline]
     pub fn is_idle(&self) -> bool {
         self.id == ROOT_ID
+    }
+
+    /// Adds a task to the waiters list (tasks waiting for this task to exit).
+    pub fn add_waiter(&self, waiter: WaiterRef) {
+        self.waiters.lock().push(waiter);
+    }
+
+    /// Takes all waiters from this task (used when task exits).
+    pub fn take_waiters(&self) -> Vec<WaiterRef> {
+        core::mem::take(&mut *self.waiters.lock())
     }
 }
 

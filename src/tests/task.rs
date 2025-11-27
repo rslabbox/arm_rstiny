@@ -33,20 +33,22 @@ fn test_periodic_tasks() {
     info!("=== Test: Periodic Tasks ===");
 
     // Spawn task 1
-    thread::spawn(task1_periodic);
+    let task1 = thread::spawn(task1_periodic);
 
     // Spawn task 2
-    thread::spawn(task2_periodic);
+    let task2 = thread::spawn(task2_periodic);
 
-    info!("Tasks spawned, scheduler will manage them");
+    info!("Waiting for tasks {} and {} to complete...", task1.id(), task2.id());
+
+    task1.join().unwrap();
+    task2.join().unwrap();
+
+    info!("All periodic tasks completed!");
 }
 
 /// Run all scheduler tests.
 pub fn run_scheduler_tests() {
-    info!("\n=== Running Task Scheduler Tests ===\n");
+    warn!("\n=== Running Task Scheduler Tests ===");
 
     test_periodic_tasks();
-
-    info!("\n=== Task Scheduler Tests Complete ===\n");
-    info!("Main thread continues after all tasks completed");
 }

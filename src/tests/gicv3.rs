@@ -1,16 +1,16 @@
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::{sync::atomic::{AtomicBool, Ordering}, time::Duration};
 
 use arm_gic::{
     IntId,
     gicv3::{GicCpuInterface, SgiTarget, SgiTargetGroup},
 };
 
-use crate::drivers::irq::{irqset_enable, irqset_register};
+use crate::drivers::{irq::{irqset_enable, irqset_register}, timer::busy_wait};
 
 static IS_INTERRUPT: AtomicBool = AtomicBool::new(false);
 
 pub fn gicv3_tests() {
-    info!("Running GICv3 tests...");
+    warn!("\n=== GICv3 tests ===");
 
     let sgi_intid = IntId::sgi(3);
     irqset_register(sgi_intid, |irq| {
@@ -34,7 +34,8 @@ pub fn gicv3_tests() {
     }
 
     // Wait for the interrupt to be handled
-    for _ in 0..1_000_000 {
+    for _ in 0..500 {
+        busy_wait(Duration::from_millis(1));
         if IS_INTERRUPT.load(Ordering::Relaxed) {
             break;
         }

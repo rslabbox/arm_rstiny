@@ -175,6 +175,18 @@ impl TaskManager {
 
         info!("Task {} ({}) exiting", curr_task.id(), curr_task.name());
 
+        // Wake up all tasks waiting for this task to exit
+        let waiters = curr_task.take_waiters();
+        for waiter in waiters {
+            trace!(
+                "Waking up waiter {} ({}) for task {}",
+                waiter.id(),
+                waiter.name(),
+                curr_task.id()
+            );
+            self.unblock_task(waiter);
+        }
+
         // Decrement active task count
         self.active_task_count -= 1;
 
@@ -228,8 +240,8 @@ impl TaskManager {
         idle_loop();
     }
 
-    /// Creates a new task and returns its ID.
-    pub fn create_task(&mut self, name: &'static str, entry: fn()) -> TaskId {
+    /// Creates a new task and returns its TaskRef.
+    pub fn create_task(&mut self, name: &'static str, entry: fn()) -> TaskRef {
         let id = self.next_id;
         self.next_id += 1;
 
@@ -243,10 +255,29 @@ impl TaskManager {
 
         info!("Task {} ({}) spawned, parent: {}", id, name, parent_id);
 
+        // Clone for return before adding to scheduler
+        let task_ref = task.clone();
+
         // Add to scheduler ready queue
         self.spawn(task);
 
-        id
+        task_ref
+    }
+
+    /// Joins on a target task - blocks current task until target exits.
+    ///
+    /// If the target task has already exited, returns immediately.
+    pub fn join_task(&mut self, curr_task: &TaskRef, target: &TaskRef) {
+        // If target already exited, return immediately
+        if target.state() == TaskState::Exited {
+            return;
+        }
+
+        // Add current task to target's waiters list
+        target.add_waiter(curr_task.clone());
+
+        // Block current task
+        self.block_current(curr_task);
     }
 }
 
@@ -291,13 +322,24 @@ pub fn is_initialized() -> bool {
     TASK_MANAGER.lock().is_some()
 }
 
-/// Spawns a new task.
-pub fn spawn(name: &'static str, entry: fn()) -> TaskId {
+/// Spawns a new task and returns its TaskRef.
+pub fn spawn(name: &'static str, entry: fn()) -> TaskRef {
     TASK_MANAGER
         .lock()
         .as_mut()
         .expect("Task manager not initialized")
         .create_task(name, entry)
+}
+
+/// Joins on a target task - blocks current task until target exits.
+pub fn join(target: TaskRef) {
+    let curr_task = percpu::current_task();
+
+    TASK_MANAGER
+        .lock()
+        .as_mut()
+        .expect("Task manager not initialized")
+        .join_task(&curr_task, &target);
 }
 
 /// Puts the current task to sleep for the specified duration in nanoseconds.

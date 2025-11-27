@@ -37,7 +37,7 @@ impl AllocatorTestSuite {
 
     /// Run all tests.
     pub fn run_all_tests(&mut self) {
-        info!("Start testing allocator...");
+        warn!("\n=== Allocator Test Start ===");
 
         self.test_basic_allocation();
         self.test_vec_operations();

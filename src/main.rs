@@ -37,8 +37,6 @@ fn user_main() {
     // Run tests in main task
     tests::rstiny_tests();
 
-    // Run scheduler tests
-    tests::task::run_scheduler_tests();
 
     info!("User main task completed");
 }

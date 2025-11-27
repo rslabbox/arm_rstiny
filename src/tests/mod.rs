@@ -5,6 +5,8 @@ mod gicv3;
 pub mod task;
 
 fn logger_test() {
+    warn!("\n=== Logger Test Start ===");
+
     error!("This is an error message.");
     warn!("This is a warning message.");
     info!("This is an info message.");
@@ -18,6 +20,9 @@ pub fn rstiny_tests() {
     allocator::run_allocator_tests();
 
     gicv3::gicv3_tests();
+
+    // Run scheduler tests
+    task::run_scheduler_tests();
 
     #[cfg(feature = "opi5p")]
     crate::drivers::pci::test_dw_pcie_atu();
