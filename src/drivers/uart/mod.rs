@@ -9,8 +9,8 @@ pub mod pl011;
 // Currently using dw_apb for OrangePi 5 Plus
 #[allow(unused)]
 #[cfg(feature = "opi5p")]
-pub use dw_apb::{getchar, init_early, irq_handler, putchar};
+pub use dw_apb::{getchar, init_early, irq_handler, putchar, puts};
 
 #[allow(unused)]
 #[cfg(feature = "qemu")]
-pub use pl011::{getchar, init_early, irq_handler, putchar};
+pub use pl011::{getchar, init_early, irq_handler, putchar, puts};

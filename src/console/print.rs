@@ -1,22 +1,99 @@
 //! Console print macros.
+//!
+//! This module provides thread-safe printing that prevents output from
+//! multiple CPUs from being interleaved.
 
-use core::fmt;
+use core::fmt::{self, Write};
+use core::sync::atomic::{AtomicBool, Ordering};
 
-pub struct ConsolePrinter;
+/// Simple spinlock for print synchronization across CPUs.
+/// Uses acquire-release ordering for proper SMP synchronization.
+struct PrintLock;
 
-impl fmt::Write for ConsolePrinter {
+static PRINT_LOCK_FLAG: AtomicBool = AtomicBool::new(false);
+
+impl PrintLock {
+    /// Acquire the print lock, spinning until it's available.
+    #[inline]
+    fn acquire() {
+        while PRINT_LOCK_FLAG
+            .compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .is_err()
+        {
+            // Spin with a hint to reduce contention
+            while PRINT_LOCK_FLAG.load(Ordering::Relaxed) {
+                core::hint::spin_loop();
+            }
+        }
+    }
+
+    /// Release the print lock.
+    #[inline]
+    fn release() {
+        PRINT_LOCK_FLAG.store(false, Ordering::Release);
+    }
+}
+
+/// Buffer size for formatting output before sending to UART.
+/// This should be large enough for most log lines.
+const PRINT_BUFFER_SIZE: usize = 512;
+
+/// A printer that formats into a fixed-size buffer, then outputs atomically.
+struct BufferedPrinter {
+    buffer: [u8; PRINT_BUFFER_SIZE],
+    pos: usize,
+}
+
+impl BufferedPrinter {
+    const fn new() -> Self {
+        Self {
+            buffer: [0; PRINT_BUFFER_SIZE],
+            pos: 0,
+        }
+    }
+
+    fn flush(&mut self) {
+        if self.pos > 0 {
+            // Safety: buffer contains valid UTF-8 since we only write from str
+            let s = unsafe { core::str::from_utf8_unchecked(&self.buffer[..self.pos]) };
+            // Output the entire string atomically (UART lock held for whole string)
+            crate::drivers::uart::puts(s);
+            self.pos = 0;
+        }
+    }
+}
+
+impl Write for BufferedPrinter {
     fn write_str(&mut self, s: &str) -> fmt::Result {
-        for c in s.chars() {
-            crate::drivers::uart::putchar(c as u8);
+        for &byte in s.as_bytes() {
+            if self.pos >= PRINT_BUFFER_SIZE {
+                // Buffer full, flush it
+                self.flush();
+            }
+            self.buffer[self.pos] = byte;
+            self.pos += 1;
         }
         Ok(())
     }
 }
 
+impl Drop for BufferedPrinter {
+    fn drop(&mut self) {
+        self.flush();
+    }
+}
+
 pub fn _print(args: fmt::Arguments) {
-    use fmt::Write;
-    // Ignore write errors in print function - printing should not panic
-    let _ = ConsolePrinter.write_fmt(args);
+    // Acquire global print lock - only one CPU can print at a time
+    PrintLock::acquire();
+
+    let mut printer = BufferedPrinter::new();
+    // Ignore write errors - printing should not panic
+    let _ = printer.write_fmt(args);
+    // Flush happens automatically in Drop
+
+    drop(printer); // Ensure flush before releasing lock
+    PrintLock::release();
 }
 
 /// Simple console print operation.

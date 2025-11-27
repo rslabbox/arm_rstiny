@@ -22,6 +22,16 @@ pub fn putchar(c: u8) {
     do_putchar(&mut UART.lock(), c);
 }
 
+/// Writes a string to the console atomically (holding the lock for the entire string).
+///
+/// This prevents output from multiple CPUs from being interleaved.
+pub fn puts(s: &str) {
+    let mut uart = UART.lock();
+    for c in s.bytes() {
+        do_putchar(&mut uart, c);
+    }
+}
+
 /// Reads a byte from the console, or returns [`None`] if no input is available.
 pub fn getchar() -> Option<u8> {
     UART.lock().getchar()

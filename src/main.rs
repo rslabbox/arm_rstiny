@@ -161,7 +161,7 @@ pub fn rust_main_secondary(cpu_id: usize) -> ! {
     // Initialize timer for this CPU
     drivers::timer::init_secondary();
 
-    println!("CPU {} online", cpu_id);
+    info!("CPU {} online", cpu_id);
 
     // Signal that this CPU is ready
     CPUS_READY.fetch_add(1, Ordering::SeqCst);

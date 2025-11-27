@@ -9,15 +9,28 @@ use memory_addr::VirtAddr;
 
 static UART: LazyInit<SpinNoIrq<DW8250>> = LazyInit::new();
 
-/// Writes a byte to the console.
-pub fn putchar(c: u8) {
-    let mut uart = UART.lock();
+fn do_putchar(uart: &mut DW8250, c: u8) {
     match c {
         b'\r' | b'\n' => {
             uart.putchar(b'\r');
             uart.putchar(b'\n');
         }
         c => uart.putchar(c),
+    }
+}
+
+/// Writes a byte to the console.
+pub fn putchar(c: u8) {
+    do_putchar(&mut UART.lock(), c);
+}
+
+/// Writes a string to the console atomically (holding the lock for the entire string).
+///
+/// This prevents output from multiple CPUs from being interleaved.
+pub fn puts(s: &str) {
+    let mut uart = UART.lock();
+    for c in s.bytes() {
+        do_putchar(&mut uart, c);
     }
 }
 
