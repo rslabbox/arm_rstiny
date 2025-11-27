@@ -126,6 +126,29 @@ pub enum TinyError {
     ConsoleWriteFailed,
 
     // ============================================================================
+    // Watchdog Related Errors
+    // ============================================================================
+    /// Watchdog detected soft lockup (watchdog thread not running)
+    #[error("Soft lockup detected on CPU {0}")]
+    WatchdogSoftLockup(usize),
+
+    /// Watchdog detected hard lockup (timer interrupt not running)
+    #[error("Hard lockup detected on CPU {0}")]
+    WatchdogHardLockup(usize),
+
+    /// Watchdog detected possible deadlock (lock held too long)
+    #[error("Possible deadlock detected on CPU {0}")]
+    WatchdogDeadlock(usize),
+
+    /// Watchdog initialization failed
+    #[error("Watchdog initialization failed: {0}")]
+    WatchdogInitFailed(&'static str),
+
+    /// Watchdog not initialized
+    #[error("Watchdog not initialized")]
+    WatchdogNotInitialized,
+
+    // ============================================================================
     // Generic Errors
     // ============================================================================
     /// Operation timeout

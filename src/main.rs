@@ -83,8 +83,14 @@ fn kernel_init() {
     timer::init_early();
     drivers::power::init("hvc").expect("Failed to initialize PSCI");
 
+    // Initialize watchdog subsystem
+    drivers::watchdog::init().expect("Failed to initialize watchdog");
+
     // Initialize task scheduler
     task::init_taskmanager();
+
+    // Start watchdog after task scheduler is ready
+    drivers::watchdog::start().expect("Failed to start watchdog");
 }
 
 /// User main task entry point.

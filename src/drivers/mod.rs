@@ -6,6 +6,7 @@ pub mod irq;
 pub mod power;
 pub mod timer;
 pub mod uart;
+pub mod watchdog;
 
 // Placeholder modules for future implementation
 pub mod block;

@@ -51,6 +51,10 @@ fn handle_timer_irq(_irq: usize) {
         next_deadline = NEXT_PERIODIC_DEADLINE.load(Ordering::Acquire);
     }
 
+    // Watchdog timer tick for softlockup detection
+    // Uses CPU 0 for now (single-core)
+    crate::drivers::watchdog::timer_tick(0);
+
     let mut timers = TIMER_LIST.lock();
     while timers.expire_one(current_nanoseconds()).is_some() {}
 
