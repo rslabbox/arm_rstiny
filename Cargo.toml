@@ -31,9 +31,10 @@ arm_pl011 = "0.1"
 
 tock-registers = "0.10.1"
 
-axwatchdog ={ path = "crates/axwatchdog" }
+aarch64-sdei = { path = "crates/aarch64-sdei" }
+axwatchdog = { path = "crates/axwatchdog", features = ["sdei", "pmu", "log"] }
 axbacktrace = { path = "crates/axbacktrace", features = ["alloc", "dwarf"] }
-aarch64-pmuv3 ={ path = "crates/aarch64-pmu" }
+aarch64-pmuv3 = { path = "crates/aarch64-pmu" }
 
 intrusive-collections = { version = "0.9.7", features = ["nightly"] }
 

@@ -7,3 +7,6 @@
 [submodule "crates/aarch64-pmu"]
 	path = crates/aarch64-pmu
 	url = https://github.com/kylin-x-kernel/aarch64-pmu.git
+[submodule "crates/aarch64-sdei"]
+	path = crates/aarch64-sdei
+	url = https://github.com/kylin-x-kernel/aarch64-sdei.git
