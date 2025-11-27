@@ -218,7 +218,7 @@ impl TaskContext {
     pub fn switch_to(&mut self, next_ctx: &Self) {
         self.fp_state.save();
         next_ctx.fp_state.restore();
-        
+
         unsafe { context_switch(self, next_ctx) }
     }
 }

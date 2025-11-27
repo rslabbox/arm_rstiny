@@ -1,10 +1,10 @@
 //! DesignWare APB UART driver.
 
+use crate::TinyResult;
+use crate::error::TinyError;
 use dw_apb_uart::DW8250;
 use kspin::SpinNoIrq;
 use lazyinit::LazyInit;
-use crate::TinyResult;
-use crate::error::TinyError;
 use memory_addr::VirtAddr;
 
 static UART: LazyInit<SpinNoIrq<DW8250>> = LazyInit::new();

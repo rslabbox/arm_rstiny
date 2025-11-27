@@ -10,7 +10,7 @@ use super::manager;
 use super::task::TaskId;
 
 /// Spawns a new thread with a function pointer.
-/// 
+///
 /// For simplicity in kernel context, we use function pointers directly.
 pub fn spawn(f: fn()) -> TaskId {
     manager::spawn("thread", f)

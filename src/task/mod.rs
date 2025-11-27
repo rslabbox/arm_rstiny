@@ -23,13 +23,12 @@ use task::TaskInner;
 pub type Scheduler = FifoScheduler<TaskInner>;
 
 // Re-export commonly used types and functions
+pub use crate::hal::percpu::current_task;
 #[allow(unused)]
 pub use manager::{
-    exit_current as exit_current_task, init as init_taskmanager,
-    is_initialized, on_timer_tick as schedule, sleep, spawn as spawn_task,
-    start_scheduling, yield_now,
+    exit_current as exit_current_task, init as init_taskmanager, is_initialized,
+    on_timer_tick as schedule, sleep, spawn as spawn_task, start_scheduling, yield_now,
 };
-pub use crate::hal::percpu::{current_task};
 
 /// Spawns a new task with the given entry function.
 ///

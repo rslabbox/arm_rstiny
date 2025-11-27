@@ -3,9 +3,9 @@
 use core::fmt::{self, Display};
 use log::{Level, LevelFilter, Log, Metadata, Record};
 
-use crate::println;
 use crate::TinyResult;
 use crate::error::TinyError;
+use crate::println;
 
 pub struct SimpleLogger;
 

@@ -72,7 +72,7 @@ unsafe impl Sync for TaskInner {}
 
 impl TaskInner {
     /// Creates the ROOT (idle) task.
-    /// 
+    ///
     /// The ROOT task reuses the bootstrap stack and has no parent.
     pub fn new_root() -> Self {
         Self {
@@ -138,7 +138,7 @@ impl TaskInner {
     }
 
     /// Returns a mutable reference to the task context.
-    /// 
+    ///
     /// # Safety
     /// Caller must ensure exclusive access to the context.
     #[inline]
@@ -172,18 +172,18 @@ pub type SchedulableTask = FifoTask<TaskInner>;
 pub type TaskRef = Arc<SchedulableTask>;
 
 /// Task entry trampoline function.
-/// 
+///
 /// This function is the actual entry point for all tasks. It retrieves
 /// the task's entry function and calls it, then handles task exit.
 #[unsafe(no_mangle)]
 extern "C" fn task_entry_trampoline() {
     let task = super::current_task();
-    
+
     // Call the actual entry function
     if let Some(entry) = task.entry() {
         entry();
     }
-    
+
     // Task completed, exit
     super::exit_current_task();
 }

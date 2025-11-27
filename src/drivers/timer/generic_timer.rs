@@ -103,7 +103,7 @@ pub fn busy_wait(duration: core::time::Duration) {
     let start_ticks = current_ticks();
     let duration_nanos = duration.as_nanos() as u64;
     let wait_ticks = nanos_to_ticks(duration_nanos);
-    
+
     // Spin until the required time has elapsed
     while current_ticks() - start_ticks < wait_ticks {
         core::hint::spin_loop();

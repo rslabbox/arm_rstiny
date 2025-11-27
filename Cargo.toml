@@ -5,8 +5,7 @@ edition = "2024"
 
 [features]
 default = ["qemu"]
-pci = []
-net = ["pci"]
+net = []
 
 opi5p = ["net"]
 qemu = []

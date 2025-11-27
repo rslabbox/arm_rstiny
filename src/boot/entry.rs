@@ -126,7 +126,7 @@ unsafe extern "C" fn _start_primary() -> ! {
         boot_pt = sym super::init::BOOT_PT_L0,
         phys_virt_offset = const PHYS_VIRT_OFFSET,
         boot_stack_size = const crate::config::kernel::BOOT_STACK_SIZE,
-        rust_main = sym crate::rust_main,
+        rust_main = sym super::rust_main,
     )
 }
 
@@ -176,6 +176,6 @@ pub unsafe extern "C" fn _start_secondary() -> ! {
         boot_pt = sym super::init::BOOT_PT_L0,
         init_mmu = sym super::mmu::init_mmu,
         phys_virt_offset = const PHYS_VIRT_OFFSET,
-        rust_main_secondary = sym crate::rust_main_secondary,
+        rust_main_secondary = sym super::rust_main_secondary,
     )
 }

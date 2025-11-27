@@ -14,7 +14,6 @@ fn task1_periodic() {
         } else {
             thread::sleep(Duration::from_millis(50));
         }
-        
     }
     info!("[Task 1] Completed!");
 }
