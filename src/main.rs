@@ -30,11 +30,19 @@ extern crate log;
 extern crate alloc;
 extern crate axbacktrace;
 
+use core::sync::atomic::{AtomicUsize, Ordering};
+
 pub use error::{TinyError, TinyResult};
 use memory_addr::pa;
 
 use crate::mm::phys_to_virt;
 use drivers::timer;
+
+/// Number of secondary CPUs that have completed initialization.
+static CPUS_READY: AtomicUsize = AtomicUsize::new(0);
+
+/// Flag to signal secondary CPUs to start scheduling.
+static START_SCHEDULING: AtomicUsize = AtomicUsize::new(0);
 
 fn backtrace_init() {
     use core::ops::Range;
@@ -98,17 +106,77 @@ fn user_main() {
     info!("User main task completed");
 }
 
+/// Boot all secondary CPUs using PSCI.
+fn boot_secondary_cpus() {
+    use crate::config::kernel::MAX_CPUS;
+
+    let entry_paddr = boot::secondary_entry_paddr();
+
+    for cpu_id in 1..MAX_CPUS {
+        info!("Starting CPU {}...", cpu_id);
+        drivers::power::cpu_on(cpu_id, entry_paddr, cpu_id);
+    }
+
+    // Wait for all secondary CPUs to be ready
+    info!("Waiting for {} secondary CPUs...", MAX_CPUS - 1);
+    while CPUS_READY.load(Ordering::SeqCst) < MAX_CPUS - 1 {
+        core::hint::spin_loop();
+    }
+    info!("All {} CPUs online", MAX_CPUS);
+}
+
 #[unsafe(no_mangle)]
 pub fn rust_main(_cpu_id: usize, _arg: usize) -> ! {
     kernel_init();
 
     println!("\nHello RustTinyOS!\n");
 
+    // Boot secondary CPUs
+    boot_secondary_cpus();
+
     // Create main user task as child of ROOT
     task::spawn(user_main);
 
+    // Signal all CPUs to start scheduling
+    START_SCHEDULING.store(1, Ordering::SeqCst);
+
     // Start scheduler, transfer control to ROOT
     task::start_scheduling();
+}
+
+/// Secondary CPU entry point (called from assembly).
+///
+/// This function is called by each secondary CPU after basic hardware
+/// initialization (EL switch, FP enable, MMU setup).
+#[unsafe(no_mangle)]
+pub fn rust_main_secondary(cpu_id: usize) -> ! {
+    // Initialize per-CPU data
+    unsafe {
+        hal::percpu::init(cpu_id);
+    }
+
+    // Initialize GIC for this CPU
+    drivers::irq::init_secondary(cpu_id);
+
+    // Initialize timer for this CPU
+    drivers::timer::init_secondary();
+
+    println!("CPU {} online", cpu_id);
+
+    // Signal that this CPU is ready
+    CPUS_READY.fetch_add(1, Ordering::SeqCst);
+
+    // Wait for primary CPU to signal start
+    while START_SCHEDULING.load(Ordering::SeqCst) == 0 {
+        core::hint::spin_loop();
+    }
+
+    // Enter idle loop
+    // TODO: In the future, secondary CPUs will join the scheduler
+    info!("CPU {} entering idle loop", cpu_id);
+    loop {
+        aarch64_cpu::asm::wfi();
+    }
 }
 
 #[cfg(all(target_os = "none", not(test)))]

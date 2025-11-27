@@ -129,3 +129,53 @@ unsafe extern "C" fn _start_primary() -> ! {
         rust_main = sym crate::rust_main,
     )
 }
+
+/// Secondary CPU entry point.
+///
+/// Called by PSCI cpu_on with cpu_id in x0.
+/// Each secondary CPU has its own stack allocated in SECONDARY_STACKS.
+#[unsafe(naked)]
+#[unsafe(no_mangle)]
+#[unsafe(link_section = ".text.boot")]
+pub unsafe extern "C" fn _start_secondary() -> ! {
+    core::arch::naked_asm!("
+        // x0 = cpu_id (passed from PSCI cpu_on)
+        mov     x19, x0                     // save cpu_id
+
+        // Calculate stack address for this CPU
+        // stack_addr = SECONDARY_STACKS + (cpu_id - 1) * SECONDARY_STACK_SIZE + SECONDARY_STACK_SIZE
+        adrp    x8, {secondary_stacks}
+        add     x8, x8, :lo12:{secondary_stacks}
+        sub     x9, x19, #1                 // index = cpu_id - 1
+        mov     x10, {stack_size}
+        mul     x9, x9, x10
+        add     x8, x8, x9
+        add     x8, x8, x10                 // point to stack top
+        mov     sp, x8
+
+        bl      {switch_to_el1}             // switch to EL1
+        bl      {enable_fp}                 // enable fp/neon
+
+        // Secondary CPUs reuse the same page table set up by primary
+        adrp    x0, {boot_pt}
+        bl      {init_mmu}                  // setup MMU
+
+        // Switch to virtual address space
+        mov     x8, {phys_virt_offset}
+        add     sp, sp, x8
+
+        // Call rust_main_secondary(cpu_id)
+        mov     x0, x19
+        ldr     x8, ={rust_main_secondary}
+        blr     x8
+        b       .",
+        secondary_stacks = sym super::init::SECONDARY_STACKS,
+        stack_size = const crate::config::kernel::SECONDARY_STACK_SIZE,
+        switch_to_el1 = sym switch_to_el1,
+        enable_fp = sym enable_fp,
+        boot_pt = sym super::init::BOOT_PT_L0,
+        init_mmu = sym super::mmu::init_mmu,
+        phys_virt_offset = const PHYS_VIRT_OFFSET,
+        rust_main_secondary = sym crate::rust_main_secondary,
+    )
+}

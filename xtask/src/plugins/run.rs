@@ -7,6 +7,7 @@ struct RunConfig {
     memory: String,
     cpu: String,
     machine: String,
+    smp: String,
     disk_image: String,
     tcp_port: u16,
     udp_port: u16,
@@ -50,6 +51,7 @@ impl RunTask {
         let memory = &self.run_config.memory;
         let cpu = &self.run_config.cpu;
         let machine = &self.run_config.machine;
+        let smp = &self.run_config.smp;
         let disk_image = &self.run_config.disk_image;
         let tcp_port = self.run_config.tcp_port;
         let udp_port = self.run_config.udp_port;
@@ -57,6 +59,7 @@ impl RunTask {
         info!("    Memory: {}", memory);
         info!("    CPU: {}", cpu);
         info!("    Machine: {}", machine);
+        info!("    SMP: {}", smp);
         info!("    Disk Image: {}", disk_image);
         info!(
             "    Port Forward: tcp:{}->5555, udp:{}->5555",
@@ -83,7 +86,8 @@ impl RunTask {
             "qemu-system-aarch64 
                 -m {memory} 
                 -cpu {cpu} 
-                -machine {machine} 
+                -machine {machine}
+                -smp {smp}
                 -kernel {bin_path} 
                 -device virtio-blk-device,drive=disk0 
                 -drive id=disk0,if=none,format=raw,file={disk_image} 

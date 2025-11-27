@@ -73,3 +73,13 @@ pub fn init_early() {
     // Timer interrupt ID on ARM GIC
     enable_irqs(IntId::ppi(14));
 }
+
+/// Initialize timer for secondary CPU.
+///
+/// Timer interrupt is a PPI (Private Peripheral Interrupt), so each CPU
+/// needs to enable it independently.
+pub fn init_secondary() {
+    // Enable timer interrupt on this CPU
+    // Note: The timer IRQ handler is already registered by primary CPU
+    enable_irqs(IntId::ppi(14));
+}

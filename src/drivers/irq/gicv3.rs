@@ -134,3 +134,17 @@ pub fn init(gicd_virt: VirtAddr, gicr_virt: VirtAddr) -> TinyResult<()> {
 
     Ok(())
 }
+
+/// Initialize GIC for secondary CPU.
+///
+/// Each secondary CPU needs to configure its own CPU interface.
+/// The distributor is already initialized by the primary CPU.
+pub fn init_secondary(cpu_id: usize) {
+    // Set priority mask to allow all priorities
+    GicCpuInterface::set_priority_mask(0xff);
+
+    // Enable interrupts on this CPU
+    arm_gic::irq_enable();
+
+    debug!("GIC initialized for CPU {}", cpu_id);
+}
