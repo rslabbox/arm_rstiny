@@ -22,6 +22,7 @@ static CPUS_READY: AtomicUsize = AtomicUsize::new(0);
 /// Flag to signal secondary CPUs to start scheduling.
 static START_SCHEDULING: AtomicUsize = AtomicUsize::new(0);
 
+/// Initialize backtrace support.
 fn backtrace_init() {
     use core::ops::Range;
 
@@ -43,6 +44,7 @@ fn backtrace_init() {
     axbacktrace::init(ip_range, fp_range);
 }
 
+/// Initialize the kernel subsystems.
 fn kernel_init() {
     crate::hal::clear_bss();
     crate::hal::init_exception();
@@ -100,7 +102,7 @@ fn boot_secondary_cpus() {
     info!("All {} CPUs online", MAX_CPUS);
 }
 
-#[unsafe(no_mangle)]
+/// Rust main entry point (called from assembly).
 pub fn rust_main(_cpu_id: usize, _arg: usize) -> ! {
     kernel_init();
 
@@ -123,7 +125,6 @@ pub fn rust_main(_cpu_id: usize, _arg: usize) -> ! {
 ///
 /// This function is called by each secondary CPU after basic hardware
 /// initialization (EL switch, FP enable, MMU setup).
-#[unsafe(no_mangle)]
 pub fn rust_main_secondary(cpu_id: usize) -> ! {
     // Initialize per-CPU data
     unsafe {
