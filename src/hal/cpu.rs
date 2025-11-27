@@ -59,7 +59,10 @@ pub fn clear_bss() {
     }
 
     unsafe {
-        core::slice::from_raw_parts_mut(_sbss as usize as *mut u8, _ebss as usize - _sbss as usize)
-            .fill(0);
+        core::slice::from_raw_parts_mut(
+            _sbss as *const () as usize as *mut u8,
+            _ebss as *const () as usize - _sbss as *const () as usize,
+        )
+        .fill(0);
     }
 }

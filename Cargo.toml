@@ -31,7 +31,8 @@ arm_pl011 = "0.1"
 
 tock-registers = "0.10.1"
 
-axbacktrace = { version = "0.1.0", features = ["alloc", "dwarf"] }
+# axwatchdog ={ path = "crates/axwatchdog" }
+axbacktrace = { version = "0.1", features = ["alloc", "dwarf"] }
 
 intrusive-collections = { version = "0.9.7", features = ["nightly"] }
 

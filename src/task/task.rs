@@ -96,7 +96,7 @@ impl TaskInner {
         let mut context = TaskContext::new();
         // Initialize context with entry point and stack
         context.init(
-            task_entry_trampoline as usize,
+            task_entry_trampoline as *const () as usize,
             memory_addr::VirtAddr::from(kstack_top),
             memory_addr::VirtAddr::from(0usize), // No TLS for now
         );

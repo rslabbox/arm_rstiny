@@ -107,5 +107,5 @@ pub fn init_exception() {
         fn exception_vector_base();
     }
 
-    VBAR_EL1.set(exception_vector_base as _);
+    VBAR_EL1.set(exception_vector_base as *const () as _);
 }

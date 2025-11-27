@@ -17,5 +17,5 @@ use crate::config::kernel::PHYS_VIRT_OFFSET;
 /// This is used by the primary CPU to start secondary CPUs via PSCI cpu_on.
 pub fn secondary_entry_paddr() -> usize {
     // The entry point virtual address minus the offset gives the physical address
-    entry::_start_secondary as usize - PHYS_VIRT_OFFSET
+    entry::_start_secondary as *const () as usize - PHYS_VIRT_OFFSET
 }
