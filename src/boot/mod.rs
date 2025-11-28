@@ -16,6 +16,8 @@ use memory_addr::pa;
 
 use crate::{config::kernel::PHYS_VIRT_OFFSET, hal::percpu, mm::phys_to_virt, println};
 
+use crate::config::kernel::TINYENV_SMP;
+
 /// Number of secondary CPUs that have completed initialization.
 static CPUS_READY: AtomicUsize = AtomicUsize::new(0);
 
@@ -46,6 +48,7 @@ fn backtrace_init() {
 
 /// Initialize the kernel subsystems.
 fn kernel_init() {
+    // Clear BSS, initialize exceptions, early UART
     crate::hal::clear_bss();
     crate::hal::init_exception();
     crate::drivers::uart::init_early(phys_to_virt(pa!(crate::config::UART_PADDR)));
@@ -87,8 +90,6 @@ pub fn secondary_entry_paddr() -> usize {
 
 /// Boot all secondary CPUs using PSCI.
 fn boot_secondary_cpus() {
-    use crate::config::kernel::TINYENV_SMP;
-
     let entry_paddr = crate::boot::secondary_entry_paddr();
 
     for cpu_id in 1..TINYENV_SMP {
@@ -106,6 +107,7 @@ fn boot_secondary_cpus() {
 
 /// Rust main entry point (called from assembly).
 pub fn rust_main(_cpu_id: usize, _arg: usize) -> ! {
+    // Initialize kernel subsystems
     kernel_init();
 
     println!("\nHello RustTinyOS!\n");
@@ -130,15 +132,18 @@ pub fn rust_main(_cpu_id: usize, _arg: usize) -> ! {
 pub fn rust_main_secondary(cpu_id: usize) -> ! {
     // Initialize percpu for this CPU
     percpu::init(cpu_id);
+    crate::hal::init_exception();
 
+    // Initialize task scheduler for this CPU (creates idle task, sets up percpu)
+    crate::task::init_taskmanager_secondary(cpu_id);
+    
     // Initialize GIC for this CPU
     crate::drivers::irq::init_secondary(cpu_id);
 
     // Initialize timer for this CPU
     crate::drivers::timer::init_secondary();
 
-    // Initialize task scheduler for this CPU (creates idle task, sets up percpu)
-    crate::task::init_taskmanager_secondary(cpu_id);
+
 
     info!("CPU {} online", cpu_id);
 

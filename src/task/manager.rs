@@ -300,7 +300,7 @@ fn idle_loop() -> ! {
             }
         }
 
-        info!("CPU {} idle, waiting for interrupt", percpu::cpu_id());
+        // info!("CPU {} idle, waiting for interrupt", percpu::cpu_id());
         // No task available, wait for interrupt
         aarch64_cpu::asm::wfi();
     }

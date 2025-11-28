@@ -41,7 +41,7 @@ fn invalid_exception(tf: &TrapFrame, kind: TrapKind, source: TrapSource) {
 
 #[unsafe(no_mangle)]
 fn handle_irq_exception(_tf: &mut TrapFrame) {
-    trace!("handle_irq_exception");
+    // debug!("handle_irq_exception");
     crate::drivers::irq::gicv3::irq_handler();
 
     // After handling interrupt, check if we need to schedule

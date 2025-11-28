@@ -30,6 +30,8 @@ pub use error::{TinyError, TinyResult};
 
 /// User main task entry point.
 fn main() {
+    info!("Main running on CPU {}", crate::hal::percpu::cpu_id());
+
     // Run tests in main task
     tests::rstiny_tests();
 

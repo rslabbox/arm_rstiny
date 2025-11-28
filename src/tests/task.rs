@@ -22,7 +22,7 @@ fn task1_periodic() {
 fn task2_periodic() {
     let id = thread::current_id();
     for i in 0..10 {
-        info!("[Task {id}] Iteration {}/10", i + 1);
+        info!("[Task {id}] Iteration {}/10, CPU {}", i + 1, percpu::cpu_id());
         thread::sleep(Duration::from_millis(100));
     }
     info!("[Task {id}] Completed!");

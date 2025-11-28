@@ -56,7 +56,7 @@ pub fn irqset_register(intid: IntId, handler: IrqHandler) {
     let mut handler_table = IRQ_HANDLER_TABLE.lock();
     let intid_val = u32::from(intid) as usize;
     handler_table[intid_val] = Some(handler);
-    debug!("IRQ registered: {:?}", intid);
+    debug!("IRQ registered: {:?} on CPU {}", intid, percpu::cpu_id());
 }
 
 /// Unregister the interrupt handler for the given interrupt ID.
@@ -144,13 +144,15 @@ pub fn init(gicd_virt: VirtAddr, gicr_virt: VirtAddr) -> TinyResult<()> {
 /// The distributor is already initialized by the primary CPU.
 pub fn init_secondary(cpu_id: usize) {
     // Setup GIC CPU interface for this CPU
-    // let mut gic = GIC.lock();
-    // if let Some(ref mut gic) = *gic {
-    //     gic.setup(cpu_id);
-    // } else {
-    //     warn!("GIC not initialized, cannot setup CPU interface for CPU {}", cpu_id);
-    //     return;
-    // }
+    let mut gic = GIC.lock();
+    
+    if let Some(ref mut gic) = *gic {
+        gic.setup(cpu_id);
+    } else {
+        warn!("GIC not initialized, cannot setup CPU interface for CPU {}", cpu_id);
+        return;
+    }
+
     // Set priority mask to allow all priorities
     GicCpuInterface::set_priority_mask(0xff);
 
