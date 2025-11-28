@@ -5,25 +5,16 @@ use core::time::Duration;
 use crate::{hal::percpu, task::thread};
 
 /// Task 1: Print every 500ms, 10 times
-fn task1_periodic() {
+fn task1_periodic(interval: u64) {
     let id = thread::current_id();
     for i in 0..10 {
-        info!("[Task {id}] Iteration {}/10, CPU {}", i + 1, percpu::cpu_id());
-        if i > 5 {
-            thread::yield_now();
-        } else {
-            thread::sleep(Duration::from_millis(50));
-        }
-    }
-    info!("[Task 1] Completed!");
-}
+        info!(
+            "[Task {id}] Iteration {}/10, CPU {}",
+            i + 1,
+            percpu::cpu_id()
+        );
 
-/// Task 2: Print every 1000ms, 10 times  
-fn task2_periodic() {
-    let id = thread::current_id();
-    for i in 0..10 {
-        info!("[Task {id}] Iteration {}/10, CPU {}", i + 1, percpu::cpu_id());
-        thread::sleep(Duration::from_millis(100));
+        thread::sleep(Duration::from_millis(interval));
     }
     info!("[Task {id}] Completed!");
 }
@@ -33,12 +24,16 @@ fn test_periodic_tasks() {
     info!("=== Test: Periodic Tasks ===");
 
     // Spawn task 1
-    let task1 = thread::spawn(task1_periodic);
+    let task1 = thread::spawn(|| task1_periodic(500));
 
     // Spawn task 2
-    let task2 = thread::spawn(task2_periodic);
+    let task2 = thread::spawn(|| task1_periodic(1000));
 
-    info!("Waiting for tasks {} and {} to complete...", task1.id(), task2.id());
+    info!(
+        "Waiting for tasks {} and {} to complete...",
+        task1.id(),
+        task2.id()
+    );
 
     task1.join().unwrap();
     task2.join().unwrap();
