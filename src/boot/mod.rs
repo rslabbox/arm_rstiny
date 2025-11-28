@@ -87,21 +87,21 @@ pub fn secondary_entry_paddr() -> usize {
 
 /// Boot all secondary CPUs using PSCI.
 fn boot_secondary_cpus() {
-    use crate::config::kernel::MAX_CPUS;
+    use crate::config::kernel::TINYENV_SMP;
 
     let entry_paddr = crate::boot::secondary_entry_paddr();
 
-    for cpu_id in 1..MAX_CPUS {
+    for cpu_id in 1..TINYENV_SMP {
         info!("Starting CPU {}...", cpu_id);
         crate::drivers::power::cpu_on(cpu_id, entry_paddr, cpu_id);
     }
 
     // Wait for all secondary CPUs to be ready
-    info!("Waiting for {} secondary CPUs...", MAX_CPUS - 1);
-    while CPUS_READY.load(Ordering::SeqCst) < MAX_CPUS - 1 {
+    info!("Waiting for {} secondary CPUs...", TINYENV_SMP - 1);
+    while CPUS_READY.load(Ordering::SeqCst) < TINYENV_SMP - 1 {
         core::hint::spin_loop();
     }
-    info!("All {} CPUs online", MAX_CPUS);
+    info!("All {} CPUs online", TINYENV_SMP);
 }
 
 /// Rust main entry point (called from assembly).

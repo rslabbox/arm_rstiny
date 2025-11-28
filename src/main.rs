@@ -30,9 +30,6 @@ pub use error::{TinyError, TinyResult};
 
 /// User main task entry point.
 fn main() {
-
-    info!("MAIN SMP: {}", crate::config::kernel::TINYENV_SMP);
-
     // Run tests in main task
     tests::rstiny_tests();
 

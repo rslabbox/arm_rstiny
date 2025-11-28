@@ -124,7 +124,7 @@ pub fn init(gicd_virt: VirtAddr, gicr_virt: VirtAddr) -> TinyResult<()> {
     let gicr = NonNull::new(gicr_base_address).ok_or(TinyError::InvalidGicPointer)?;
 
     // Initialise the GIC.
-    let mut gic = unsafe { GicV3::new(gicd, gicr, crate::config::kernel::MAX_CPUS, false) };
+    let mut gic = unsafe { GicV3::new(gicd, gicr, crate::config::kernel::TINYENV_SMP, false) };
     gic.setup(0);
 
     // Store the GIC instance globally for later use
@@ -143,6 +143,14 @@ pub fn init(gicd_virt: VirtAddr, gicr_virt: VirtAddr) -> TinyResult<()> {
 /// Each secondary CPU needs to configure its own CPU interface.
 /// The distributor is already initialized by the primary CPU.
 pub fn init_secondary(cpu_id: usize) {
+    // Setup GIC CPU interface for this CPU
+    // let mut gic = GIC.lock();
+    // if let Some(ref mut gic) = *gic {
+    //     gic.setup(cpu_id);
+    // } else {
+    //     warn!("GIC not initialized, cannot setup CPU interface for CPU {}", cpu_id);
+    //     return;
+    // }
     // Set priority mask to allow all priorities
     GicCpuInterface::set_priority_mask(0xff);
 

@@ -5,12 +5,16 @@ use arm_gic::{
     gicv3::{GicCpuInterface, SgiTarget, SgiTargetGroup},
 };
 
-use crate::drivers::{irq::{irqset_enable, irqset_register}, timer::busy_wait};
+use crate::{drivers::{irq::{irqset_enable, irqset_register}, timer::busy_wait}, hal::percpu};
 
 static IS_INTERRUPT: AtomicBool = AtomicBool::new(false);
 
 pub fn gicv3_tests() {
     warn!("\n=== GICv3 tests ===");
+
+
+    let cpu_id = percpu::cpu_id();
+    info!("Running On CPU ID: {}", cpu_id);
 
     let sgi_intid = IntId::sgi(3);
     irqset_register(sgi_intid, |irq| {
@@ -24,7 +28,7 @@ pub fn gicv3_tests() {
             affinity3: 0,
             affinity2: 0,
             affinity1: 0,
-            target_list: 0b1,
+            target_list: 1 << cpu_id,
         },
         SgiTargetGroup::CurrentGroup1,
     )

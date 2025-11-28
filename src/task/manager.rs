@@ -12,7 +12,7 @@ use core::time::Duration;
 
 use kspin::SpinRaw;
 
-use crate::config::kernel::MAX_CPUS;
+use crate::config::kernel::TINYENV_SMP;
 use crate::drivers::timer::current_nanoseconds;
 use crate::hal::percpu;
 use crate::task::task;
@@ -329,7 +329,7 @@ pub fn init() {
 /// This function must be called by each secondary CPU before entering the scheduler.
 /// It creates the idle task for this CPU and sets up percpu data.
 pub fn init_secondary(cpu_id: usize) {
-    assert!(cpu_id > 0 && cpu_id < MAX_CPUS, "Invalid secondary CPU ID");
+    assert!(cpu_id > 0 && cpu_id < TINYENV_SMP, "Invalid secondary CPU ID");
 
     // Set as current task and idle task for this CPU
     percpu::set_current_task(&IDLE_TASK);

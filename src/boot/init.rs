@@ -3,7 +3,7 @@
 use memory_addr::pa;
 use page_table_entry::{GenericPTE, MappingFlags, aarch64::A64PTE};
 
-use crate::config::kernel::{BOOT_STACK_SIZE, MAX_CPUS, SECONDARY_STACK_SIZE};
+use crate::config::kernel::{BOOT_STACK_SIZE, TINYENV_SMP, SECONDARY_STACK_SIZE};
 use crate::mm::Aligned4K;
 
 #[unsafe(link_section = ".bss.stack")]
@@ -11,8 +11,8 @@ pub static mut BOOT_STACK: [u8; BOOT_STACK_SIZE] = [0; BOOT_STACK_SIZE];
 
 /// Secondary CPU boot stacks (one for each secondary CPU).
 #[unsafe(link_section = ".bss.stack")]
-pub static mut SECONDARY_STACKS: [[u8; SECONDARY_STACK_SIZE]; MAX_CPUS - 1] =
-    [[0; SECONDARY_STACK_SIZE]; MAX_CPUS - 1];
+pub static mut SECONDARY_STACKS: [[u8; SECONDARY_STACK_SIZE]; TINYENV_SMP - 1] =
+    [[0; SECONDARY_STACK_SIZE]; TINYENV_SMP - 1];
 
 #[unsafe(link_section = ".data")]
 pub static mut BOOT_PT_L0: Aligned4K<[A64PTE; 512]> = Aligned4K::new([A64PTE::empty(); 512]);

@@ -8,7 +8,7 @@ use alloc::sync::Arc;
 
 use super::cpu::{set_thread_pointer, thread_pointer};
 
-use crate::config::kernel::MAX_CPUS;
+use crate::config::kernel::TINYENV_SMP;
 use crate::task::task::{SchedulableTask, TaskRef};
 
 /// Per-CPU data structure.
@@ -28,12 +28,12 @@ unsafe impl Send for PerCpu {}
 unsafe impl Sync for PerCpu {}
 
 /// Static storage for per-CPU areas (one for each CPU).
-static mut PERCPU_AREAS: [PerCpu; MAX_CPUS] = [const {
+static mut PERCPU_AREAS: [PerCpu; TINYENV_SMP] = [const {
     PerCpu {
         current_task: core::ptr::null(),
         cpu_id: 0,
     }
-}; MAX_CPUS];
+}; TINYENV_SMP];
 
 impl PerCpu {
     /// Returns the current task pointer.
@@ -63,7 +63,7 @@ impl PerCpu {
 ///
 /// This function must only be called once per CPU during initialization.
 pub fn init(cpu_id: usize) {
-    assert!(cpu_id < MAX_CPUS, "CPU ID {} out of range", cpu_id);
+    assert!(cpu_id < TINYENV_SMP, "CPU ID {} out of range", cpu_id);
     unsafe {
         let percpu = &raw mut PERCPU_AREAS[cpu_id];
         (*percpu).cpu_id = cpu_id;

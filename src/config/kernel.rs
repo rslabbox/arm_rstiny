@@ -8,7 +8,6 @@ pub const HEAP_ALLOCATOR_SIZE: usize = 0x1000000; // 16MB
 pub const TICKS_PER_SEC: usize = 1000; // 1000 ticks per second (1ms per tick)
 
 // Multi-core configuration
-pub const MAX_CPUS: usize = 8;
 pub const SECONDARY_STACK_SIZE: usize = 0x10000; // 64KB per secondary CPU
 
 // Task scheduling configuration
@@ -19,6 +18,8 @@ pub const TIMER_IRQ: IntId = IntId::ppi(14);
 
 #[env_item]
 pub const TINYENV_SMP: usize = 1;
+
+const _: () = assert!(TINYENV_SMP < 16, "TINYENV_SMP must be less than 16");
 
 #[env_item]
 pub const TINYENV_LOG: &str = "warn";

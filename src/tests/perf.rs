@@ -7,7 +7,7 @@ use alloc::vec::Vec;
 use core::sync::atomic::{AtomicUsize, Ordering};
 use core::time::Duration;
 
-use crate::config::kernel::MAX_CPUS;
+use crate::config::kernel::TINYENV_SMP;
 use crate::drivers::timer::busy_wait;
 use crate::hal::percpu;
 use crate::task::thread;
@@ -45,7 +45,7 @@ fn cpu_diagnostic_worker() {
 /// Test to diagnose multi-core scheduling
 pub fn test_multicore_scheduling() {
     warn!("\n========== Multi-core Scheduling Diagnostic ==========");
-    info!("MAX_CPUS = {}", MAX_CPUS);
+    info!("TINYENV_SMP = {}", TINYENV_SMP);
     info!("Current task running on CPU {}", percpu::cpu_id());
 
     // Reset counters
@@ -53,8 +53,8 @@ pub fn test_multicore_scheduling() {
         CPU_RUN_COUNT[i].store(0, Ordering::Relaxed);
     }
 
-    // Spawn 2x MAX_CPUS workers
-    let num_workers = MAX_CPUS * 2;
+    // Spawn 2x TINYENV_SMP workers
+    let num_workers = TINYENV_SMP * 2;
     info!("Spawning {} worker tasks...", num_workers);
 
     let mut handles = Vec::new();
@@ -71,7 +71,7 @@ pub fn test_multicore_scheduling() {
 
     // Report which CPUs ran tasks
     warn!("\n=== CPU Usage Summary ===");
-    for cpu in 0..MAX_CPUS {
+    for cpu in 0..TINYENV_SMP {
         let count = CPU_RUN_COUNT[cpu].load(Ordering::Relaxed);
         info!("CPU {}: {} tasks ran", cpu, count);
     }
