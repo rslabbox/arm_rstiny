@@ -122,10 +122,11 @@ impl TaskManager {
     /// Unblocks a sleeping task by adding it back to the scheduler.
     ///
     /// Returns true if the task was successfully unblocked.
+    /// Uses atomic CAS to ensure only one CPU can unblock the task.
     pub fn unblock_task(&mut self, task: TaskRef) -> bool {
-        if task.state() == TaskState::Sleeping {
+        // Atomically transition Sleeping -> Ready; only one CPU can succeed
+        if task.try_set_state(TaskState::Sleeping, TaskState::Ready) {
             trace!("Unblocking task {} ({})", task.id(), task.name());
-            task.set_state(TaskState::Ready);
             self.scheduler.add_task(task);
             true
         } else {
@@ -288,7 +289,20 @@ impl TaskManager {
 /// Idle loop for ROOT task when no other tasks are ready.
 fn idle_loop() -> ! {
     loop {
-        // Wait for interrupt
+        // Try to pick a task from the ready queue
+        if let Some(manager) = TASK_MANAGER.lock().as_mut() {
+            if let Some(next_task) = manager.scheduler.pick_next_task() {
+                // Found a task, switch to it
+                let idle = percpu::idle_task();
+                idle.set_state(TaskState::Ready);
+                next_task.set_state(TaskState::Running);
+                percpu::set_current_task(&next_task);
+                unsafe {
+                    (*idle.context_mut()).switch_to(next_task.context());
+                }
+            }
+        }
+        // No task available, wait for interrupt
         aarch64_cpu::asm::wfi();
     }
 }

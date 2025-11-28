@@ -2,13 +2,13 @@
 
 use core::time::Duration;
 
-use crate::task::thread;
+use crate::{hal::percpu, task::thread};
 
 /// Task 1: Print every 500ms, 10 times
 fn task1_periodic() {
     let id = thread::current_id();
     for i in 0..10 {
-        info!("[Task {id}] Iteration {}/10", i + 1);
+        info!("[Task {id}] Iteration {}/10, CPU {}", i + 1, percpu::cpu_id());
         if i > 5 {
             thread::yield_now();
         } else {

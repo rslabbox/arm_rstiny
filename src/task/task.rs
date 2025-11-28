@@ -151,6 +151,22 @@ impl TaskInner {
         self.state.store(state as u8, Ordering::Release);
     }
 
+    /// Atomically transition from `expected` state to `new` state.
+    ///
+    /// Returns `true` if the transition succeeded (i.e., the previous state was
+    /// `expected`), or `false` if the state was something else.
+    #[inline]
+    pub fn try_set_state(&self, expected: TaskState, new: TaskState) -> bool {
+        self.state
+            .compare_exchange(
+                expected as u8,
+                new as u8,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_ok()
+    }
+
     /// Returns a mutable reference to the task context.
     ///
     /// # Safety

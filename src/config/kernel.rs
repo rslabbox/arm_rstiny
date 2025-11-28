@@ -6,7 +6,7 @@ pub const HEAP_ALLOCATOR_SIZE: usize = 0x1000000; // 16MB
 pub const TICKS_PER_SEC: usize = 1000; // 1000 ticks per second (1ms per tick)
 
 // Multi-core configuration
-pub const MAX_CPUS: usize = 4;
+pub const MAX_CPUS: usize = 8;
 pub const SECONDARY_STACK_SIZE: usize = 0x10000; // 64KB per secondary CPU
 
 // Task scheduling configuration
