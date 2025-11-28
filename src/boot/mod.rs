@@ -126,16 +126,14 @@ pub fn rust_main(_cpu_id: usize, _arg: usize) -> ! {
 /// This function is called by each secondary CPU after basic hardware
 /// initialization (EL switch, FP enable, MMU setup).
 pub fn rust_main_secondary(cpu_id: usize) -> ! {
-    // Initialize per-CPU data
-    unsafe {
-        crate::hal::percpu::init(cpu_id);
-    }
-
     // Initialize GIC for this CPU
     crate::drivers::irq::init_secondary(cpu_id);
 
     // Initialize timer for this CPU
     crate::drivers::timer::init_secondary();
+
+    // Initialize task scheduler for this CPU (creates idle task, sets up percpu)
+    crate::task::init_taskmanager_secondary(cpu_id);
 
     info!("CPU {} online", cpu_id);
 
@@ -147,12 +145,9 @@ pub fn rust_main_secondary(cpu_id: usize) -> ! {
         core::hint::spin_loop();
     }
 
-    // Enter idle loop
-    // TODO: In the future, secondary CPUs will join the scheduler
-    info!("CPU {} entering idle loop", cpu_id);
-    loop {
-        aarch64_cpu::asm::wfi();
-    }
+    // Join the scheduler - secondary CPUs participate in task scheduling
+    info!("CPU {} joining scheduler", cpu_id);
+    crate::task::start_scheduling();
 }
 
 #[cfg(all(target_os = "none", not(test)))]

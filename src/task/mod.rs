@@ -4,11 +4,12 @@
 //! - Task creation and management
 //! - Cooperative and preemptive scheduling
 //! - Sleep and yield operations
+//! - Multi-core support with shared scheduler
 //!
 //! # Task Hierarchy
 //!
-//! - ROOT (ID=0): The idle task, created at initialization. Uses the bootstrap stack.
-//! - user_main (ID=1): The main user task, child of ROOT.
+//! - idle_N (ID=N): The idle task for CPU N, created at initialization.
+//! - user_main: The main user task, child of idle_0.
 //! - Other tasks: Created via `spawn()`, become children of the creating task.
 
 pub mod manager;
@@ -26,8 +27,9 @@ pub type Scheduler = FifoScheduler<TaskInner>;
 pub use crate::hal::percpu::current_task;
 #[allow(unused)]
 pub use manager::{
-    exit_current as exit_current_task, init as init_taskmanager, is_initialized,
-    on_timer_tick as schedule, sleep, spawn as spawn_task, start_scheduling, yield_now,
+    exit_current as exit_current_task, init as init_taskmanager,
+    init_secondary as init_taskmanager_secondary, is_initialized, on_timer_tick as schedule, sleep,
+    spawn as spawn_task, start_scheduling, yield_now,
 };
 
 /// Spawns a new task with the given entry function.

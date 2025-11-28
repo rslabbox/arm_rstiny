@@ -4,12 +4,15 @@
 //! - Unified block/unblock mechanism
 //! - Single scheduling entry point (resched)
 //! - Timer-based sleep using block_current + unblock_task
+//! - Multi-core support with shared scheduler
 
 use alloc::sync::Arc;
+use core::sync::atomic::{AtomicUsize, Ordering};
 use core::time::Duration;
 
 use kspin::SpinRaw;
 
+use crate::config::kernel::MAX_CPUS;
 use crate::drivers::timer::current_nanoseconds;
 use crate::hal::percpu;
 
@@ -21,14 +24,16 @@ use super::task::{TaskId, TaskInner, TaskRef, TaskState};
 /// Global task manager instance.
 static TASK_MANAGER: SpinRaw<Option<TaskManager>> = SpinRaw::new(None);
 
+/// Global active task count (excluding idle tasks).
+/// Uses atomic for safe multi-core access.
+static ACTIVE_TASK_COUNT: AtomicUsize = AtomicUsize::new(0);
+
 /// Task manager that handles all task scheduling operations.
 pub struct TaskManager {
     /// Scheduler for ready tasks.
     scheduler: Scheduler,
     /// Next available task ID.
     next_id: TaskId,
-    /// Number of active tasks (excluding ROOT/idle).
-    active_task_count: usize,
 }
 
 impl TaskManager {
@@ -41,8 +46,7 @@ impl TaskManager {
 
         Self {
             scheduler,
-            next_id: 1, // Start from 1, ROOT is 0
-            active_task_count: 0,
+            next_id: MAX_CPUS, // Start from MAX_CPUS, 0..MAX_CPUS reserved for idle tasks
         }
     }
 
@@ -187,10 +191,10 @@ impl TaskManager {
             self.unblock_task(waiter);
         }
 
-        // Decrement active task count
-        self.active_task_count -= 1;
+        // Decrement active task count atomically
+        let remaining = ACTIVE_TASK_COUNT.fetch_sub(1, Ordering::SeqCst) - 1;
 
-        if self.active_task_count <= 0 {
+        if remaining == 0 {
             info!("All tasks exited, shutting down...");
             crate::drivers::power::system_off();
         }
@@ -250,8 +254,8 @@ impl TaskManager {
         let task_inner = TaskInner::new(id, name, parent_id, entry);
         let task = Arc::new(FifoTask::new(task_inner));
 
-        // Increment active task count
-        self.active_task_count += 1;
+        // Increment active task count atomically
+        ACTIVE_TASK_COUNT.fetch_add(1, Ordering::SeqCst);
 
         info!("Task {} ({}) spawned, parent: {}", id, name, parent_id);
 
@@ -293,7 +297,7 @@ fn idle_loop() -> ! {
 // Public API functions
 // ============================================================================
 
-/// Initializes the task manager.
+/// Initializes the task manager (called by CPU 0).
 pub fn init() {
     info!("Initializing task manager...");
 
@@ -302,19 +306,42 @@ pub fn init() {
         percpu::init(0);
     }
 
-    // Create ROOT (idle) task
-    let root_inner = TaskInner::new_root();
-    let root_task = Arc::new(FifoTask::new(root_inner));
+    // Create idle task for CPU 0
+    let idle_inner = TaskInner::new_idle(0);
+    let idle_task = Arc::new(FifoTask::new(idle_inner));
 
-    // Set ROOT as current task and idle task via percpu
-    percpu::set_current_task(&root_task);
-    percpu::set_idle_task(&root_task);
+    // Set idle_0 as current task and idle task via percpu
+    percpu::set_current_task(&idle_task);
+    percpu::set_idle_task(&idle_task);
 
     // Create task manager
     let manager = TaskManager::new();
     *TASK_MANAGER.lock() = Some(manager);
 
-    info!("Task manager initialized");
+    info!("Task manager initialized on CPU 0");
+}
+
+/// Initializes task scheduling for a secondary CPU.
+///
+/// This function must be called by each secondary CPU before entering the scheduler.
+/// It creates the idle task for this CPU and sets up percpu data.
+pub fn init_secondary(cpu_id: usize) {
+    assert!(cpu_id > 0 && cpu_id < MAX_CPUS, "Invalid secondary CPU ID");
+
+    // Initialize percpu for this CPU
+    unsafe {
+        percpu::init(cpu_id);
+    }
+
+    // Create idle task for this CPU
+    let idle_inner = TaskInner::new_idle(cpu_id);
+    let idle_task = Arc::new(FifoTask::new(idle_inner));
+
+    // Set as current task and idle task for this CPU
+    percpu::set_current_task(&idle_task);
+    percpu::set_idle_task(&idle_task);
+
+    info!("Task scheduler initialized on CPU {}", cpu_id);
 }
 
 /// Returns whether the task manager is initialized.

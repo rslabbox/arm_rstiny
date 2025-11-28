@@ -90,6 +90,8 @@ pub fn current_cpu() -> &'static PerCpu {
     unsafe { &*ptr }
 }
 
+
+
 /// Returns a mutable reference to the current CPU's PerCpu structure.
 ///
 /// # Safety
@@ -187,4 +189,10 @@ pub fn idle_task() -> TaskRef {
     // Don't decrement the original reference count
     core::mem::forget(arc);
     cloned
+}
+
+/// Returns the current CPU ID.
+#[inline]
+pub fn cpu_id() -> usize {
+    current_cpu().cpu_id
 }

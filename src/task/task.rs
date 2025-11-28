@@ -19,9 +19,6 @@ type WaiterRef = Arc<FifoTask<TaskInner>>;
 /// Task identifier type.
 pub type TaskId = usize;
 
-/// Root task ID (idle task).
-pub const ROOT_ID: TaskId = 0;
-
 /// Task state enumeration.
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -76,18 +73,28 @@ unsafe impl Send for TaskInner {}
 unsafe impl Sync for TaskInner {}
 
 impl TaskInner {
-    /// Creates the ROOT (idle) task.
+    /// Creates an idle task for the specified CPU.
     ///
-    /// The ROOT task reuses the bootstrap stack and has no parent.
-    pub fn new_root() -> Self {
+    /// The idle task reuses the bootstrap/secondary stack and has no parent.
+    /// Each CPU has its own idle task with ID equal to cpu_id.
+    pub fn new_idle(cpu_id: usize) -> Self {
+        // Generate idle task name based on CPU ID
+        let name: &'static str = match cpu_id {
+            0 => "idle_0",
+            1 => "idle_1",
+            2 => "idle_2",
+            3 => "idle_3",
+            _ => "idle_x",
+        };
+
         Self {
-            id: ROOT_ID,
-            name: "ROOT",
+            id: cpu_id, // idle task ID = CPU ID
+            name,
             state: AtomicU8::new(TaskState::Running as u8),
-            parent_id: ROOT_ID, // ROOT is its own parent
+            parent_id: cpu_id, // idle task is its own parent
             children: SpinNoIrq::new(Vec::new()),
             context: UnsafeCell::new(TaskContext::new()),
-            kstack: None, // Reuse bootstrap stack
+            kstack: None, // Reuse bootstrap/secondary stack
             entry: None,
             waiters: SpinNoIrq::new(Vec::new()),
         }
@@ -165,10 +172,12 @@ impl TaskInner {
         self.entry
     }
 
-    /// Checks if this is the idle task (alias for is_root).
+    /// Checks if this is an idle task.
+    ///
+    /// Idle tasks have IDs in the range 0..MAX_CPUS (one per CPU).
     #[inline]
     pub fn is_idle(&self) -> bool {
-        self.id == ROOT_ID
+        self.id < crate::config::kernel::MAX_CPUS
     }
 
     /// Adds a task to the waiters list (tasks waiting for this task to exit).
