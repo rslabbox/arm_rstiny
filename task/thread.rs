@@ -1,21 +1,28 @@
+//! User-friendly thread API.
+//!
+//! This module provides a familiar thread-like interface for task management.
+
 use core::time::Duration;
 
-use alloc::sync::Arc;
+use crate::{TinyError, TinyResult};
+use crate::hal::percpu;
 
-use crate::{hal::percpu, task::task_ops::{TASK_MANAGER, task_sleep, task_spawn}};
+use super::manager;
+use super::task::{TaskId, TaskRef};
 
+/// A handle to a spawned task that can be used to wait for its completion.
 pub struct JoinHandle {
-    pub task: super::TaskRef,
+    task: TaskRef,
 }
 
 impl JoinHandle {
     /// Creates a new JoinHandle from a task reference.
-    pub(crate) fn new(task: super::TaskRef) -> Self {
+    pub(crate) fn new(task: TaskRef) -> Self {
         Self { task }
     }
 
     /// Returns the task ID of the associated task.
-    pub fn id(&self) -> super::task_ref::TaskId {
+    pub fn id(&self) -> TaskId {
         self.task.id()
     }
 
@@ -26,14 +33,15 @@ impl JoinHandle {
     /// # Errors
     ///
     /// Returns `Err(JoinError::SelfJoin)` if attempting to join the current task.
-    pub fn join(self) -> crate::TinyResult<()> {
+    pub fn join(self) -> TinyResult<()> {
         let curr_task = percpu::current_task();
 
         // Check for self-join (would deadlock)
         if curr_task.id() == self.task.id() {
-            return Err(crate::TinyError::ThreadSelfJoinFailed);
+            return Err(TinyError::ThreadSelfJoinFailed);
         }
 
+        manager::join(self.task);
         Ok(())
     }
 }
@@ -42,18 +50,22 @@ impl JoinHandle {
 ///
 /// Returns a `JoinHandle` that can be used to wait for the thread to finish.
 pub fn spawn(f: fn()) -> JoinHandle {
-    task_spawn(f)
+    let task = manager::spawn("thread", f);
+    JoinHandle::new(task)
 }
 
 /// Puts the current thread to sleep for the specified duration.
 pub fn sleep(duration: Duration) {
-    task_sleep(duration);
+    let nanos = duration.as_nanos() as u64;
+    manager::sleep(nanos);
 }
 
 /// Yields the current thread, allowing other threads to run.
-pub fn yield_now() {}
+pub fn yield_now() {
+    manager::yield_now();
+}
 
 /// Returns the current thread's task ID.
-pub fn current_id() -> super::task_ref::TaskId {
+pub fn current_id() -> TaskId {
     percpu::current_task().id()
 }

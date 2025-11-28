@@ -5,9 +5,8 @@ edition = "2024"
 
 [features]
 default = ["qemu"]
-net = []
 
-opi5p = ["net"]
+opi5p = []
 qemu = []
 
 [dependencies]
