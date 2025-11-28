@@ -13,6 +13,12 @@ struct BuildConfig {
     entry_point: usize,
     #[serde(default)]
     features: Option<Vec<String>>,
+    #[serde(default = "default_smp")]
+    smp: u16,
+}
+
+fn default_smp() -> u16 {
+    1
 }
 
 pub struct BuildTask {
@@ -58,6 +64,10 @@ impl BuildTask {
         })
     }
 
+    pub fn smp(&self) -> u16 {
+        self.build_config.smp
+    }
+
     pub fn elf_name(&self) -> PathBuf {
         project_root()
             .join("target")
@@ -77,6 +87,7 @@ impl BuildTask {
         info!("    Target Platform: {}", self.build_config.target);
         info!("    Log Level: {}", self.build_config.log);
         info!("    Tool path: {}", self.build_config.tool_path);
+        info!("    SMP: {}", self.build_config.smp);
         if let Some(ref features) = self.features {
             info!("    Features: {}", features.join(", "));
         } else {
@@ -89,11 +100,13 @@ impl BuildTask {
         let rustflags = format!("-C link-arg=-T{} -C force-frame-pointers=yes", linker_path);
         let log_level = &self.build_config.log;
         let build_time = chrono::Local::now().to_string();
+        let smp = self.build_config.smp.to_string();
 
         // Set environment variables for cargo
         sh.set_var("RUSTFLAGS", &rustflags);
-        sh.set_var("LOG", log_level);
-        sh.set_var("BUILD_TIME", &build_time);
+        sh.set_var("TINYENV_LOG", log_level);
+        sh.set_var("TINYENV_BUILD_TIME", &build_time);
+        sh.set_var("TINYENV_SMP", &smp);
 
         // Build cargo command
         let target = &self.build_config.target;

@@ -78,7 +78,7 @@ impl<T> super::BaseScheduler for FifoScheduler<T> {
     }
 
     fn task_tick(&mut self, _current: &Self::SchedItem) -> bool {
-        true // no reschedule
+        false // no reschedule
     }
 
     fn set_priority(&mut self, _task: &Self::SchedItem, _prio: isize) -> bool {

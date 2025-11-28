@@ -1,13 +1,12 @@
 use crate::utils::TaskResult;
 use serde::Deserialize;
-use xshell::{Shell, cmd};
+use xshell::{cmd, Shell};
 
 #[derive(Debug, Deserialize, Default)]
 struct RunConfig {
     memory: String,
     cpu: String,
     machine: String,
-    smp: String,
     disk_image: String,
     tcp_port: u16,
     udp_port: u16,
@@ -51,7 +50,7 @@ impl RunTask {
         let memory = &self.run_config.memory;
         let cpu = &self.run_config.cpu;
         let machine = &self.run_config.machine;
-        let smp = &self.run_config.smp;
+        let smp = self.build.smp();
         let disk_image = &self.run_config.disk_image;
         let tcp_port = self.run_config.tcp_port;
         let udp_port = self.run_config.udp_port;
@@ -74,28 +73,36 @@ impl RunTask {
             tcp_forward, udp_forward
         );
 
-        let nographic = if self.run_config.nographic {
-            "-nographic"
-        } else {
-            ""
-        };
-
         // Execute QEMU command
-        cmd!(
-            sh,
-            "qemu-system-aarch64 
-                -m {memory} 
-                -cpu {cpu} 
-                -machine {machine}
-                -smp {smp}
-                -kernel {bin_path} 
-                -device virtio-blk-device,drive=disk0 
-                -drive id=disk0,if=none,format=raw,file={disk_image} 
-                -device virtio-net-device,netdev=net0 
-                -netdev {netdev} 
-                {nographic}"
-        )
-        .run()?;
+        let mut args = vec![
+            "-m".to_string(),
+            memory.clone(),
+            "-cpu".to_string(),
+            cpu.clone(),
+            "-machine".to_string(),
+            machine.clone(),
+            "-kernel".to_string(),
+            bin_path.to_string_lossy().to_string(),
+            "-device".to_string(),
+            "virtio-blk-device,drive=disk0".to_string(),
+            "-drive".to_string(),
+            format!("id=disk0,if=none,format=raw,file={}", disk_image),
+            "-device".to_string(),
+            "virtio-net-device,netdev=net0".to_string(),
+            "-netdev".to_string(),
+            netdev,
+        ];
+
+        if smp > 1 {
+            args.push("-smp".to_string());
+            args.push(smp.to_string());
+        }
+
+        if self.run_config.nographic {
+            args.push("-nographic".to_string());
+        }
+
+        cmd!(sh, "qemu-system-aarch64 {args...}").run()?;
 
         Ok(())
     }

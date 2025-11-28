@@ -6,6 +6,7 @@ tool_path = "tools/orangepi5"
 load_address = 0x40_0000
 entry_point = 0x40_0000
 features = []
+smp = 8
 
 [tftp]
 tftp_path = "/data/docker/tftpboot/data/kernel.uimg"
@@ -14,7 +15,6 @@ tftp_path = "/data/docker/tftpboot/data/kernel.uimg"
 memory = "1G"
 cpu = "cortex-a72"
 machine = "virt,gic-version=3"
-smp = "8"
 disk_image = "disk.img"
 tcp_port = 5555
 udp_port = 5555

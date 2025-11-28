@@ -15,11 +15,12 @@ use kspin::SpinRaw;
 use crate::config::kernel::MAX_CPUS;
 use crate::drivers::timer::current_nanoseconds;
 use crate::hal::percpu;
+use crate::task::task;
 
 use super::Scheduler;
 use super::scheduler::BaseScheduler;
 use super::scheduler::fifo_scheduler::FifoTask;
-use super::task::{TaskId, TaskInner, TaskRef, TaskState};
+use super::task::{TaskInner, TaskRef, TaskState};
 
 /// Global task manager instance.
 static TASK_MANAGER: SpinRaw<Option<TaskManager>> = SpinRaw::new(None);
@@ -28,12 +29,20 @@ static TASK_MANAGER: SpinRaw<Option<TaskManager>> = SpinRaw::new(None);
 /// Uses atomic for safe multi-core access.
 static ACTIVE_TASK_COUNT: AtomicUsize = AtomicUsize::new(0);
 
+
+lazy_static::lazy_static! {
+    /// Public lock for accessing the task manager.
+    pub static ref IDLE_TASK: Arc<FifoTask<TaskInner>> = {
+        // Placeholder idle task for initialization
+        let idle_task = task::create_task("idle",|| idle_loop(), true);
+        Arc::new(idle_task)
+    };
+}
+
 /// Task manager that handles all task scheduling operations.
 pub struct TaskManager {
     /// Scheduler for ready tasks.
     scheduler: Scheduler,
-    /// Next available task ID.
-    next_id: TaskId,
 }
 
 impl TaskManager {
@@ -46,7 +55,6 @@ impl TaskManager {
 
         Self {
             scheduler,
-            next_id: MAX_CPUS, // Start from MAX_CPUS, 0..MAX_CPUS reserved for idle tasks
         }
     }
 
@@ -99,7 +107,7 @@ impl TaskManager {
             task
         } else {
             // No ready tasks, switch to idle task
-            percpu::idle_task()
+            IDLE_TASK.clone()
         };
 
         self.switch_to(curr_task, next_task);
@@ -230,7 +238,7 @@ impl TaskManager {
 
         // Get first task from scheduler
         if let Some(first_task) = self.scheduler.pick_next_task() {
-            let idle = percpu::idle_task();
+            let idle = IDLE_TASK.clone();
 
             info!(
                 "Switching to task {} ({})",
@@ -247,21 +255,10 @@ impl TaskManager {
 
     /// Creates a new task and returns its TaskRef.
     pub fn create_task(&mut self, name: &'static str, entry: fn()) -> TaskRef {
-        let id = self.next_id;
-        self.next_id += 1;
-
-        let current = percpu::current_task();
-        let parent_id = current.id();
-        let task_inner = TaskInner::new(id, name, parent_id, entry);
-        let task = Arc::new(FifoTask::new(task_inner));
-
-        // Increment active task count atomically
-        ACTIVE_TASK_COUNT.fetch_add(1, Ordering::SeqCst);
-
-        info!("Task {} ({}) spawned, parent: {}", id, name, parent_id);
-
-        // Clone for return before adding to scheduler
+        let task = Arc::new(task::create_task(name, entry, false));
         let task_ref = task.clone();
+
+        ACTIVE_TASK_COUNT.fetch_add(1, Ordering::SeqCst);
 
         // Add to scheduler ready queue
         self.spawn(task);
@@ -293,7 +290,7 @@ fn idle_loop() -> ! {
         if let Some(manager) = TASK_MANAGER.lock().as_mut() {
             if let Some(next_task) = manager.scheduler.pick_next_task() {
                 // Found a task, switch to it
-                let idle = percpu::idle_task();
+                let idle = IDLE_TASK.clone();
                 idle.set_state(TaskState::Ready);
                 next_task.set_state(TaskState::Running);
                 percpu::set_current_task(&next_task);
@@ -302,6 +299,8 @@ fn idle_loop() -> ! {
                 }
             }
         }
+
+        info!("CPU {} idle, waiting for interrupt", percpu::cpu_id());
         // No task available, wait for interrupt
         aarch64_cpu::asm::wfi();
     }
@@ -315,18 +314,8 @@ fn idle_loop() -> ! {
 pub fn init() {
     info!("Initializing task manager...");
 
-    // Initialize percpu for CPU 0
-    unsafe {
-        percpu::init(0);
-    }
-
-    // Create idle task for CPU 0
-    let idle_inner = TaskInner::new_idle(0);
-    let idle_task = Arc::new(FifoTask::new(idle_inner));
-
-    // Set idle_0 as current task and idle task via percpu
-    percpu::set_current_task(&idle_task);
-    percpu::set_idle_task(&idle_task);
+    // Set idle_0 as current task via percpu
+    percpu::set_current_task(&IDLE_TASK);
 
     // Create task manager
     let manager = TaskManager::new();
@@ -342,18 +331,8 @@ pub fn init() {
 pub fn init_secondary(cpu_id: usize) {
     assert!(cpu_id > 0 && cpu_id < MAX_CPUS, "Invalid secondary CPU ID");
 
-    // Initialize percpu for this CPU
-    unsafe {
-        percpu::init(cpu_id);
-    }
-
-    // Create idle task for this CPU
-    let idle_inner = TaskInner::new_idle(cpu_id);
-    let idle_task = Arc::new(FifoTask::new(idle_inner));
-
     // Set as current task and idle task for this CPU
-    percpu::set_current_task(&idle_task);
-    percpu::set_idle_task(&idle_task);
+    percpu::set_current_task(&IDLE_TASK);
 
     info!("Task scheduler initialized on CPU {}", cpu_id);
 }

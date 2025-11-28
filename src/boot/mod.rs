@@ -14,7 +14,7 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 
 use memory_addr::pa;
 
-use crate::{config::kernel::PHYS_VIRT_OFFSET, mm::phys_to_virt, println};
+use crate::{config::kernel::PHYS_VIRT_OFFSET, hal::percpu, mm::phys_to_virt, println};
 
 /// Number of secondary CPUs that have completed initialization.
 static CPUS_READY: AtomicUsize = AtomicUsize::new(0);
@@ -50,10 +50,12 @@ fn kernel_init() {
     crate::hal::init_exception();
     crate::drivers::uart::init_early(phys_to_virt(pa!(crate::config::UART_PADDR)));
 
+    percpu::init(0); // Initialize percpu for CPU 0
+
     // Print build time
     println!(
         "\nBuild time: {}",
-        option_env!("BUILD_TIME").unwrap_or("unknown")
+        crate::config::kernel::TINYENV_BUILD_TIME
     );
 
     println!("Board: {}", crate::config::BOARD_NAME);
@@ -112,7 +114,7 @@ pub fn rust_main(_cpu_id: usize, _arg: usize) -> ! {
     boot_secondary_cpus();
 
     // Create main user task as child of ROOT
-    crate::task::spawn(crate::user_main);
+    crate::task::spawn(crate::main);
 
     // Signal all CPUs to start scheduling
     START_SCHEDULING.store(1, Ordering::SeqCst);
@@ -126,6 +128,9 @@ pub fn rust_main(_cpu_id: usize, _arg: usize) -> ! {
 /// This function is called by each secondary CPU after basic hardware
 /// initialization (EL switch, FP enable, MMU setup).
 pub fn rust_main_secondary(cpu_id: usize) -> ! {
+    // Initialize percpu for this CPU
+    percpu::init(cpu_id);
+
     // Initialize GIC for this CPU
     crate::drivers::irq::init_secondary(cpu_id);
 

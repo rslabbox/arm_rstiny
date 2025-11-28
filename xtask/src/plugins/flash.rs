@@ -1,5 +1,5 @@
-use crate::utils::{TaskResult, project_root};
-use xshell::{Shell, cmd};
+use crate::utils::{project_root, TaskResult};
+use xshell::{cmd, Shell};
 
 pub struct FlashTask {
     build: super::build::BuildTask,

@@ -4,7 +4,7 @@ use alloc::boxed::Box;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::cell::UnsafeCell;
-use core::sync::atomic::{AtomicU8, Ordering};
+use core::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 
 use kspin::SpinNoIrq;
 
@@ -18,6 +18,9 @@ type WaiterRef = Arc<FifoTask<TaskInner>>;
 
 /// Task identifier type.
 pub type TaskId = usize;
+
+/// PID of the tasks
+static TASK_PID: AtomicUsize = AtomicUsize::new(1);
 
 /// Task state enumeration.
 #[repr(u8)]
@@ -66,6 +69,8 @@ pub struct TaskInner {
     entry: Option<fn()>,
     /// Tasks waiting for this task to exit (for join support).
     waiters: SpinNoIrq<Vec<WaiterRef>>,
+    /// is idle task
+    is_idle: bool,
 }
 
 // Safety: TaskInner is designed to be shared across threads with proper synchronization.
@@ -73,35 +78,14 @@ unsafe impl Send for TaskInner {}
 unsafe impl Sync for TaskInner {}
 
 impl TaskInner {
-    /// Creates an idle task for the specified CPU.
-    ///
-    /// The idle task reuses the bootstrap/secondary stack and has no parent.
-    /// Each CPU has its own idle task with ID equal to cpu_id.
-    pub fn new_idle(cpu_id: usize) -> Self {
-        // Generate idle task name based on CPU ID
-        let name: &'static str = match cpu_id {
-            0 => "idle_0",
-            1 => "idle_1",
-            2 => "idle_2",
-            3 => "idle_3",
-            _ => "idle_x",
-        };
-
-        Self {
-            id: cpu_id, // idle task ID = CPU ID
-            name,
-            state: AtomicU8::new(TaskState::Running as u8),
-            parent_id: cpu_id, // idle task is its own parent
-            children: SpinNoIrq::new(Vec::new()),
-            context: UnsafeCell::new(TaskContext::new()),
-            kstack: None, // Reuse bootstrap/secondary stack
-            entry: None,
-            waiters: SpinNoIrq::new(Vec::new()),
-        }
-    }
-
     /// Creates a new task with the given parameters.
-    pub fn new(id: TaskId, name: &'static str, parent_id: TaskId, entry: fn()) -> Self {
+    pub fn new(
+        id: TaskId,
+        name: &'static str,
+        parent_id: TaskId,
+        is_idle: bool,
+        entry: fn(),
+    ) -> Self {
         // Allocate kernel stack
         let kstack = alloc::vec![0u8; TASK_STACK_SIZE].into_boxed_slice();
         let kstack_top = kstack.as_ptr() as usize + TASK_STACK_SIZE;
@@ -122,6 +106,7 @@ impl TaskInner {
             children: SpinNoIrq::new(Vec::new()),
             context: UnsafeCell::new(context),
             kstack: Some(kstack),
+            is_idle,
             entry: Some(entry),
             waiters: SpinNoIrq::new(Vec::new()),
         }
@@ -193,7 +178,7 @@ impl TaskInner {
     /// Idle tasks have IDs in the range 0..MAX_CPUS (one per CPU).
     #[inline]
     pub fn is_idle(&self) -> bool {
-        self.id < crate::config::kernel::MAX_CPUS
+        self.is_idle
     }
 
     /// Adds a task to the waiters list (tasks waiting for this task to exit).
@@ -228,4 +213,22 @@ extern "C" fn task_entry_trampoline() {
 
     // Task completed, exit
     super::exit_current_task();
+}
+
+/// Creates a new task and returns its TaskRef.
+pub fn create_task(name: &'static str, entry: fn(), is_idle: bool) -> FifoTask<TaskInner> {
+    let id = TASK_PID.fetch_add(1, Ordering::SeqCst);
+
+    let parent_id = if !is_idle {
+        crate::hal::percpu::current_task().id()
+    } else {
+        0usize
+    };
+    let task_inner = TaskInner::new(id, name, parent_id, is_idle, entry);
+
+        info!(
+        "Task Created: id={}, name={}, parent_id={}, is_idle={}",
+        id, name, parent_id, is_idle
+    );
+    FifoTask::new(task_inner)
 }

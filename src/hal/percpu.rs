@@ -19,8 +19,6 @@ use crate::task::task::{SchedulableTask, TaskRef};
 pub struct PerCpu {
     /// Pointer to the currently running task.
     current_task: *const SchedulableTask,
-    /// Pointer to the idle task for this CPU.
-    idle_task: *const SchedulableTask,
     /// The CPU ID.
     cpu_id: usize,
 }
@@ -33,7 +31,6 @@ unsafe impl Sync for PerCpu {}
 static mut PERCPU_AREAS: [PerCpu; MAX_CPUS] = [const {
     PerCpu {
         current_task: core::ptr::null(),
-        idle_task: core::ptr::null(),
         cpu_id: 0,
     }
 }; MAX_CPUS];
@@ -65,13 +62,12 @@ impl PerCpu {
 /// # Safety
 ///
 /// This function must only be called once per CPU during initialization.
-pub unsafe fn init(cpu_id: usize) {
+pub fn init(cpu_id: usize) {
     assert!(cpu_id < MAX_CPUS, "CPU ID {} out of range", cpu_id);
     unsafe {
         let percpu = &raw mut PERCPU_AREAS[cpu_id];
         (*percpu).cpu_id = cpu_id;
         (*percpu).current_task = core::ptr::null();
-        (*percpu).idle_task = core::ptr::null();
 
         // Set TPIDR_EL1 to point to the PerCpu structure
         set_thread_pointer(percpu as usize);
@@ -158,37 +154,6 @@ pub fn set_current_task(task: &TaskRef) {
     unsafe {
         set_current_task_ptr(ptr);
     }
-}
-
-/// Sets the idle task for this CPU.
-///
-/// This should be called once during initialization after the idle task is created.
-#[inline]
-pub fn set_idle_task(task: &TaskRef) {
-    let ptr = Arc::as_ptr(task);
-    // Increment reference count for the idle task
-    core::mem::forget(task.clone());
-    unsafe {
-        current_cpu_mut().idle_task = ptr;
-    }
-}
-
-/// Returns a reference to the idle task (increments reference count).
-///
-/// # Panics
-///
-/// Panics if no idle task is set.
-#[inline]
-pub fn idle_task() -> TaskRef {
-    let ptr = unsafe { current_cpu_mut().idle_task };
-    assert!(!ptr.is_null(), "No idle task set");
-
-    // Increment reference count by creating Arc from raw and cloning
-    let arc = unsafe { Arc::from_raw(ptr) };
-    let cloned = arc.clone();
-    // Don't decrement the original reference count
-    core::mem::forget(arc);
-    cloned
 }
 
 /// Returns the current CPU ID.

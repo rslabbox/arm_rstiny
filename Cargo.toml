@@ -29,6 +29,7 @@ thiserror = { version = "2.0.17", default-features = false }
 arm_pl011 = "0.1"
 
 tock-registers = "0.10.1"
+const_env = "0.1.5"
 
 # axwatchdog ={ path = "crates/axwatchdog" }
 axbacktrace = { version = "0.1", features = ["alloc", "dwarf"] }

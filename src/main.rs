@@ -3,6 +3,9 @@
 #![no_std]
 #![no_main]
 #![feature(alloc_error_handler)]
+#![feature(const_result_trait_fn)]
+#![feature(const_option_ops)]
+#![feature(const_trait_impl)]
 
 mod boot;
 mod config;
@@ -26,10 +29,12 @@ extern crate axbacktrace;
 pub use error::{TinyError, TinyResult};
 
 /// User main task entry point.
-fn user_main() {
+fn main() {
+
+    info!("MAIN SMP: {}", crate::config::kernel::TINYENV_SMP);
+
     // Run tests in main task
     tests::rstiny_tests();
-
 
     info!("User main task completed");
 }

@@ -69,9 +69,9 @@ pub fn init_early() {
     NEXT_PERIODIC_DEADLINE.store(deadline, Ordering::Release);
     update_deadline(deadline);
     // Enable Timer interrupt
-    drivers::irq::irqset_register(IntId::ppi(14), handle_timer_irq);
+    drivers::irq::irqset_register(config::kernel::TIMER_IRQ, handle_timer_irq);
     // Timer interrupt ID on ARM GIC
-    enable_irqs(IntId::ppi(14));
+    enable_irqs(config::kernel::TIMER_IRQ);
 }
 
 /// Initialize timer for secondary CPU.

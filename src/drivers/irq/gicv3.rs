@@ -13,6 +13,7 @@ use spin::Mutex;
 
 use crate::TinyResult;
 use crate::error::TinyError;
+use crate::hal::percpu;
 
 /// The type of an interrupt handler.
 pub type IrqHandler = fn(usize);
@@ -73,8 +74,9 @@ pub fn irqset_enable(intid: IntId, priority: u8) {
     if let Some(ref mut gic) = *gic {
         let intid_val = u32::from(intid);
         // Determine the core ID based on interrupt type
+        // SGIs and PPIs are per-core, use current CPU ID
         let core_id = if intid_val < 32 {
-            Some(0) // SGIs and PPIs are per-core
+            Some(percpu::cpu_id())
         } else {
             None // SPIs are shared
         };
@@ -83,7 +85,7 @@ pub fn irqset_enable(intid: IntId, priority: u8) {
             .unwrap_or_else(|e| error!("Failed to set priority for IRQ {:?}: {:?}", intid, e));
         gic.enable_interrupt(intid, core_id, true)
             .unwrap_or_else(|e| error!("Failed to enable IRQ {:?}: {:?}", intid, e));
-        debug!("IRQ enabled: {:?}", intid);
+        debug!("IRQ enabled: {:?} on CPU {}", intid, percpu::cpu_id());
     } else {
         warn!("GIC not initialized, cannot enable IRQ: {:?}", intid);
     }
@@ -96,8 +98,9 @@ pub fn irqset_disable(intid: IntId) {
     if let Some(ref mut gic) = *gic {
         let intid_val = u32::from(intid);
         // Determine the core ID based on interrupt type
+        // SGIs and PPIs are per-core, use current CPU ID
         let core_id = if intid_val < 32 {
-            Some(0) // SGIs and PPIs are per-core
+            Some(percpu::cpu_id())
         } else {
             None // SPIs are shared
         };
@@ -121,7 +124,7 @@ pub fn init(gicd_virt: VirtAddr, gicr_virt: VirtAddr) -> TinyResult<()> {
     let gicr = NonNull::new(gicr_base_address).ok_or(TinyError::InvalidGicPointer)?;
 
     // Initialise the GIC.
-    let mut gic = unsafe { GicV3::new(gicd, gicr, 1, false) };
+    let mut gic = unsafe { GicV3::new(gicd, gicr, crate::config::kernel::MAX_CPUS, false) };
     gic.setup(0);
 
     // Store the GIC instance globally for later use
