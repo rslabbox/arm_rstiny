@@ -78,6 +78,35 @@ pub fn task_spawn(f: fn()) -> JoinHandle {
     JoinHandle::new(task_ref)
 }
 
+// Switch current task to idle task
+// Will be wake 
+fn task_drop_to_idle(curr_task: &TaskRef) {
+    let idle_task = get_idle_task();
+    curr_task.switch_to(&idle_task);
+}
+
+pub fn task_yield() {
+    let curr_task = crate::hal::percpu::current_task();
+    let cpu_id = crate::hal::percpu::cpu_id();
+
+    assert!(curr_task.state() == TaskState::Running);
+    assert!(!curr_task.is_idle());
+
+    debug!(
+        "Task Yielding: id={}, name={}, cpu={}",
+        curr_task.id(),
+        curr_task.name(),
+        cpu_id
+    );
+
+    curr_task.set_state(TaskState::Ready);
+    TASK_MANAGER
+        .lock()
+        .put_prev_task(curr_task.clone(), true);
+
+    task_drop_to_idle(&curr_task);
+}
+
 pub fn task_exit(curr_task: TaskRef) {
     let cpu_id = crate::hal::percpu::cpu_id();
     debug!(
@@ -98,7 +127,7 @@ pub fn task_exit(curr_task: TaskRef) {
         system_off();
     }
 
-    curr_task.switch_to(&get_idle_task());
+    task_drop_to_idle(&curr_task);
 
     unreachable!("task exited!");
 }
@@ -125,7 +154,7 @@ pub fn task_sleep(duration: Duration) {
     curr_task.set_state(TaskState::Sleeping);
     set_timer(deadline_ns, &curr_task);
 
-    curr_task.switch_to(&get_idle_task());
+    task_drop_to_idle(&curr_task);
 }
 
 pub fn task_start() -> ! {

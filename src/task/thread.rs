@@ -1,6 +1,6 @@
 use core::time::Duration;
 
-use crate::{hal::percpu, task::task_ops::{task_sleep, task_spawn}};
+use crate::{hal::percpu, task::task_ops::{task_sleep, task_spawn, task_yield}};
 
 pub struct JoinHandle {
     pub task: super::TaskRef,
@@ -49,7 +49,9 @@ pub fn sleep(duration: Duration) {
 }
 
 /// Yields the current thread, allowing other threads to run.
-pub fn yield_now() {}
+pub fn yield_now() {
+    task_yield();
+}
 
 /// Returns the current thread's task ID.
 pub fn current_id() -> super::task_ref::TaskId {
