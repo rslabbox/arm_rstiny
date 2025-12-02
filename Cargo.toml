@@ -13,7 +13,7 @@ qemu = []
 bitflags = "2.10"
 memory_addr = "0.4"
 page_table_entry = "0.5"
-aarch64-cpu = "11.1.0"
+aarch64-cpu = "11.2.0"
 
 log = "0.4"
 talc = "4.4.3"
@@ -26,17 +26,11 @@ arm-gic = "0.7.1"
 int_ratio = "0.1"
 thiserror = { version = "2.0.17", default-features = false }
 arm_pl011 = "0.1"
-
 tock-registers = "0.10.1"
 const_env = "0.1.5"
-
 weak-map = "0.1"
-
-# axwatchdog ={ path = "crates/axwatchdog" }
-axbacktrace = { version = "0.1", features = ["alloc", "dwarf"] }
-
+axbacktrace = { version = "0.1.1", features = ["alloc", "dwarf"] }
 intrusive-collections = { version = "0.9.7", features = ["nightly"] }
-
 rand = { version = "0.9", default-features = false, features = ["small_rng"] }
 
 [profile.dev]
