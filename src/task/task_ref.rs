@@ -172,8 +172,6 @@ impl TaskInner {
     }
 
     pub fn switch_to(&self, next: &TaskRef) {
-        self.set_state(TaskState::Ready);
-        next.set_state(TaskState::Running);
         percpu::set_current_task(&next);
         unsafe {
             (*self.context_mut()).switch_to(next.context());

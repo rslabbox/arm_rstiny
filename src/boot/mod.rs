@@ -46,8 +46,34 @@ fn backtrace_init() {
     axbacktrace::init(ip_range, fp_range);
 }
 
-/// Initialize the kernel subsystems.
-fn kernel_init() {
+/// Returns the physical address of the secondary CPU entry point.
+///
+/// This is used by the primary CPU to start secondary CPUs via PSCI cpu_on.
+pub fn secondary_entry_paddr() -> usize {
+    // The entry point virtual address minus the offset gives the physical address
+    entry::_start_secondary as *const () as usize - PHYS_VIRT_OFFSET
+}
+
+/// Boot all secondary CPUs using PSCI.
+fn boot_secondary_cpus() {
+    let entry_paddr = crate::boot::secondary_entry_paddr();
+
+    for cpu_id in 1..TINYENV_SMP {
+        info!("Starting CPU {}...", cpu_id);
+        crate::drivers::power::cpu_on(cpu_id, entry_paddr, cpu_id);
+    }
+
+    // Wait for all secondary CPUs to be ready
+    info!("Waiting for {} secondary CPUs...", TINYENV_SMP - 1);
+    while CPUS_READY.load(Ordering::SeqCst) < TINYENV_SMP - 1 {
+        core::hint::spin_loop();
+    }
+    info!("All {} CPUs online", TINYENV_SMP);
+}
+
+/// Rust main entry point (called from assembly).
+pub fn rust_main(_cpu_id: usize, _arg: usize) -> ! {
+    // Initialize kernel subsystems
     // Clear BSS, initialize exceptions, early UART
     crate::hal::clear_bss();
     crate::hal::init_exception();
@@ -78,37 +104,6 @@ fn kernel_init() {
 
     // Initialize task scheduler
     crate::task::init_taskmanager();
-}
-
-/// Returns the physical address of the secondary CPU entry point.
-///
-/// This is used by the primary CPU to start secondary CPUs via PSCI cpu_on.
-pub fn secondary_entry_paddr() -> usize {
-    // The entry point virtual address minus the offset gives the physical address
-    entry::_start_secondary as *const () as usize - PHYS_VIRT_OFFSET
-}
-
-/// Boot all secondary CPUs using PSCI.
-fn boot_secondary_cpus() {
-    let entry_paddr = crate::boot::secondary_entry_paddr();
-
-    for cpu_id in 1..TINYENV_SMP {
-        info!("Starting CPU {}...", cpu_id);
-        crate::drivers::power::cpu_on(cpu_id, entry_paddr, cpu_id);
-    }
-
-    // Wait for all secondary CPUs to be ready
-    info!("Waiting for {} secondary CPUs...", TINYENV_SMP - 1);
-    while CPUS_READY.load(Ordering::SeqCst) < TINYENV_SMP - 1 {
-        core::hint::spin_loop();
-    }
-    info!("All {} CPUs online", TINYENV_SMP);
-}
-
-/// Rust main entry point (called from assembly).
-pub fn rust_main(_cpu_id: usize, _arg: usize) -> ! {
-    // Initialize kernel subsystems
-    kernel_init();
 
     println!("\nHello RustTinyOS!\n");
 
@@ -116,7 +111,7 @@ pub fn rust_main(_cpu_id: usize, _arg: usize) -> ! {
     boot_secondary_cpus();
 
     // Create main user task as child of ROOT
-    crate::task::spawn(crate::main);
+    crate::task::thread::spawn(crate::main);
 
     // Signal all CPUs to start scheduling
     START_SCHEDULING.store(1, Ordering::SeqCst);
@@ -134,26 +129,26 @@ pub fn rust_main_secondary(cpu_id: usize) -> ! {
     percpu::init(cpu_id);
     crate::hal::init_exception();
 
-    // Initialize task scheduler for this CPU (creates idle task, sets up percpu)
+    // // Initialize task scheduler for this CPU (creates idle task, sets up percpu)
     crate::task::init_taskmanager_secondary(cpu_id);
     
-    // Initialize GIC for this CPU
+    // // Initialize GIC for this CPU
     crate::drivers::irq::init_secondary(cpu_id);
 
-    // Initialize timer for this CPU
+    // // Initialize timer for this CPU
     crate::drivers::timer::init_secondary();
 
     info!("CPU {} online", cpu_id);
 
-    // Signal that this CPU is ready
+    // // Signal that this CPU is ready
     CPUS_READY.fetch_add(1, Ordering::SeqCst);
 
-    // Wait for primary CPU to signal start
+    // // Wait for primary CPU to signal start
     while START_SCHEDULING.load(Ordering::SeqCst) == 0 {
         core::hint::spin_loop();
     }
 
-    // Join the scheduler - secondary CPUs participate in task scheduling
+    // // Join the scheduler - secondary CPUs participate in task scheduling
     info!("CPU {} joining scheduler", cpu_id);
     crate::task::start_scheduling();
 }

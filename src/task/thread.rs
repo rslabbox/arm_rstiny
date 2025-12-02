@@ -1,8 +1,6 @@
 use core::time::Duration;
 
-use alloc::sync::Arc;
-
-use crate::{hal::percpu, task::task_ops::{TASK_MANAGER, task_sleep, task_spawn}};
+use crate::{hal::percpu, task::task_ops::{task_sleep, task_spawn}};
 
 pub struct JoinHandle {
     pub task: super::TaskRef,

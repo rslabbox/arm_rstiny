@@ -51,13 +51,6 @@ fn handle_timer_irq(_irq: usize) {
         next_deadline = NEXT_PERIODIC_DEADLINE.load(Ordering::Acquire);
     }
 
-    let mut timers = TIMER_LIST.lock();
-    while timers.expire_one(current_nanoseconds()).is_some() {}
-
-    if let Some(d) = timers.next_deadline() {
-        next_deadline = next_deadline.min(d);
-    }
-
     update_deadline(next_deadline);
 }
 

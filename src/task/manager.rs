@@ -3,7 +3,7 @@ use core::array;
 use core::ops::Deref;
 use intrusive_collections::{LinkedList, LinkedListAtomicLink, intrusive_adapter};
 
-use super::{task_ops, task_ref::TaskInner, TaskRef};
+use super::{TaskRef, task_ops, task_ref::TaskInner};
 
 /// A task wrapper for the [`FifoScheduler`].
 ///
@@ -36,14 +36,7 @@ struct RunQueue {
     run_queue: LinkedList<NodeAdapter<TaskInner>>,
 }
 
-lazy_static::lazy_static! {
-    /// Public lock for accessing the task manager.
-    pub static ref IDLE_TASK: Arc<FifoTask<TaskInner>> = {
-        // Placeholder idle task for initialization
-        let idle_task = task_ops::task_create("idle",|| task_ops::idle_loop(), true);
-        Arc::new(idle_task)
-    };
-}
+
 
 /// Task manager that handles all task scheduling operations.
 pub struct TaskManager {
@@ -66,6 +59,11 @@ impl TaskManager {
 
     pub fn put_prev_task(&mut self, task: TaskRef, _preempt: bool) {
         let cpu_id = task.id() % crate::config::kernel::TINYENV_SMP;
+        info!(
+            "Putting back task id={} to CPU {}'s run queue",
+            task.id(),
+            cpu_id
+        );
         self.ready_queues[cpu_id].run_queue.push_back(task);
     }
 
@@ -73,4 +71,3 @@ impl TaskManager {
         false
     }
 }
-
