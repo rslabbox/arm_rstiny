@@ -1,26 +1,19 @@
-//! Task definition and related types.
+use core::{
+    cell::UnsafeCell,
+    sync::atomic::{AtomicU8, Ordering},
+};
 
-use alloc::boxed::Box;
-use alloc::sync::Arc;
-use alloc::vec::Vec;
-use core::cell::UnsafeCell;
-use core::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
-
+use alloc::{boxed::Box, vec::Vec};
 use kspin::SpinNoIrq;
 
-use crate::config::kernel::TASK_STACK_SIZE;
-use crate::hal::context::TaskContext;
-
-use super::scheduler::fifo_scheduler::FifoTask;
-
-// Forward declaration for TaskRef used in waiters
-type WaiterRef = Arc<FifoTask<TaskInner>>;
+use crate::{
+    config::kernel::TASK_STACK_SIZE,
+    hal::{context::TaskContext, percpu},
+    task::TaskRef,
+};
 
 /// Task identifier type.
 pub type TaskId = usize;
-
-/// PID of the tasks
-static TASK_PID: AtomicUsize = AtomicUsize::new(1);
 
 /// Task state enumeration.
 #[repr(u8)]
@@ -67,8 +60,6 @@ pub struct TaskInner {
     kstack: Option<Box<[u8]>>,
     /// Entry function pointer.
     entry: Option<fn()>,
-    /// Tasks waiting for this task to exit (for join support).
-    waiters: SpinNoIrq<Vec<WaiterRef>>,
     /// is idle task
     is_idle: bool,
 }
@@ -108,7 +99,6 @@ impl TaskInner {
             kstack: Some(kstack),
             is_idle,
             entry: Some(entry),
-            waiters: SpinNoIrq::new(Vec::new()),
         }
     }
 
@@ -181,22 +171,13 @@ impl TaskInner {
         self.is_idle
     }
 
-    /// Adds a task to the waiters list (tasks waiting for this task to exit).
-    pub fn add_waiter(&self, waiter: WaiterRef) {
-        self.waiters.lock().push(waiter);
-    }
-
-    /// Takes all waiters from this task (used when task exits).
-    pub fn take_waiters(&self) -> Vec<WaiterRef> {
-        core::mem::take(&mut *self.waiters.lock())
+    pub fn switch_to(&self, next: &TaskRef) {
+        percpu::set_current_task(&next);
+        unsafe {
+            (*self.context_mut()).switch_to(next.context());
+        }
     }
 }
-
-/// Type alias for schedulable task (wrapped in FifoTask for intrusive list).
-pub type SchedulableTask = FifoTask<TaskInner>;
-
-/// Type alias for task reference (Arc-wrapped schedulable task).
-pub type TaskRef = Arc<SchedulableTask>;
 
 /// Task entry trampoline function.
 ///
@@ -212,23 +193,5 @@ extern "C" fn task_entry_trampoline() {
     }
 
     // Task completed, exit
-    super::exit_current_task();
-}
-
-/// Creates a new task and returns its TaskRef.
-pub fn create_task(name: &'static str, entry: fn(), is_idle: bool) -> FifoTask<TaskInner> {
-    let id = TASK_PID.fetch_add(1, Ordering::SeqCst);
-
-    let parent_id = if !is_idle {
-        crate::hal::percpu::current_task().id()
-    } else {
-        0usize
-    };
-    let task_inner = TaskInner::new(id, name, parent_id, is_idle, entry);
-
-        info!(
-        "Task Created: id={}, name={}, parent_id={}, is_idle={}",
-        id, name, parent_id, is_idle
-    );
-    FifoTask::new(task_inner)
+    super::task_ops::task_exit(task);
 }

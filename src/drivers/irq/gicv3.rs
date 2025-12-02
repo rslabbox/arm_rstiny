@@ -147,7 +147,13 @@ pub fn init_secondary(cpu_id: usize) {
     let mut gic = GIC.lock();
     
     if let Some(ref mut gic) = *gic {
-        gic.setup(cpu_id);
+        // gic.setup(cpu_id);
+        gic.init_cpu(cpu_id);
+        // gic.gicd.configure_default_settings();
+
+        // Enable group 1 for the current security state.
+        GicCpuInterface::enable_group1(true);
+
     } else {
         warn!("GIC not initialized, cannot setup CPU interface for CPU {}", cpu_id);
         return;

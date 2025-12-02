@@ -5,9 +5,8 @@ edition = "2024"
 
 [features]
 default = ["qemu"]
-net = []
 
-opi5p = ["net"]
+opi5p = []
 qemu = []
 
 [dependencies]
@@ -18,7 +17,7 @@ aarch64-cpu = "11.1.0"
 
 log = "0.4"
 talc = "4.4.3"
-kspin = "0.1"
+kspin = { version = "0.1", features = ["smp"] }
 spin = "0.10.0"
 dw_apb_uart = "0.1"
 lazyinit = "0.2"
@@ -30,6 +29,8 @@ arm_pl011 = "0.1"
 
 tock-registers = "0.10.1"
 const_env = "0.1.5"
+
+weak-map = "0.1"
 
 # axwatchdog ={ path = "crates/axwatchdog" }
 axbacktrace = { version = "0.1", features = ["alloc", "dwarf"] }

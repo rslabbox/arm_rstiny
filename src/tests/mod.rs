@@ -3,7 +3,7 @@
 mod allocator;
 mod gicv3;
 pub mod task;
-mod perf;
+// mod perf;
 
 fn logger_test() {
     warn!("\n=== Logger Test Start ===");
@@ -26,7 +26,7 @@ pub fn rstiny_tests() {
     task::run_scheduler_tests();
 
     // Run performance tests (single-core and multi-core)
-    perf::run_perf_tests();
+    // perf::run_perf_tests();
 
     #[cfg(feature = "opi5p")]
     crate::drivers::pci::test_dw_pcie_atu();

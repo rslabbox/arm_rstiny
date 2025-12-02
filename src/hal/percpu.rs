@@ -9,7 +9,7 @@ use alloc::sync::Arc;
 use super::cpu::{set_thread_pointer, thread_pointer};
 
 use crate::config::kernel::TINYENV_SMP;
-use crate::task::task::{SchedulableTask, TaskRef};
+use crate::task::{SchedulableTask, TaskRef};
 
 /// Per-CPU data structure.
 ///
