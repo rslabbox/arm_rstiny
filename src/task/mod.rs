@@ -1,3 +1,5 @@
+#![allow(unused)]
+
 pub mod manager;
 pub mod task_ops;
 pub mod task_ref;

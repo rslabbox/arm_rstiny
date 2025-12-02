@@ -37,6 +37,8 @@ axbacktrace = { version = "0.1", features = ["alloc", "dwarf"] }
 
 intrusive-collections = { version = "0.9.7", features = ["nightly"] }
 
+rand = { version = "0.9", default-features = false, features = ["small_rng"] }
+
 [profile.dev]
 panic = "abort"
 debug = 2
