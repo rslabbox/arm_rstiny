@@ -59,16 +59,16 @@ fn boot_secondary_cpus() {
     let entry_paddr = crate::boot::secondary_entry_paddr();
 
     for cpu_id in 1..TINYENV_SMP {
-        info!("Starting CPU {}...", cpu_id);
+        debug!("Starting CPU {}...", cpu_id);
         crate::drivers::power::cpu_on(cpu_id, entry_paddr, cpu_id);
     }
 
     // Wait for all secondary CPUs to be ready
-    info!("Waiting for {} secondary CPUs...", TINYENV_SMP - 1);
+    debug!("Waiting for {} secondary CPUs...", TINYENV_SMP - 1);
     while CPUS_READY.load(Ordering::SeqCst) < TINYENV_SMP - 1 {
         core::hint::spin_loop();
     }
-    info!("All {} CPUs online", TINYENV_SMP);
+    debug!("All {} CPUs online", TINYENV_SMP);
 }
 
 /// Rust main entry point (called from assembly).
@@ -138,7 +138,7 @@ pub fn rust_main_secondary(cpu_id: usize) -> ! {
     // // Initialize timer for this CPU
     crate::drivers::timer::init_secondary();
 
-    info!("CPU {} online", cpu_id);
+    debug!("CPU {} online", cpu_id);
 
     // // Signal that this CPU is ready
     CPUS_READY.fetch_add(1, Ordering::SeqCst);
@@ -149,7 +149,7 @@ pub fn rust_main_secondary(cpu_id: usize) -> ! {
     }
 
     // // Join the scheduler - secondary CPUs participate in task scheduling
-    info!("CPU {} joining scheduler", cpu_id);
+    debug!("CPU {} joining scheduler", cpu_id);
     crate::task::start_scheduling();
 }
 

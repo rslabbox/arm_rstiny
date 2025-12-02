@@ -23,12 +23,12 @@ pub fn start_scheduling() -> ! {
 pub fn init_taskmanager() {
     percpu::set_current_task(&task_ops::get_idle_task());
 
-    info!("Task manager initialized on CPU 0");
+    debug!("Task manager initialized on CPU 0");
 }
 
 pub fn init_taskmanager_secondary(cpu_id: usize) {
     // manager::init_secondary();
     percpu::set_current_task(&task_ops::get_idle_task());
 
-    info!("Task manager initialized on CPU {}", cpu_id);
+    debug!("Task manager initialized on CPU {}", cpu_id);
 }

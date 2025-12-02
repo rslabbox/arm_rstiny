@@ -111,7 +111,7 @@ pub fn system_off() -> ! {
 
 /// Power up a core.
 pub fn cpu_on(target_cpu: usize, entry_point: usize, arg: usize) {
-    info!("Starting CPU {:x} ON ...", target_cpu);
+    debug!("Starting CPU {:x} ON ...", target_cpu);
     let res = psci_call(PSCI_0_2_FN64_CPU_ON, target_cpu, entry_point, arg);
     if let Err(e) = res {
         error!("failed to boot CPU {:x} ({:?})", target_cpu, e);

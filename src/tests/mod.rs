@@ -3,7 +3,7 @@
 mod allocator;
 mod gicv3;
 // mod perf;
-// mod task;
+mod task;
 
 fn logger_test() {
     warn!("\n=== Logger Test Start ===");
@@ -23,7 +23,7 @@ pub fn rstiny_tests() {
     gicv3::gicv3_tests();
 
     // // Run scheduler tests
-    // task::run_scheduler_tests();
+    task::run_scheduler_tests();
 
     // // Run performance tests (single-core and multi-core)
     // perf::run_perf_tests();

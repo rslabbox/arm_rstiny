@@ -3,7 +3,7 @@ use kspin::SpinNoIrq;
 
 use crate::{
     config::kernel::TINYENV_SMP,
-    drivers::{power::system_off, timer::current_nanoseconds},
+    drivers::{power::system_off, timer::{busy_wait, current_nanoseconds}},
     task::{
         manager::TaskManager,
         task_ref::TaskState,
@@ -34,7 +34,7 @@ lazy_static::lazy_static! {
             let idle_task = task_create("idle", || idle_loop(), true);
             // Idle is aways running
             idle_task.set_state(TaskState::Running);
-            info!("Idle task created for CPU {}: id={}", cpu_id, idle_task.id());
+            debug!("Idle task created for CPU {}: id={}", cpu_id, idle_task.id());
             Arc::new(idle_task)
         })
     };
@@ -61,7 +61,7 @@ where
     };
     let task_inner = TaskInner::new(id, name, parent_id, is_idle, entry);
 
-    info!(
+    debug!(
         "Task Created: id={}, name={}, parent_id={}, is_idle={}",
         id, name, parent_id, is_idle
     );
@@ -138,7 +138,7 @@ pub fn task_exit(curr_task: TaskRef) {
 
     let remaining = ACTIVE_TASK_COUNT.fetch_sub(1, Ordering::SeqCst) - 1;
     if remaining == 0 {
-        info!("All tasks have exited. System will halt.");
+        debug!("All tasks have exited. System will halt.");
         system_off();
     }
 
@@ -191,14 +191,16 @@ pub fn get_idle_task() -> Arc<FifoTask<TaskInner>> {
 /// Idle loop for ROOT task when no other tasks are ready.
 pub(crate) fn idle_loop() -> ! {
     let cpu_id = crate::hal::percpu::cpu_id();
-    info!("Starting idle loop on CPU {}", cpu_id);
+    debug!("Starting idle loop on CPU {}", cpu_id);
     loop {
         let pick_task = TASK_MANAGER.lock().pick_next_task(cpu_id);
         if let Some(task) = pick_task {
             let idle_task = get_idle_task();
             task.set_state(TaskState::Running);
             trace!("Idle Loop: Switching from idle to task id={},state={:?}", task.id(), task.state());
+            // busy_wait(Duration::from_nanos(10));
             idle_task.switch_to(&task);
+
             continue;
         }
         // No task available, wait for interrupt

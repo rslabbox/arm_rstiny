@@ -1,6 +1,10 @@
 use core::{marker::PhantomData, time::Duration};
 
-use crate::{hal::percpu, task::task_ops::{task_sleep, task_spawn, task_yield}, task::task_ref::TaskState};
+use crate::{
+    hal::percpu,
+    task::task_ops::{task_sleep, task_spawn, task_yield},
+    task::task_ref::TaskState,
+};
 
 /// A handle to a spawned task that can be used to wait for its completion
 /// and retrieve its return value.
