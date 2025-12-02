@@ -1,5 +1,6 @@
 //! ARM PL011 UART driver.
 
+use arm_gic::IntId;
 use arm_pl011::Pl011Uart;
 use kspin::SpinNoIrq;
 use lazyinit::LazyInit;
@@ -38,13 +39,16 @@ pub fn getchar() -> Option<u8> {
 }
 
 /// Early stage initialization of the PL011 UART driver.
-pub fn init_early(uart_base: VirtAddr) {
+pub fn init_early(uart_base: VirtAddr, irq_num: IntId) {
     UART.init_once(SpinNoIrq::new(Pl011Uart::new(uart_base.as_mut_ptr())));
     UART.lock().init();
+
+    crate::drivers::irq::irqset_enable(irq_num, 0x80);
+    crate::drivers::irq::irqset_register(irq_num, irq_handler);
 }
 
 /// UART IRQ Handler.
-pub fn irq_handler() {
+pub fn irq_handler(_irq: usize) {
     let is_receive_interrupt = UART.lock().is_receive_interrupt();
     UART.lock().ack_interrupts();
     if is_receive_interrupt {

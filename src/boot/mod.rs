@@ -77,7 +77,7 @@ pub fn rust_main(_cpu_id: usize, _arg: usize) -> ! {
     // Clear BSS, initialize exceptions, early UART
     crate::hal::clear_bss();
     crate::hal::init_exception();
-    crate::drivers::uart::init_early(phys_to_virt(pa!(crate::config::UART_PADDR)));
+    crate::drivers::uart::init_early(phys_to_virt(pa!(crate::config::UART_PADDR)), crate::config::UART_IRQ);
 
     percpu::init(0); // Initialize percpu for CPU 0
 
