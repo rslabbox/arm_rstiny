@@ -64,11 +64,14 @@ pub fn task_create(name: &'static str, entry: fn(), is_idle: bool) -> FifoTask<T
     FifoTask::new(task_inner)
 }
 
+/// Timer tick handler for task scheduling.
+/// Checks and processes expired timer events to wake up sleeping tasks.
 pub fn task_timer_tick() {
-    // Placeholder for task scheduling logic
     check_events();
 }
 
+/// Spawns a new user task with the given entry function.
+/// Adds the task to the ready queue and returns a JoinHandle for synchronization.
 pub fn task_spawn(f: fn()) -> JoinHandle {
     let task = super::task_ops::task_create("task", f, false);
     let mut manager = TASK_MANAGER.lock();
@@ -78,13 +81,15 @@ pub fn task_spawn(f: fn()) -> JoinHandle {
     JoinHandle::new(task_ref)
 }
 
-// Switch current task to idle task
-// Will be wake 
+/// Switches the current task back to the idle task.
+/// Called when a task yields, sleeps, or exits.
 fn task_drop_to_idle(curr_task: &TaskRef) {
     let idle_task = get_idle_task();
     curr_task.switch_to(&idle_task);
 }
 
+/// Voluntarily yields the CPU to other tasks.
+/// Puts the current task back into the ready queue and switches to idle.
 pub fn task_yield() {
     let curr_task = crate::hal::percpu::current_task();
     let cpu_id = crate::hal::percpu::cpu_id();
@@ -107,6 +112,8 @@ pub fn task_yield() {
     task_drop_to_idle(&curr_task);
 }
 
+/// Handles task exit and cleanup.
+/// Sets the task state to Exited and switches to idle. Shuts down the system if no tasks remain.
 pub fn task_exit(curr_task: TaskRef) {
     let cpu_id = crate::hal::percpu::cpu_id();
     debug!(
@@ -132,6 +139,8 @@ pub fn task_exit(curr_task: TaskRef) {
     unreachable!("task exited!");
 }
 
+/// Puts the current task to sleep for the specified duration.
+/// Sets a timer and switches to idle until the deadline is reached.
 pub fn task_sleep(duration: Duration) {
     let nanos = duration.as_nanos() as u64;
     let curr_task = crate::hal::percpu::current_task();
@@ -157,12 +166,15 @@ pub fn task_sleep(duration: Duration) {
     task_drop_to_idle(&curr_task);
 }
 
+/// Starts the task scheduling system.
+/// Enters the idle loop and never returns.
 pub fn task_start() -> ! {
     idle_loop();
 
     // unreachable!("IDLE Task exited!");
 }
 
+/// Returns the idle task reference for the current CPU.
 pub fn get_idle_task() -> Arc<FifoTask<TaskInner>> {
     let cpu_id = crate::hal::percpu::cpu_id();
     IDLE_TASK[cpu_id].clone()

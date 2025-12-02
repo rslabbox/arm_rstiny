@@ -1,6 +1,6 @@
 use core::time::Duration;
 
-use crate::{hal::percpu, task::task_ops::{task_sleep, task_spawn, task_yield}};
+use crate::{hal::percpu, task::task_ops::{task_sleep, task_spawn, task_yield}, task::task_ref::TaskState};
 
 pub struct JoinHandle {
     pub task: super::TaskRef,
@@ -30,6 +30,11 @@ impl JoinHandle {
         // Check for self-join (would deadlock)
         if curr_task.id() == self.task.id() {
             return Err(crate::TinyError::ThreadSelfJoinFailed);
+        }
+
+        // Poll until the target task exits
+        while self.task.state() != TaskState::Exited {
+            task_yield();
         }
 
         Ok(())
