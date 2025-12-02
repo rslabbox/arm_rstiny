@@ -1,6 +1,6 @@
 use crate::utils::TaskResult;
 use std::path::Path;
-use xshell::{Shell, cmd};
+use xshell::{cmd, Shell};
 
 const DEBUG_SECTIONS: &[&str] = &[
     "debug_abbrev",
@@ -40,23 +40,47 @@ pub fn process_debug_sections(elf_path: &Path) -> TaskResult<()> {
 
     info!("    Extracting debug sections from {}", elf_name);
 
-    // Step 1: Extract all .debug_* sections to temporary files
-    for section in DEBUG_SECTIONS {
-        let section_file = format!("{}.bin", section);
-        let dotted_section = format!(".{}", section);
+    // Step 1: Extract all .debug_* sections to temporary files (in parallel)
+    let elf_dir_owned = elf_dir.to_path_buf();
+    let elf_name_owned = elf_name.to_string();
 
-        // Try to dump the section, if it doesn't exist, create an empty file
-        let result = cmd!(
-            sh,
-            "rust-objcopy {elf_name} --dump-section {dotted_section}={section_file}"
-        )
-        .ignore_stderr()
-        .run();
+    let handles: Vec<_> = DEBUG_SECTIONS
+        .iter()
+        .map(|&section| {
+            let elf_dir = elf_dir_owned.clone();
+            let elf_name = elf_name_owned.clone();
+            let section = section.to_string();
 
-        if result.is_err() {
-            // Section doesn't exist, create empty file
-            std::fs::write(elf_dir.join(&section_file), &[])?;
-        }
+            std::thread::spawn(move || -> Result<(), crate::utils::TaskError> {
+                let sh = Shell::new()?;
+                sh.change_dir(&elf_dir);
+
+                let section_file = format!("{}.bin", section);
+                let dotted_section = format!(".{}", section);
+
+                // Try to dump the section, if it doesn't exist, create an empty file
+                let result = cmd!(
+                    sh,
+                    "rust-objcopy {elf_name} --dump-section {dotted_section}={section_file}"
+                )
+                .ignore_stderr()
+                .run();
+
+                if result.is_err() {
+                    // Section doesn't exist, create empty file
+                    std::fs::write(elf_dir.join(&section_file), &[])?;
+                }
+
+                Ok(())
+            })
+        })
+        .collect();
+
+    // Wait for all threads to complete and collect any errors
+    for handle in handles {
+        handle
+            .join()
+            .map_err(|_| crate::utils::TaskError::Other("Thread panicked".to_string()))??;
     }
 
     info!("    Stripping debug sections from {}", elf_name);
