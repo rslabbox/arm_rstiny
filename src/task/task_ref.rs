@@ -175,7 +175,8 @@ impl TaskInner {
     pub fn take_entry(&self) -> Option<Box<dyn FnOnce() -> Box<dyn Any + Send> + Send>> {
         // Safety: We use interior mutability pattern here.
         // This is safe because entry is only taken once during task execution.
-        let ptr = &self.entry as *const _ as *mut Option<Box<dyn FnOnce() -> Box<dyn Any + Send> + Send>>;
+        let ptr =
+            &self.entry as *const _ as *mut Option<Box<dyn FnOnce() -> Box<dyn Any + Send> + Send>>;
         unsafe { (*ptr).take() }
     }
 

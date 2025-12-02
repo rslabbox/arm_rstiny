@@ -1,9 +1,12 @@
-use alloc::{sync::Arc};
+use alloc::sync::Arc;
 use kspin::SpinNoIrq;
 
 use crate::{
     config::kernel::TINYENV_SMP,
-    drivers::{power::system_off, timer::{busy_wait, current_nanoseconds}},
+    drivers::{
+        power::system_off,
+        timer::{busy_wait, current_nanoseconds},
+    },
     task::{
         manager::TaskManager,
         task_ref::TaskState,
@@ -76,7 +79,7 @@ pub fn task_timer_tick() {
 
 /// Spawns a new user task with the given entry function.
 /// Adds the task to the ready queue and returns a JoinHandle for synchronization.
-pub fn task_spawn<F, T>(name: &'static str,f: F) -> JoinHandle<T>
+pub fn task_spawn<F, T>(name: &'static str, f: F) -> JoinHandle<T>
 where
     F: FnOnce() -> T + Send + 'static,
     T: Send + 'static,
@@ -113,9 +116,7 @@ pub fn task_yield() {
     );
 
     curr_task.set_state(TaskState::Ready);
-    TASK_MANAGER
-        .lock()
-        .put_prev_task(curr_task.clone(), true);
+    TASK_MANAGER.lock().put_prev_task(curr_task.clone(), true);
 
     task_drop_to_idle(&curr_task);
 }
@@ -197,7 +198,11 @@ pub(crate) fn idle_loop() -> ! {
         if let Some(task) = pick_task {
             let idle_task = get_idle_task();
             task.set_state(TaskState::Running);
-            trace!("Idle Loop: Switching from idle to task id={},state={:?}", task.id(), task.state());
+            trace!(
+                "Idle Loop: Switching from idle to task id={},state={:?}",
+                task.id(),
+                task.state()
+            );
             // busy_wait(Duration::from_nanos(10));
             idle_task.switch_to(&task);
 

@@ -86,8 +86,6 @@ pub fn current_cpu() -> &'static PerCpu {
     unsafe { &*ptr }
 }
 
-
-
 /// Returns a mutable reference to the current CPU's PerCpu structure.
 ///
 /// # Safety

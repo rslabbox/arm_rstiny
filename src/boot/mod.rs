@@ -131,7 +131,7 @@ pub fn rust_main_secondary(cpu_id: usize) -> ! {
 
     // // Initialize task scheduler for this CPU (creates idle task, sets up percpu)
     crate::task::init_taskmanager_secondary(cpu_id);
-    
+
     // // Initialize GIC for this CPU
     crate::drivers::irq::init_secondary(cpu_id);
 

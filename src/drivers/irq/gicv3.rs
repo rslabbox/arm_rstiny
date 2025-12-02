@@ -145,7 +145,7 @@ pub fn init(gicd_virt: VirtAddr, gicr_virt: VirtAddr) -> TinyResult<()> {
 pub fn init_secondary(cpu_id: usize) {
     // Setup GIC CPU interface for this CPU
     let mut gic = GIC.lock();
-    
+
     if let Some(ref mut gic) = *gic {
         // gic.setup(cpu_id);
         gic.init_cpu(cpu_id);
@@ -153,9 +153,11 @@ pub fn init_secondary(cpu_id: usize) {
 
         // Enable group 1 for the current security state.
         GicCpuInterface::enable_group1(true);
-
     } else {
-        warn!("GIC not initialized, cannot setup CPU interface for CPU {}", cpu_id);
+        warn!(
+            "GIC not initialized, cannot setup CPU interface for CPU {}",
+            cpu_id
+        );
         return;
     }
 

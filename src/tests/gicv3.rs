@@ -1,17 +1,25 @@
-use core::{sync::atomic::{AtomicBool, Ordering}, time::Duration};
+use core::{
+    sync::atomic::{AtomicBool, Ordering},
+    time::Duration,
+};
 
 use arm_gic::{
     IntId,
     gicv3::{GicCpuInterface, SgiTarget, SgiTargetGroup},
 };
 
-use crate::{drivers::{irq::{irqset_enable, irqset_register}, timer::busy_wait}, hal::percpu};
+use crate::{
+    drivers::{
+        irq::{irqset_enable, irqset_register},
+        timer::busy_wait,
+    },
+    hal::percpu,
+};
 
 static IS_INTERRUPT: AtomicBool = AtomicBool::new(false);
 
 pub fn gicv3_tests() {
     warn!("\n=== GICv3 tests ===");
-
 
     let cpu_id = percpu::cpu_id();
     info!("Running On CPU ID: {}", cpu_id);

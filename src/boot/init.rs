@@ -3,7 +3,7 @@
 use memory_addr::pa;
 use page_table_entry::{GenericPTE, MappingFlags, aarch64::A64PTE};
 
-use crate::config::kernel::{BOOT_STACK_SIZE, TINYENV_SMP, SECONDARY_STACK_SIZE};
+use crate::config::kernel::{BOOT_STACK_SIZE, SECONDARY_STACK_SIZE, TINYENV_SMP};
 use crate::mm::Aligned4K;
 
 #[unsafe(link_section = ".bss.stack")]

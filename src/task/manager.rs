@@ -35,8 +35,6 @@ struct RunQueue {
     run_queue: LinkedList<NodeAdapter<TaskInner>>,
 }
 
-
-
 /// Task manager that handles all task scheduling operations.
 pub struct TaskManager {
     /// Scheduler for ready tasks.
