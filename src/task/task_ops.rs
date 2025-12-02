@@ -47,7 +47,11 @@ lazy_static::lazy_static! {
 }
 
 /// Creates a new task and returns its TaskRef.
-pub fn task_create(name: &'static str, entry: fn(), is_idle: bool) -> FifoTask<TaskInner> {
+pub fn task_create<F, T>(name: &'static str, entry: F, is_idle: bool) -> FifoTask<TaskInner>
+where
+    F: FnOnce() -> T + Send + 'static,
+    T: Send + 'static,
+{
     let id = TASK_PID.fetch_add(1, Ordering::SeqCst);
 
     let parent_id = if !is_idle {
@@ -72,7 +76,11 @@ pub fn task_timer_tick() {
 
 /// Spawns a new user task with the given entry function.
 /// Adds the task to the ready queue and returns a JoinHandle for synchronization.
-pub fn task_spawn(f: fn()) -> JoinHandle {
+pub fn task_spawn<F, T>(f: F) -> JoinHandle<T>
+where
+    F: FnOnce() -> T + Send + 'static,
+    T: Send + 'static,
+{
     let task = super::task_ops::task_create("task", f, false);
     let mut manager = TASK_MANAGER.lock();
     let task_ref = Arc::new(task);

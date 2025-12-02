@@ -143,6 +143,10 @@ pub enum TinyError {
     /// Thread join failed
     #[error("Thread Self join failed")]
     ThreadSelfJoinFailed,
+
+    /// Thread join failed - result not available or type mismatch
+    #[error("Thread join failed - result not available")]
+    ThreadJoinFailed,
 }
 
 /// Type alias for Result with TinyError as the error type.

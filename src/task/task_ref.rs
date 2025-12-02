@@ -1,4 +1,5 @@
 use core::{
+    any::Any,
     cell::UnsafeCell,
     sync::atomic::{AtomicU8, Ordering},
 };
@@ -58,8 +59,10 @@ pub struct TaskInner {
     context: UnsafeCell<TaskContext>,
     /// Kernel stack for this task. None for ROOT which uses bootstrap stack.
     kstack: Option<Box<[u8]>>,
-    /// Entry function pointer.
-    entry: Option<fn()>,
+    /// Entry function pointer (type-erased closure that returns a boxed Any).
+    entry: Option<Box<dyn FnOnce() -> Box<dyn Any + Send> + Send>>,
+    /// Task result (type-erased return value).
+    result: SpinNoIrq<Option<Box<dyn Any + Send>>>,
     /// is idle task
     is_idle: bool,
 }
@@ -70,13 +73,17 @@ unsafe impl Sync for TaskInner {}
 
 impl TaskInner {
     /// Creates a new task with the given parameters.
-    pub fn new(
+    pub fn new<F, T>(
         id: TaskId,
         name: &'static str,
         parent_id: TaskId,
         is_idle: bool,
-        entry: fn(),
-    ) -> Self {
+        entry: F,
+    ) -> Self
+    where
+        F: FnOnce() -> T + Send + 'static,
+        T: Send + 'static,
+    {
         // Allocate kernel stack
         let kstack = alloc::vec![0u8; TASK_STACK_SIZE].into_boxed_slice();
         let kstack_top = kstack.as_ptr() as usize + TASK_STACK_SIZE;
@@ -89,6 +96,10 @@ impl TaskInner {
             memory_addr::VirtAddr::from(0usize), // No TLS for now
         );
 
+        // Wrap the entry function to return a type-erased Box<dyn Any + Send>
+        let wrapped_entry: Box<dyn FnOnce() -> Box<dyn Any + Send> + Send> =
+            Box::new(move || Box::new(entry()) as Box<dyn Any + Send>);
+
         Self {
             id,
             name,
@@ -98,7 +109,8 @@ impl TaskInner {
             context: UnsafeCell::new(context),
             kstack: Some(kstack),
             is_idle,
-            entry: Some(entry),
+            entry: Some(wrapped_entry),
+            result: SpinNoIrq::new(None),
         }
     }
 
@@ -157,10 +169,27 @@ impl TaskInner {
         unsafe { &*self.context.get() }
     }
 
-    /// Returns the entry function if any.
+    /// Takes the entry function out of the task.
+    /// Returns None if the entry has already been taken.
     #[inline]
-    pub fn entry(&self) -> Option<fn()> {
-        self.entry
+    pub fn take_entry(&self) -> Option<Box<dyn FnOnce() -> Box<dyn Any + Send> + Send>> {
+        // Safety: We use interior mutability pattern here.
+        // This is safe because entry is only taken once during task execution.
+        let ptr = &self.entry as *const _ as *mut Option<Box<dyn FnOnce() -> Box<dyn Any + Send> + Send>>;
+        unsafe { (*ptr).take() }
+    }
+
+    /// Sets the task result (type-erased return value).
+    #[inline]
+    pub fn set_result(&self, result: Box<dyn Any + Send>) {
+        *self.result.lock() = Some(result);
+    }
+
+    /// Takes the task result out.
+    /// Returns None if the result has not been set or has already been taken.
+    #[inline]
+    pub fn take_result(&self) -> Option<Box<dyn Any + Send>> {
+        self.result.lock().take()
     }
 
     /// Checks if this is an idle task.
@@ -187,9 +216,10 @@ impl TaskInner {
 extern "C" fn task_entry_trampoline() {
     let task = super::current_task();
 
-    // Call the actual entry function
-    if let Some(entry) = task.entry() {
-        entry();
+    // Take and call the actual entry function, storing the result
+    if let Some(entry) = task.take_entry() {
+        let result = entry();
+        task.set_result(result);
     }
 
     // Task completed, exit

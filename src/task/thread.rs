@@ -1,15 +1,21 @@
-use core::time::Duration;
+use core::{marker::PhantomData, time::Duration};
 
 use crate::{hal::percpu, task::task_ops::{task_sleep, task_spawn, task_yield}, task::task_ref::TaskState};
 
-pub struct JoinHandle {
+/// A handle to a spawned task that can be used to wait for its completion
+/// and retrieve its return value.
+pub struct JoinHandle<T> {
     pub task: super::TaskRef,
+    _marker: PhantomData<T>,
 }
 
-impl JoinHandle {
+impl<T: Send + 'static> JoinHandle<T> {
     /// Creates a new JoinHandle from a task reference.
     pub(crate) fn new(task: super::TaskRef) -> Self {
-        Self { task }
+        Self {
+            task,
+            _marker: PhantomData,
+        }
     }
 
     /// Returns the task ID of the associated task.
@@ -17,14 +23,15 @@ impl JoinHandle {
         self.task.id()
     }
 
-    /// Waits for the associated task to finish.
+    /// Waits for the associated task to finish and returns its result.
     ///
     /// This function will block the current task until the target task exits.
     ///
     /// # Errors
     ///
     /// Returns `Err(JoinError::SelfJoin)` if attempting to join the current task.
-    pub fn join(self) -> crate::TinyResult<()> {
+    /// Returns `Err(JoinError::ResultNotAvailable)` if the result cannot be retrieved.
+    pub fn join(self) -> crate::TinyResult<T> {
         let curr_task = percpu::current_task();
 
         // Check for self-join (would deadlock)
@@ -37,14 +44,27 @@ impl JoinHandle {
             task_yield();
         }
 
-        Ok(())
+        // Retrieve and downcast the result
+        if let Some(result) = self.task.take_result() {
+            match result.downcast::<T>() {
+                Ok(value) => Ok(*value),
+                Err(_) => Err(crate::TinyError::ThreadJoinFailed),
+            }
+        } else {
+            Err(crate::TinyError::ThreadJoinFailed)
+        }
     }
 }
 
-/// Spawns a new thread with a function pointer.
+/// Spawns a new thread with a function.
 ///
-/// Returns a `JoinHandle` that can be used to wait for the thread to finish.
-pub fn spawn(f: fn()) -> JoinHandle {
+/// Returns a `JoinHandle` that can be used to wait for the thread to finish
+/// and retrieve its return value.
+pub fn spawn<F, T>(f: F) -> JoinHandle<T>
+where
+    F: FnOnce() -> T + Send + 'static,
+    T: Send + 'static,
+{
     task_spawn(f)
 }
 
