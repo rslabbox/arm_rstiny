@@ -64,12 +64,12 @@ impl<T: Send + 'static> JoinHandle<T> {
 ///
 /// Returns a `JoinHandle` that can be used to wait for the thread to finish
 /// and retrieve its return value.
-pub fn spawn<F, T>(f: F) -> JoinHandle<T>
+pub fn spawn<F, T>(name: &'static str, f: F) -> JoinHandle<T>
 where
     F: FnOnce() -> T + Send + 'static,
     T: Send + 'static,
 {
-    task_spawn(f)
+    task_spawn(name, f)
 }
 
 /// Puts the current thread to sleep for the specified duration.

@@ -26,10 +26,10 @@ fn test_periodic_tasks() {
     info!("=== Test: Periodic Tasks ===");
 
     // Spawn task 1
-    let task1 = thread::spawn(|| task1_periodic(50));
+    let task1 = thread::spawn("Periodic Task1", || task1_periodic(50));
 
     // Spawn task 2
-    let task2 = thread::spawn(|| task1_periodic(100));
+    let task2 = thread::spawn("Periodic Task2", || task1_periodic(100));
 
     info!(
         "Waiting for tasks {} and {} to complete...",
@@ -48,21 +48,21 @@ fn test_task_return_value() {
     info!("=== Test: Task Return Value ===");
 
     // Spawn a task that returns an integer
-    let handle1 = thread::spawn(|| {
+    let handle1 = thread::spawn("Return Task1", || {
         info!("[ReturnTask] Computing 21 + 21...");
         thread::sleep(Duration::from_millis(100));
         42i32
     });
 
     // Spawn a task that returns a string
-    let handle2 = thread::spawn(|| {
+    let handle2 = thread::spawn("Return Task2", || {
         info!("[ReturnTask] Building greeting...");
         thread::sleep(Duration::from_millis(50));
         "Hello from task!"
     });
 
     // Spawn a task that returns a tuple
-    let handle3 = thread::spawn(|| {
+    let handle3 = thread::spawn("Return Task3", || {
         info!("[ReturnTask] Computing tuple...");
         (100u64, 200u64, 300u64)
     });
@@ -77,7 +77,10 @@ fn test_task_return_value() {
     assert!(result2 == "Hello from task!", "Unexpected string result");
 
     let result3 = handle3.join().expect("Failed to join task 3");
-    info!("[ReturnTask] Task 3 returned: ({}, {}, {})", result3.0, result3.1, result3.2);
+    info!(
+        "[ReturnTask] Task 3 returned: ({}, {}, {})",
+        result3.0, result3.1, result3.2
+    );
     assert!(result3 == (100, 200, 300), "Unexpected tuple result");
 
     info!("=== Task Return Value Test Passed! ===");

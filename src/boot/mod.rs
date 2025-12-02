@@ -111,7 +111,7 @@ pub fn rust_main(_cpu_id: usize, _arg: usize) -> ! {
     boot_secondary_cpus();
 
     // Create main user task as child of ROOT
-    crate::task::thread::spawn(crate::main);
+    crate::task::thread::spawn("Main Task", crate::main);
 
     // Signal all CPUs to start scheduling
     START_SCHEDULING.store(1, Ordering::SeqCst);

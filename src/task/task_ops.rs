@@ -76,12 +76,12 @@ pub fn task_timer_tick() {
 
 /// Spawns a new user task with the given entry function.
 /// Adds the task to the ready queue and returns a JoinHandle for synchronization.
-pub fn task_spawn<F, T>(f: F) -> JoinHandle<T>
+pub fn task_spawn<F, T>(name: &'static str,f: F) -> JoinHandle<T>
 where
     F: FnOnce() -> T + Send + 'static,
     T: Send + 'static,
 {
-    let task = super::task_ops::task_create("task", f, false);
+    let task = super::task_ops::task_create(name, f, false);
     let mut manager = TASK_MANAGER.lock();
     let task_ref = Arc::new(task);
     manager.put_prev_task(task_ref.clone(), false);
