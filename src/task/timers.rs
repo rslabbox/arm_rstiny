@@ -3,18 +3,11 @@ use core::sync::atomic::{AtomicU64, Ordering};
 use kspin::SpinNoIrq;
 use weak_map::WeakMap;
 
-use crate::{
-    drivers::timer::{current_nanoseconds, timer_lists::TimerList},
-    task::{task_ops::task_unblock, task_ref::TaskState},
-};
+use crate::{drivers::timer::current_nanoseconds, task::task_ref::TaskState};
 
 type WeakTaskRef = alloc::sync::Weak<super::SchedulableTask>;
 
 static TIMER_KEY: AtomicU64 = AtomicU64::new(0);
-
-lazy_static::lazy_static! {
-    static ref TIMER_LIST: SpinNoIrq<TimerList> = SpinNoIrq::new(TimerList::new());
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct TimerKey {
@@ -34,12 +27,6 @@ pub(crate) fn set_timer(deadline: u64, task: &super::TaskRef) -> Option<TimerKey
         deadline,
         key: TIMER_KEY.fetch_add(1, Ordering::AcqRel),
     };
-    info!(
-        "Task Set Timer: id={}, deadline={}, state={:?}",
-        task.id(),
-        deadline,
-        task.state()
-    );
     wheel.insert(key, task);
 
     Some(key)
@@ -67,6 +54,12 @@ pub(crate) fn check_events() {
                         .lock()
                         .put_prev_task(task.clone(), false);
                     core::mem::take(maybe_task);
+                } else {
+                    error!(
+                        "Failed to wake up task id={} from timer: current state={:?}",
+                        task.id(),
+                        task.state()
+                    );
                 }
             }
         } else {

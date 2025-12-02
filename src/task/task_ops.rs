@@ -75,7 +75,7 @@ pub fn task_spawn(f: fn()) -> JoinHandle {
     let task_ref = Arc::new(task);
     manager.put_prev_task(task_ref.clone(), false);
     ACTIVE_TASK_COUNT.fetch_add(1, Ordering::SeqCst);
-    JoinHandle { task: task_ref }
+    JoinHandle::new(task_ref)
 }
 
 pub fn task_exit(curr_task: TaskRef) {
@@ -102,13 +102,6 @@ pub fn task_exit(curr_task: TaskRef) {
 
     unreachable!("task exited!");
 }
-
-pub fn task_unblock(task: &TaskRef) {
-    task.set_state(TaskState::Ready);
-
-    TASK_MANAGER.lock().put_prev_task(task.clone(), false);
-}
-
 
 pub fn task_sleep(duration: Duration) {
     let nanos = duration.as_nanos() as u64;
@@ -153,10 +146,10 @@ pub(crate) fn idle_loop() -> ! {
     loop {
         let pick_task = TASK_MANAGER.lock().pick_next_task(cpu_id);
         if let Some(task) = pick_task {
-            let curr_task = crate::hal::percpu::current_task();
-            info!("Idle Loop: Switching from idle to task id={},state={:?}", task.id(), task.state());
+            let idle_task = get_idle_task();
             task.set_state(TaskState::Running);
-            curr_task.switch_to(&task);
+            trace!("Idle Loop: Switching from idle to task id={},state={:?}", task.id(), task.state());
+            idle_task.switch_to(&task);
             continue;
         }
         // No task available, wait for interrupt

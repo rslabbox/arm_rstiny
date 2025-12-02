@@ -14,6 +14,8 @@ fn task1_periodic(interval: u64) {
             percpu::cpu_id()
         );
 
+        thread::yield_now();
+
         thread::sleep(Duration::from_millis(interval));
     }
     info!("[Task {id}] Completed!");
