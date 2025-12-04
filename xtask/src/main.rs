@@ -5,8 +5,8 @@ use std::process::exit;
 mod utils;
 use utils::{project_root, TaskResult};
 
-mod plugins;
 mod dwarf;
+mod plugins;
 
 #[macro_use]
 extern crate log;
@@ -50,7 +50,7 @@ enum Commands {
 }
 
 fn main() {
-    // 初始化 env_logger
+    // init env_logger
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
         .format_timestamp(None)
         .init();

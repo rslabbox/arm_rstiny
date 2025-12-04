@@ -147,6 +147,21 @@ pub enum TinyError {
     /// Thread join failed - result not available or type mismatch
     #[error("Thread join failed - result not available")]
     ThreadJoinFailed,
+
+    // ============================================================================
+    // Command Related Errors
+    // ============================================================================
+    /// Command not found
+    #[error("Command not found: {0}")]
+    CommandNotFound(&'static str),
+
+    /// Command execution failed
+    #[error("Command execution failed: {0}")]
+    CommandFailed(&'static str),
+
+    /// Invalid command arguments
+    #[error("Invalid command arguments: {0}")]
+    CommandInvalidArgs(&'static str),
 }
 
 /// Type alias for Result with TinyError as the error type.

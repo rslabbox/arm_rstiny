@@ -1,6 +1,6 @@
 use crate::utils::TaskResult;
 use serde::Deserialize;
-use xshell::{cmd, Shell};
+use xshell::Shell;
 
 #[derive(Debug, Deserialize, Default)]
 struct RunConfig {
@@ -102,7 +102,10 @@ impl RunTask {
             args.push("-nographic".to_string());
         }
 
-        cmd!(sh, "qemu-system-aarch64 {args...}").run()?;
+        let cmds = String::from("qemu-system-aarch64 ") + &args.join(" ");
+        info!("    QEMU Command: {}", cmds);
+
+        duct::cmd!("bash", "-c", cmds).run()?;
 
         Ok(())
     }

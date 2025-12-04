@@ -13,4 +13,4 @@ pub use dw_apb::{getchar, init_early, irq_handler, putchar, puts};
 
 #[allow(unused)]
 #[cfg(feature = "qemu")]
-pub use pl011::{getchar, init_early, irq_handler, putchar, puts};
+pub use pl011::{getchar, init_early, putchar, puts};

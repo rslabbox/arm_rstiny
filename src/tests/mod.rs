@@ -1,4 +1,5 @@
 //! Test module.
+#![allow(unused)]
 
 mod allocator;
 mod gicv3;

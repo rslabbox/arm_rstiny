@@ -8,3 +8,5 @@ pub mod logger;
 pub mod print;
 
 pub use logger::init as init_logger;
+pub mod tty;
+pub use tty::start_tty;
