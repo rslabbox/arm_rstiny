@@ -15,6 +15,7 @@ static COMMANDS: &[&dyn Command] = &[
     &commands::ECHO,
     &commands::ENV,
     &commands::HISTORY_CMD,
+    &commands::TEST,
     &commands::EXIT,
 ];
 
