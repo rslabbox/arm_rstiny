@@ -1,7 +1,7 @@
 //! Help command - displays available commands and their usage.
 
 use crate::user::{Command, CommandContext};
-use crate::{TinyError, TinyResult};
+use crate::TinyResult;
 
 /// Help command instance.
 pub static HELP: HelpCommand = HelpCommand;
@@ -67,7 +67,7 @@ fn show_command_help(name: &str) -> TinyResult<()> {
     } else {
         println!("Unknown command: {}", name);
         println!("Type 'help' to see available commands.");
-        Err(TinyError::CommandNotFound("command not found"))
+        anyhow::bail!("Command not found: {}", name)
     }
 }
 

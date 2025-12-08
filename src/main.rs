@@ -32,7 +32,7 @@ pub use console::print;
 extern crate alloc;
 extern crate axbacktrace;
 
-pub use error::{TinyError, TinyResult};
+pub use error::TinyResult;
 
 /// User main task entry point.
 fn main() {

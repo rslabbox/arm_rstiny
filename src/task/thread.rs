@@ -40,7 +40,7 @@ impl<T: Send + 'static> JoinHandle<T> {
 
         // Check for self-join (would deadlock)
         if curr_task.id() == self.task.id() {
-            return Err(crate::TinyError::ThreadSelfJoinFailed);
+            anyhow::bail!("Cannot join thread from itself");
         }
 
         // Poll until the target task exits
@@ -52,10 +52,10 @@ impl<T: Send + 'static> JoinHandle<T> {
         if let Some(result) = self.task.take_result() {
             match result.downcast::<T>() {
                 Ok(value) => Ok(*value),
-                Err(_) => Err(crate::TinyError::ThreadJoinFailed),
+                Err(_) => anyhow::bail!("Failed to downcast thread result"),
             }
         } else {
-            Err(crate::TinyError::ThreadJoinFailed)
+            anyhow::bail!("Thread join failed: result not available")
         }
     }
 }

@@ -1,7 +1,6 @@
 //! DesignWare APB UART driver.
 
 use crate::TinyResult;
-use crate::error::TinyError;
 use dw_apb_uart::DW8250;
 use kspin::SpinNoIrq;
 use lazyinit::LazyInit;
@@ -51,5 +50,5 @@ pub fn init_early(uart_base: VirtAddr) {
 #[allow(unused)]
 pub fn irq_handler(irq: usize) -> TinyResult<()> {
     error!("UART IRQ Handler invoked unexpectedly: {irq}");
-    Err(TinyError::UartIrqUnexpected(irq))
+    anyhow::bail!("UART IRQ handler invoked unexpectedly: {}", irq)
 }

@@ -5,7 +5,6 @@ use log::{Level, LevelFilter, Log, Metadata, Record};
 
 use crate::TinyResult;
 use crate::config::kernel::TINYENV_LOG;
-use crate::error::TinyError;
 use crate::println;
 
 pub struct SimpleLogger;
@@ -68,7 +67,7 @@ impl Log for SimpleLogger {
 /// Initialize the logger.
 pub fn init() -> TinyResult<()> {
     println!("Initializing logger with level: {}", TINYENV_LOG);
-    log::set_logger(&SimpleLogger).map_err(|_| TinyError::LoggerInitFailed)?;
+    log::set_logger(&SimpleLogger).map_err(|_| anyhow::anyhow!("Failed to initialize logger"))?;
     log::set_max_level(match TINYENV_LOG {
         "error" => LevelFilter::Error,
         "warn" => LevelFilter::Warn,

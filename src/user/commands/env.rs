@@ -5,7 +5,7 @@ use alloc::string::{String, ToString};
 use spin::Mutex;
 
 use crate::user::{Command, CommandContext};
-use crate::{TinyError, TinyResult};
+use crate::TinyResult;
 
 /// Global environment variables storage.
 pub static ENV_VARS: Mutex<BTreeMap<String, String>> = Mutex::new(BTreeMap::new());
@@ -74,10 +74,11 @@ impl Command for EnvCommand {
                 Ok(())
             }
             Some("get") => {
+                use anyhow::Context;
                 let name = ctx
                     .args
                     .get(1)
-                    .ok_or(TinyError::CommandInvalidArgs("Usage: env get <name>"))?;
+                    .context("Usage: env get <name>")?;
                 match get_var(name) {
                     Some(value) => {
                         println!("{}", value);
@@ -85,14 +86,15 @@ impl Command for EnvCommand {
                     }
                     None => {
                         println!("Variable '{}' not set", name);
-                        Err(TinyError::CommandFailed("variable not found"))
+                        anyhow::bail!("Variable not found: {}", name)
                     }
                 }
             }
             Some("set") => {
-                let name = ctx.args.get(1).ok_or(TinyError::CommandInvalidArgs(
+                use anyhow::Context;
+                let name = ctx.args.get(1).context(
                     "Usage: env set <name> <value>",
-                ))?;
+                )?;
                 // Join remaining args as value (allows spaces in value)
                 let value = if ctx.args.len() > 2 {
                     // Get everything after "set <name> "
@@ -106,22 +108,23 @@ impl Command for EnvCommand {
                 Ok(())
             }
             Some("unset") => {
+                use anyhow::Context;
                 let name = ctx
                     .args
                     .get(1)
-                    .ok_or(TinyError::CommandInvalidArgs("Usage: env unset <name>"))?;
+                    .context("Usage: env unset <name>")?;
                 if unset_var(name).is_some() {
                     println!("Unset '{}'", name);
                     Ok(())
                 } else {
                     println!("Variable '{}' not set", name);
-                    Err(TinyError::CommandFailed("variable not found"))
+                    anyhow::bail!("Variable not found: {}", name)
                 }
             }
             Some(unknown) => {
                 println!("Unknown subcommand: {}", unknown);
                 println!("Type 'help env' for usage.");
-                Err(TinyError::CommandInvalidArgs("unknown subcommand"))
+                anyhow::bail!("Unknown subcommand: {}", unknown)
             }
         }
     }

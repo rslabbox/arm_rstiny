@@ -12,7 +12,6 @@ use memory_addr::VirtAddr;
 use spin::Mutex;
 
 use crate::TinyResult;
-use crate::error::TinyError;
 use crate::hal::percpu;
 
 /// The type of an interrupt handler.
@@ -114,14 +113,15 @@ pub fn irqset_disable(intid: IntId) {
 
 /// Initialize the GICv3 interrupt controller.
 pub fn init(gicd_virt: VirtAddr, gicr_virt: VirtAddr) -> TinyResult<()> {
+    use anyhow::Context;
     // Base addresses of the GICv3 distributor and redistributor.
     let gicd_base_address: *mut Gicd = gicd_virt.as_mut_ptr_of();
     let gicr_base_address: *mut GicrSgi = gicr_virt.as_mut_ptr_of();
 
     let gicd = unsafe {
-        UniqueMmioPointer::new(NonNull::new(gicd_base_address).ok_or(TinyError::InvalidGicPointer)?)
+        UniqueMmioPointer::new(NonNull::new(gicd_base_address).context("Invalid GIC distributor pointer")?)
     };
-    let gicr = NonNull::new(gicr_base_address).ok_or(TinyError::InvalidGicPointer)?;
+    let gicr = NonNull::new(gicr_base_address).context("Invalid GIC redistributor pointer")?;
 
     // Initialise the GIC.
     let mut gic = unsafe { GicV3::new(gicd, gicr, crate::config::kernel::TINYENV_SMP, false) };

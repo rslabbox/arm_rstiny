@@ -5,7 +5,6 @@ use core::sync::atomic::{AtomicBool, Ordering};
 use log::*;
 
 use crate::TinyResult;
-use crate::error::TinyError;
 
 const PSCI_0_2_FN_BASE: u32 = 0x84000000;
 const PSCI_0_2_64BIT: u32 = 0x40000000;
@@ -16,19 +15,19 @@ const PSCI_0_2_FN64_CPU_ON: u32 = PSCI_0_2_FN_BASE + PSCI_0_2_64BIT + 3;
 
 static PSCI_METHOD_HVC: AtomicBool = AtomicBool::new(false);
 
-/// Convert PSCI error code to TinyError
-fn psci_code_to_error(code: i32) -> TinyError {
+/// Convert PSCI error code to error message
+fn psci_code_to_error(code: i32) -> &'static str {
     match code {
-        -1 => TinyError::PsciNotSupported,
-        -2 => TinyError::PsciInvalidParams,
-        -3 => TinyError::PsciDenied,
-        -4 => TinyError::PsciAlreadyOn,
-        -5 => TinyError::PsciOnPending,
-        -6 => TinyError::PsciInternalFailure,
-        -7 => TinyError::PsciNotPresent,
-        -8 => TinyError::PsciDisabled,
-        -9 => TinyError::PsciInvalidAddress,
-        _ => TinyError::PsciUnknownCode(code),
+        -1 => "PSCI operation not supported",
+        -2 => "PSCI invalid parameters",
+        -3 => "PSCI operation denied",
+        -4 => "PSCI CPU already on",
+        -5 => "PSCI CPU on pending",
+        -6 => "PSCI internal failure",
+        -7 => "PSCI CPU not present",
+        -8 => "PSCI CPU disabled",
+        -9 => "PSCI invalid address",
+        _ => "PSCI unknown error code",
     }
 }
 
@@ -71,7 +70,7 @@ fn psci_call(func: u32, arg0: usize, arg1: usize, arg2: usize) -> TinyResult<()>
     if ret == 0 {
         Ok(())
     } else {
-        Err(psci_code_to_error(ret as i32))
+        anyhow::bail!("{} (code: {})", psci_code_to_error(ret as i32), ret as i32)
     }
 }
 
@@ -95,7 +94,7 @@ pub fn init(method: &'static str) -> TinyResult<()> {
             PSCI_METHOD_HVC.store(true, Ordering::Release);
             Ok(())
         }
-        _ => Err(TinyError::PsciUnknownMethod(method)),
+        _ => anyhow::bail!("Unknown PSCI method: {}", method),
     }
 }
 

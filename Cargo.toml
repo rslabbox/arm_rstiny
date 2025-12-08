@@ -24,7 +24,7 @@ lazyinit = "0.2"
 lazy_static = { version = "1.5.0", features = ["spin_no_std"] }
 arm-gic = "0.7.1"
 int_ratio = "0.1"
-thiserror = { version = "2.0.17", default-features = false }
+anyhow = { version = "1.0", default-features = false }
 arm_pl011 = "0.1"
 tock-registers = "0.10.1"
 const_env = "0.1.5"
