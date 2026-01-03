@@ -3,7 +3,7 @@
 use memory_addr::pa;
 use page_table_entry::{GenericPTE, MappingFlags, aarch64::A64PTE};
 
-use crate::config::kernel::{BOOT_STACK_SIZE, SECONDARY_STACK_SIZE, TINYENV_SMP};
+use crate::config::kernel::{BOOT_STACK_SIZE, KIMAGE_VADDR, SECONDARY_STACK_SIZE, TINYENV_SMP};
 use crate::mm::Aligned4K;
 
 #[unsafe(link_section = ".bss.stack")]
@@ -14,58 +14,172 @@ pub static mut BOOT_STACK: [u8; BOOT_STACK_SIZE] = [0; BOOT_STACK_SIZE];
 pub static mut SECONDARY_STACKS: [[u8; SECONDARY_STACK_SIZE]; TINYENV_SMP - 1] =
     [[0; SECONDARY_STACK_SIZE]; TINYENV_SMP - 1];
 
+/// L0 page table for TTBR1 (kernel high address mapping).
 #[unsafe(link_section = ".data")]
 pub static mut BOOT_PT_L0: Aligned4K<[A64PTE; 512]> = Aligned4K::new([A64PTE::empty(); 512]);
 
+/// L1 page table for TTBR1 (kernel high address mapping).
 #[unsafe(link_section = ".data")]
-static mut BOOT_PT_L1: Aligned4K<[A64PTE; 512]> = Aligned4K::new([A64PTE::empty(); 512]);
+pub static mut BOOT_PT_L1: Aligned4K<[A64PTE; 512]> = Aligned4K::new([A64PTE::empty(); 512]);
 
-/// Initialize boot page table.
+/// L2 page table for TTBR1 kernel mapping (2MB blocks).
+/// This is used to map the kernel at precise 2MB aligned addresses.
+#[unsafe(link_section = ".data")]
+pub static mut BOOT_PT_L2: Aligned4K<[A64PTE; 512]> = Aligned4K::new([A64PTE::empty(); 512]);
+
+/// L0 page table for TTBR0 (identity mapping).
+#[unsafe(link_section = ".data")]
+pub static mut BOOT_PT_L0_IDENT: Aligned4K<[A64PTE; 512]> = Aligned4K::new([A64PTE::empty(); 512]);
+
+/// L1 page table for TTBR0 (identity mapping).
+#[unsafe(link_section = ".data")]
+pub static mut BOOT_PT_L1_IDENT: Aligned4K<[A64PTE; 512]> = Aligned4K::new([A64PTE::empty(); 512]);
+
+/// L2 page table for TTBR0 identity mapping (2MB blocks).
+#[unsafe(link_section = ".data")]
+pub static mut BOOT_PT_L2_IDENT: Aligned4K<[A64PTE; 512]> = Aligned4K::new([A64PTE::empty(); 512]);
+
+/// 1GB block size for page table mapping.
+const GB_BLOCK_SIZE: usize = 1 << 30; // 1GB = 0x4000_0000
+
+/// Initialize boot page table with position-independent physical address.
 ///
-/// This creates a simple identity mapping for the kernel and device memory.
-/// The page table will be replaced by a more sophisticated one later.
+/// This creates:
+/// 1. Identity mapping (PA -> PA) in TTBR0 for the kernel's physical location
+/// 2. High address mapping (VA -> PA) in TTBR1 for the kernel virtual addresses
+///
+/// # Arguments
+/// * `phys_base` - The actual physical address where the kernel was loaded (2MB aligned)
 ///
 /// # Safety
 ///
 /// This function is unsafe as it modifies global static variables.
+/// Must be called before MMU is enabled, accessing page tables via physical addresses.
 #[unsafe(no_mangle)]
-pub unsafe fn init_boot_page_table() {
+pub unsafe fn init_boot_page_table(phys_base: usize) {
+    // Calculate the 1GB block index for the kernel's physical location
+    let kernel_gb_index = phys_base / GB_BLOCK_SIZE;
+    let kernel_gb_base = kernel_gb_index * GB_BLOCK_SIZE;
+
+    // Calculate the 1GB block index for kernel virtual address
+    // KIMAGE_VADDR = 0xffff_0000_8000_0000
+    // For TTBR1, we use the lower 48 bits: 0x0000_8000_0000
+    // L0 index = bits[47:39] = 0
+    // L1 index = bits[38:30] = 2 (for 0x8000_0000)
+    let kimage_offset = KIMAGE_VADDR & 0x0000_FFFF_FFFF_FFFF; // Lower 48 bits
+    let kimage_l1_index = (kimage_offset >> 30) & 0x1FF;
+
+    // Calculate the offset to convert link address (VA) to physical address (PA)
+    // va_to_pa_offset = KIMAGE_VADDR - phys_base
+    // PA = VA - va_to_pa_offset
+    let va_to_pa_offset = KIMAGE_VADDR.wrapping_sub(phys_base);
+
+    // Helper to convert link address to physical address
+    let to_phys = |va: usize| -> usize { va.wrapping_sub(va_to_pa_offset) };
+
     unsafe {
-        // 0x0000_0000_0000 ~ 0x0080_0000_0000, table
-        BOOT_PT_L0[0] = A64PTE::new_table(pa!(&raw mut BOOT_PT_L1 as usize));
+        // Get physical addresses of all page tables and convert to pointers
+        // This is critical: MMU is off, we must access via physical addresses!
+        let pt_l0_ident_pa = to_phys(&raw mut BOOT_PT_L0_IDENT as usize);
+        let pt_l1_ident_pa = to_phys(&raw mut BOOT_PT_L1_IDENT as usize);
+        let pt_l0_pa = to_phys(&raw mut BOOT_PT_L0 as usize);
+        let pt_l1_pa = to_phys(&raw mut BOOT_PT_L1 as usize);
 
-        // Map low memory (0-4GB) for kernel and normal devices
-        // 0x0000_0000_0000..0x0000_4000_0000, 1G block, normal memory
-        BOOT_PT_L1[0] = A64PTE::new_page(
-            pa!(0x0),
-            MappingFlags::READ | MappingFlags::WRITE | MappingFlags::EXECUTE,
-            true,
-        );
-        // 1G block, normal memory
-        BOOT_PT_L1[1] = A64PTE::new_page(
-            pa!(0x40000000),
-            MappingFlags::READ | MappingFlags::WRITE | MappingFlags::EXECUTE,
-            true,
-        );
-        // 1G block, normal memory
-        BOOT_PT_L1[2] = A64PTE::new_page(
-            pa!(0x80000000),
-            MappingFlags::READ | MappingFlags::WRITE | MappingFlags::EXECUTE,
-            true,
-        );
-        // 1G block, device memory. From 0xfb000000
-        BOOT_PT_L1[3] = A64PTE::new_page(
-            pa!(0xc0000000),
-            MappingFlags::READ | MappingFlags::WRITE | MappingFlags::DEVICE,
-            true,
-        );
+        // Convert to mutable pointers for writing
+        let pt_l0_ident = pt_l0_ident_pa as *mut A64PTE;
+        let pt_l1_ident = pt_l1_ident_pa as *mut A64PTE;
+        let pt_l0 = pt_l0_pa as *mut A64PTE;
+        let pt_l1 = pt_l1_pa as *mut A64PTE;
 
-        // Map PCIe ECAM configuration space at 0x0a_40c00000 (42GB)
-        // This is required for PCI device enumeration
-        BOOT_PT_L1[41] = A64PTE::new_page(
-            pa!(0x0a_40000000), // 42GB, 1G block aligned
-            MappingFlags::READ | MappingFlags::WRITE | MappingFlags::DEVICE,
+        // ============================================================
+        // Setup TTBR0: Identity mapping for physical addresses
+        // This allows code to continue running after MMU is enabled
+        // ============================================================
+
+        // L0[0] -> L1_IDENT table (covers 0x0000_0000_0000 ~ 0x0080_0000_0000)
+        pt_l0_ident.add(0).write(A64PTE::new_table(pa!(pt_l1_ident_pa)));
+
+        // Map the 1GB block containing the kernel (identity: PA -> PA)
+        pt_l1_ident.add(kernel_gb_index).write(A64PTE::new_page(
+            pa!(kernel_gb_base),
+            MappingFlags::READ | MappingFlags::WRITE | MappingFlags::EXECUTE,
+            true, // 1GB block
+        ));
+
+        // Map additional blocks for device memory if needed
+        // For QEMU virt: UART at 0x0900_0000, GIC at 0x0800_0000 (all in first 1GB)
+        // For OrangePi5: devices at 0xfe00_0000+ (4th 1GB block, index 3)
+        if kernel_gb_index != 0 {
+            pt_l1_ident.add(0).write(A64PTE::new_page(
+                pa!(0x0),
+                MappingFlags::READ | MappingFlags::WRITE | MappingFlags::EXECUTE,
+                true,
+            ));
+        }
+        if kernel_gb_index != 3 {
+            pt_l1_ident.add(3).write(A64PTE::new_page(
+                pa!(0xc0000000),
+                MappingFlags::READ | MappingFlags::WRITE | MappingFlags::DEVICE,
+                true,
+            ));
+        }
+
+        // ============================================================
+        // Setup TTBR1: High address mapping for kernel virtual addresses
+        // Maps 0xffff_0000_xxxx_xxxx -> physical addresses
+        // ============================================================
+
+        // L0[0] -> L1 table
+        pt_l0.add(0).write(A64PTE::new_table(pa!(pt_l1_pa)));
+
+        // Map the kernel image: KIMAGE_VADDR -> phys_base
+        // The L1 index for 0xffff_0000_8000_0000 is 2
+        pt_l1.add(kimage_l1_index).write(A64PTE::new_page(
+            pa!(kernel_gb_base),
+            MappingFlags::READ | MappingFlags::WRITE | MappingFlags::EXECUTE,
             true,
-        );
+        ));
+
+        // Map low memory for device access through high addresses
+        // 0xffff_0000_0000_0000 -> 0x0 (first 1GB, devices for QEMU)
+        if kimage_l1_index != 0 {
+            pt_l1.add(0).write(A64PTE::new_page(
+                pa!(0x0),
+                MappingFlags::READ | MappingFlags::WRITE | MappingFlags::EXECUTE,
+                true,
+            ));
+        }
+
+        // Map 0xffff_0000_4000_0000 -> 0x4000_0000 (second 1GB)
+        if kimage_l1_index != 1 {
+            pt_l1.add(1).write(A64PTE::new_page(
+                pa!(0x40000000),
+                MappingFlags::READ | MappingFlags::WRITE | MappingFlags::EXECUTE,
+                true,
+            ));
+        }
+
+        // Map device memory: 0xffff_0000_c000_0000 -> 0xc000_0000 (OrangePi5 devices)
+        if kimage_l1_index != 3 {
+            pt_l1.add(3).write(A64PTE::new_page(
+                pa!(0xc0000000),
+                MappingFlags::READ | MappingFlags::WRITE | MappingFlags::DEVICE,
+                true,
+            ));
+        }
     }
+}
+
+/// Get the physical address of the TTBR0 page table (identity mapping).
+#[inline]
+#[allow(dead_code)]
+pub fn boot_pt_ttbr0_paddr() -> usize {
+    &raw mut BOOT_PT_L0_IDENT as usize
+}
+
+/// Get the physical address of the TTBR1 page table (kernel mapping).
+#[inline]
+#[allow(dead_code)]
+pub fn boot_pt_ttbr1_paddr() -> usize {
+    &raw mut BOOT_PT_L0 as usize
 }

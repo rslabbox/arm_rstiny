@@ -6,15 +6,19 @@ use memory_addr::PhysAddr;
 
 /// Configures and enables the MMU on the current CPU.
 ///
-/// It first sets `MAIR_EL1`, `TCR_EL1`, `TTBR0_EL1`, `TTBR1_EL1` registers to
-/// the conventional values, and then enables the MMU and caches by setting
-/// `SCTLR_EL1`.
+/// This function sets up separate page tables for TTBR0 (identity mapping)
+/// and TTBR1 (kernel high address mapping) to support position-independent
+/// kernel loading.
+///
+/// # Arguments
+/// * `ttbr0_paddr` - Physical address of the L0 page table for identity mapping
+/// * `ttbr1_paddr` - Physical address of the L0 page table for kernel mapping
 ///
 /// # Safety
 ///
 /// This function is unsafe as it changes the address translation configuration.
 #[unsafe(no_mangle)]
-pub unsafe fn init_mmu(root_paddr: PhysAddr) {
+pub unsafe fn init_mmu(ttbr0_paddr: PhysAddr, ttbr1_paddr: PhysAddr) {
     use page_table_entry::aarch64::MemAttr;
 
     MAIR_EL1.set(MemAttr::MAIR_VALUE);
@@ -35,10 +39,10 @@ pub unsafe fn init_mmu(root_paddr: PhysAddr) {
     TCR_EL1.write(TCR_EL1::IPS::Bits_48 + tcr_flags0 + tcr_flags1);
     barrier::isb(barrier::SY);
 
-    // Set both TTBR0 and TTBR1
-    let root_paddr = root_paddr.as_usize() as u64;
-    TTBR0_EL1.set(root_paddr);
-    TTBR1_EL1.set(root_paddr);
+    // Set TTBR0 for identity mapping (low addresses, used during transition)
+    // Set TTBR1 for kernel mapping (high addresses, 0xffff_xxxx_xxxx_xxxx)
+    TTBR0_EL1.set(ttbr0_paddr.as_usize() as u64);
+    TTBR1_EL1.set(ttbr1_paddr.as_usize() as u64);
 
     // Flush the entire TLB
     crate::hal::flush_tlb(None);

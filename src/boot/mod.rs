@@ -14,7 +14,10 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 
 use memory_addr::pa;
 
-use crate::{config::kernel::PHYS_VIRT_OFFSET, hal::percpu, mm::phys_to_virt, println};
+use crate::config::kernel::{KIMAGE_VADDR, kernel_phys_base, set_kernel_phys_base};
+use crate::hal::percpu;
+use crate::mm::phys_to_virt;
+use crate::println;
 
 use crate::config::kernel::TINYENV_SMP;
 
@@ -49,9 +52,11 @@ fn backtrace_init() {
 /// Returns the physical address of the secondary CPU entry point.
 ///
 /// This is used by the primary CPU to start secondary CPUs via PSCI cpu_on.
+/// Uses runtime-computed physical base address for position-independent loading.
 pub fn secondary_entry_paddr() -> usize {
-    // The entry point virtual address minus the offset gives the physical address
-    entry::_start_secondary as *const () as usize - PHYS_VIRT_OFFSET
+    // Calculate: entry_vaddr - KIMAGE_VADDR + KERNEL_PHYS_BASE
+    let entry_vaddr = entry::_start_secondary as *const () as usize;
+    entry_vaddr.wrapping_sub(KIMAGE_VADDR).wrapping_add(kernel_phys_base())
 }
 
 /// Boot all secondary CPUs using PSCI.
@@ -72,7 +77,15 @@ fn boot_secondary_cpus() {
 }
 
 /// Rust main entry point (called from assembly).
-pub fn rust_main(_cpu_id: usize, _arg: usize) -> ! {
+///
+/// # Arguments
+/// * `cpu_id` - The CPU ID
+/// * `dtb` - Device tree blob pointer
+/// * `kernel_phys_base` - The physical address where kernel was loaded (computed at boot)
+pub fn rust_main(_cpu_id: usize, _dtb: usize, kernel_phys_base_arg: usize) -> ! {
+    // Store the kernel physical base address first (before any address translation)
+    set_kernel_phys_base(kernel_phys_base_arg);
+
     // Initialize kernel subsystems
     // Clear BSS, initialize exceptions, early UART
     crate::hal::clear_bss();
@@ -88,6 +101,7 @@ pub fn rust_main(_cpu_id: usize, _arg: usize) -> ! {
     );
 
     println!("Board: {}", crate::config::BOARD_NAME);
+    println!("Kernel loaded at physical address: {:#x}", kernel_phys_base());
 
     crate::console::init_logger().expect("Failed to initialize logger");
 

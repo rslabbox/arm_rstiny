@@ -3,8 +3,6 @@
 #![no_std]
 #![no_main]
 #![feature(alloc_error_handler)]
-#![feature(const_result_trait_fn)]
-#![feature(const_option_ops)]
 #![feature(const_trait_impl)]
 
 mod boot;
