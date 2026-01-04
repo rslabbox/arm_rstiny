@@ -69,27 +69,25 @@ pub unsafe fn init_boot_page_table(phys_base: usize) {
     let kimage_offset = TINYENV_KIMAGE_VADDR & 0x0000_FFFF_FFFF_FFFF; // Lower 48 bits
     let kimage_l1_index = (kimage_offset >> 30) & 0x1FF;
 
-    // Calculate the offset to convert link address (VA) to physical address (PA)
-    // va_to_pa_offset = KIMAGE_VADDR - phys_base
-    // PA = VA - va_to_pa_offset
-    let va_to_pa_offset = TINYENV_KIMAGE_VADDR.wrapping_sub(phys_base);
-
-    // Helper to convert link address to physical address
-    let to_phys = |va: usize| -> usize { va.wrapping_sub(va_to_pa_offset) };
-
     unsafe {
         // Get physical addresses of all page tables and convert to pointers
         // This is critical: MMU is off, we must access via physical addresses!
-        let pt_l0_ident_pa = to_phys(&raw mut BOOT_PT_L0_IDENT as usize);
-        let pt_l1_ident_pa = to_phys(&raw mut BOOT_PT_L1_IDENT as usize);
-        let pt_l0_pa = to_phys(&raw mut BOOT_PT_L0 as usize);
-        let pt_l1_pa = to_phys(&raw mut BOOT_PT_L1 as usize);
+        // Since we are running with MMU off, and code is position independent (using adrp),
+        // taking the address of a static variable returns its physical address.
+        let pt_l0_ident_pa = &raw mut BOOT_PT_L0_IDENT as usize;
+        let pt_l1_ident_pa = &raw mut BOOT_PT_L1_IDENT as usize;
+        let pt_l2_ident_pa = &raw mut BOOT_PT_L2_IDENT as usize;
+        let pt_l0_pa = &raw mut BOOT_PT_L0 as usize;
+        let pt_l1_pa = &raw mut BOOT_PT_L1 as usize;
+        let pt_l2_pa = &raw mut BOOT_PT_L2 as usize;
 
         // Convert to mutable pointers for writing
         let pt_l0_ident = pt_l0_ident_pa as *mut A64PTE;
         let pt_l1_ident = pt_l1_ident_pa as *mut A64PTE;
+        let pt_l2_ident = pt_l2_ident_pa as *mut A64PTE;
         let pt_l0 = pt_l0_pa as *mut A64PTE;
         let pt_l1 = pt_l1_pa as *mut A64PTE;
+        let pt_l2 = pt_l2_pa as *mut A64PTE;
 
         // ============================================================
         // Setup TTBR0: Identity mapping for physical addresses
@@ -100,11 +98,20 @@ pub unsafe fn init_boot_page_table(phys_base: usize) {
         pt_l0_ident.add(0).write(A64PTE::new_table(pa!(pt_l1_ident_pa)));
 
         // Map the 1GB block containing the kernel (identity: PA -> PA)
-        pt_l1_ident.add(kernel_gb_index).write(A64PTE::new_page(
-            pa!(kernel_gb_base),
-            MappingFlags::READ | MappingFlags::WRITE | MappingFlags::EXECUTE,
-            true, // 1GB block
-        ));
+        // We use L2 table for precise 2MB mapping to match kernel load address alignment
+        pt_l1_ident.add(kernel_gb_index).write(A64PTE::new_table(pa!(pt_l2_ident_pa)));
+
+        // Fill L2_IDENT with 512 consecutive 2MB blocks covering the 1GB region
+        // Each entry maps: (kernel_gb_index * 1GB) + (i * 2MB)
+        let mut pa_start = kernel_gb_base;
+        for i in 0..512 {
+            pt_l2_ident.add(i).write(A64PTE::new_page(
+                pa!(pa_start),
+                MappingFlags::READ | MappingFlags::WRITE | MappingFlags::EXECUTE,
+                true, // 2MB block
+            ));
+            pa_start += 0x200000; // 2MB
+        }
 
         // Map additional blocks for device memory if needed
         // For QEMU virt: UART at 0x0900_0000, GIC at 0x0800_0000 (all in first 1GB)
@@ -134,11 +141,25 @@ pub unsafe fn init_boot_page_table(phys_base: usize) {
 
         // Map the kernel image: KIMAGE_VADDR -> phys_base
         // The L1 index for 0xffff_0000_8000_0000 is 2
-        pt_l1.add(kimage_l1_index).write(A64PTE::new_page(
-            pa!(kernel_gb_base),
-            MappingFlags::READ | MappingFlags::WRITE | MappingFlags::EXECUTE,
-            true,
-        ));
+        // We use L2 table for precise 2MB mapping
+        pt_l1.add(kimage_l1_index).write(A64PTE::new_table(pa!(pt_l2_pa)));
+
+        // Calculate kimage_l2_index
+        let kimage_l2_index = (kimage_offset >> 21) & 0x1FF;
+        
+        // Calculate start_pa = phys_base - (kimage_l2_index * 2MB)
+        // This ensures that VA corresponding to kimage_l2_index maps to phys_base
+        let start_pa = phys_base.wrapping_sub(kimage_l2_index * 0x200000);
+        
+        let mut pa_current = start_pa;
+        for i in 0..512 {
+            pt_l2.add(i).write(A64PTE::new_page(
+                pa!(pa_current),
+                MappingFlags::READ | MappingFlags::WRITE | MappingFlags::EXECUTE,
+                true, // 2MB block
+            ));
+            pa_current += 0x200000; // 2MB
+        }
 
         // Map low memory for device access through high addresses
         // 0xffff_0000_0000_0000 -> 0x0 (first 1GB, devices for QEMU)

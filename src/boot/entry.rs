@@ -134,131 +134,16 @@ unsafe extern "C" fn _start_primary() {
         bl      {enable_fp}
 
         // ============================================================
-        // Get physical addresses of all page tables
+        // Setup page tables using Rust function
+        // ============================================================
+        mov     x0, x21                     // phys_base
+        bl      {init_boot_page_table}
+
+        // ============================================================
+        // Get physical addresses of page tables for MMU enable
         // ============================================================
         adrp    x10, {boot_pt_l0_ident}     // x10 = L0_IDENT PA
-        adrp    x11, {boot_pt_l1_ident}     // x11 = L1_IDENT PA
-        adrp    x23, {boot_pt_l2_ident}     // x23 = L2_IDENT PA
         adrp    x12, {boot_pt_l0}           // x12 = L0 PA
-        adrp    x13, {boot_pt_l1}           // x13 = L1 PA
-        adrp    x24, {boot_pt_l2}           // x24 = L2 PA
-
-        // Calculate indices for kernel physical address
-        // kernel_l1_idx = (phys_base >> 30) & 0x1FF
-        // kernel_l2_idx = (phys_base >> 21) & 0x1FF
-        // kernel_2mb_base = phys_base & ~(2MB-1)
-        mov     x14, x21
-        lsr     x14, x14, #30
-        and     x14, x14, #0x1FF            // x14 = L1 index for identity map
-        
-        mov     x15, x21
-        lsr     x15, x15, #21
-        and     x15, x15, #0x1FF            // x15 = L2 index for identity map
-        
-        mov     x16, x21
-        and     x16, x16, #0xFFFFFFFFFFE00000  // x16 = 2MB aligned phys_base
-
-        // ============================================================
-        // Setup TTBR0 page table (identity mapping using 2MB blocks)
-        // ============================================================
-
-        // L0[0] = table descriptor -> L1
-        orr     x0, x11, #0x3
-        str     x0, [x10]
-
-        // L1[kernel_l1_idx] = table descriptor -> L2
-        orr     x0, x23, #0x3
-        str     x0, [x11, x14, lsl #3]
-
-        // Fill L2 with 512 consecutive 2MB blocks covering the 1GB region
-        // Each entry maps: (kernel_l1_idx * 1GB) + (i * 2MB)
-        // Block attributes: 0x701 = AF | Inner-Shareable | AttrIdx=0 | Block
-        //                   0x705 = AF | Inner-Shareable | AttrIdx=1 | Block (Normal memory)
-        mov     x0, x14
-        lsl     x0, x0, #30                 // x0 = L1_idx * 1GB (base PA for this GB region)
-        mov     x1, #0                      // i = 0
-        mov     x2, #0x200000               // 2MB increment
-        mov     x3, #0x705                  // Normal memory block attrs
-    3:
-        orr     x4, x0, x3                  // PA | attrs
-        str     x4, [x23, x1, lsl #3]       // L2_IDENT[i] = entry
-        add     x0, x0, x2                  // PA += 2MB
-        add     x1, x1, #1                  // i++
-        cmp     x1, #512
-        b.lt    3b
-
-        // Also map L1[0] for low addresses (if kernel not at L1[0])
-        cbz     x14, 4f
-        mov     x0, #0x705                  // 1GB block at PA 0
-        str     x0, [x11]
-    4:
-        // L1[3] for device memory at 0xC0000000
-        cmp     x14, #3
-        b.eq    5f
-        mov     x0, #0xC0000000
-        mov     x1, #0x401                  // Device attrs
-        orr     x0, x0, x1
-        str     x0, [x11, #24]
-    5:
-
-        // ============================================================
-        // Setup TTBR1 page table (kernel high address mapping)
-        // Using 2MB blocks for precise mapping of KIMAGE_VADDR -> phys_base
-        // ============================================================
-
-        // L0[0] = table descriptor -> L1
-        orr     x0, x13, #0x3
-        str     x0, [x12]
-
-        // L1[0] = 1GB block for 0xffff_0000_0000_0000 -> 0x0
-        mov     x0, #0x705
-        str     x0, [x13]
-
-        // L1[1] = 1GB block for 0xffff_0000_4000_0000 -> 0x4000_0000
-        mov     x0, #0x40000000
-        mov     x1, #0x705
-        orr     x0, x0, x1
-        str     x0, [x13, #8]
-
-        // L1[kimage_l1_idx] = table descriptor -> L2 (for KIMAGE_VADDR region)
-        // This allows 2MB granularity for kernel mapping
-        ldr     x5, ={kimage_vaddr}
-        lsr     x5, x5, #30
-        and     x5, x5, #0x1FF          // x5 = kimage_l1_idx
-        orr     x0, x24, #0x3
-        str     x0, [x13, x5, lsl #3]
-
-        // L1[3] = 1GB block for device memory (0xC0000000)
-        mov     x0, #0xC0000000
-        mov     x1, #0x401
-        orr     x0, x0, x1
-        str     x0, [x13, #24]
-
-        // Fill L2 for kernel mapping
-        // We need to map VA corresponding to KIMAGE_VADDR to phys_base.
-        // KIMAGE_VADDR corresponds to L2 index: kimage_l2_idx
-        // So L2[kimage_l2_idx] -> phys_base
-        // L2[i] -> phys_base + (i - kimage_l2_idx) * 2MB
-        
-        // Calculate kimage_l2_idx
-        ldr     x5, ={kimage_vaddr}
-        lsr     x5, x5, #21
-        and     x5, x5, #0x1FF          // x5 = kimage_l2_idx
-        
-        // Calculate start_pa = phys_base - (kimage_l2_idx * 2MB)
-        lsl     x6, x5, #21             // x6 = offset
-        sub     x0, x21, x6             // x0 = start_pa
-
-        mov     x1, #0                      // i = 0
-        mov     x2, #0x200000               // 2MB
-        mov     x3, #0x705                  // Normal memory attrs
-    6:
-        orr     x4, x0, x3
-        str     x4, [x24, x1, lsl #3]       // L2[i]
-        add     x0, x0, x2
-        add     x1, x1, #1
-        cmp     x1, #512
-        b.lt    6b
 
         // ============================================================
         // Enable MMU
@@ -280,14 +165,11 @@ unsafe extern "C" fn _start_primary() {
         b      .",
         switch_to_el1 = sym switch_to_el1,
         init_mmu = sym super::mmu::init_mmu,
+        init_boot_page_table = sym super::init::init_boot_page_table,
         enable_fp = sym enable_fp,
         boot_stack = sym super::init::BOOT_STACK,
         boot_pt_l0 = sym super::init::BOOT_PT_L0,
-        boot_pt_l1 = sym super::init::BOOT_PT_L1,
-        boot_pt_l2 = sym super::init::BOOT_PT_L2,
         boot_pt_l0_ident = sym super::init::BOOT_PT_L0_IDENT,
-        boot_pt_l1_ident = sym super::init::BOOT_PT_L1_IDENT,
-        boot_pt_l2_ident = sym super::init::BOOT_PT_L2_IDENT,
         kimage_vaddr = const TINYENV_KIMAGE_VADDR,
         boot_stack_size = const crate::config::kernel::BOOT_STACK_SIZE,
         rust_main = sym super::rust_main,
