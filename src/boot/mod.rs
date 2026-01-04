@@ -14,7 +14,7 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 
 use memory_addr::pa;
 
-use crate::config::kernel::{KIMAGE_VADDR, kernel_phys_base, set_kernel_phys_base};
+use crate::config::kernel::{TINYENV_KIMAGE_VADDR, kernel_phys_base, set_kernel_phys_base};
 use crate::hal::percpu;
 use crate::mm::phys_to_virt;
 use crate::println;
@@ -56,7 +56,7 @@ fn backtrace_init() {
 pub fn secondary_entry_paddr() -> usize {
     // Calculate: entry_vaddr - KIMAGE_VADDR + KERNEL_PHYS_BASE
     let entry_vaddr = entry::_start_secondary as *const () as usize;
-    entry_vaddr.wrapping_sub(KIMAGE_VADDR).wrapping_add(kernel_phys_base())
+    entry_vaddr.wrapping_sub(TINYENV_KIMAGE_VADDR).wrapping_add(kernel_phys_base())
 }
 
 /// Boot all secondary CPUs using PSCI.

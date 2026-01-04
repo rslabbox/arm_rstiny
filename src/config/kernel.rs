@@ -8,7 +8,8 @@ pub const BOOT_STACK_SIZE: usize = 0x40000;
 /// Kernel image virtual address (link address).
 /// This is the virtual address where the kernel is linked.
 /// The kernel uses 2MB block mapping at L2 level for position-independent loading.
-pub const KIMAGE_VADDR: usize = 0xffff_0000_8000_0000;
+#[env_item]
+pub const TINYENV_KIMAGE_VADDR: usize = 0xffff_0000_8000_0000;
 
 /// Runtime kernel physical base address.
 /// This is set during early boot when the actual load address is determined.

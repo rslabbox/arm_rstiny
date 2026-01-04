@@ -3,7 +3,7 @@
 use memory_addr::pa;
 use page_table_entry::{GenericPTE, MappingFlags, aarch64::A64PTE};
 
-use crate::config::kernel::{BOOT_STACK_SIZE, KIMAGE_VADDR, SECONDARY_STACK_SIZE, TINYENV_SMP};
+use crate::config::kernel::{BOOT_STACK_SIZE, TINYENV_KIMAGE_VADDR, SECONDARY_STACK_SIZE, TINYENV_SMP};
 use crate::mm::Aligned4K;
 
 #[unsafe(link_section = ".bss.stack")]
@@ -66,13 +66,13 @@ pub unsafe fn init_boot_page_table(phys_base: usize) {
     // For TTBR1, we use the lower 48 bits: 0x0000_8000_0000
     // L0 index = bits[47:39] = 0
     // L1 index = bits[38:30] = 2 (for 0x8000_0000)
-    let kimage_offset = KIMAGE_VADDR & 0x0000_FFFF_FFFF_FFFF; // Lower 48 bits
+    let kimage_offset = TINYENV_KIMAGE_VADDR & 0x0000_FFFF_FFFF_FFFF; // Lower 48 bits
     let kimage_l1_index = (kimage_offset >> 30) & 0x1FF;
 
     // Calculate the offset to convert link address (VA) to physical address (PA)
     // va_to_pa_offset = KIMAGE_VADDR - phys_base
     // PA = VA - va_to_pa_offset
-    let va_to_pa_offset = KIMAGE_VADDR.wrapping_sub(phys_base);
+    let va_to_pa_offset = TINYENV_KIMAGE_VADDR.wrapping_sub(phys_base);
 
     // Helper to convert link address to physical address
     let to_phys = |va: usize| -> usize { va.wrapping_sub(va_to_pa_offset) };

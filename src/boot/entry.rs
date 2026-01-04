@@ -3,7 +3,7 @@
 use aarch64_cpu::asm::barrier;
 use aarch64_cpu::registers::*;
 
-use crate::config::kernel::KIMAGE_VADDR;
+use crate::config::kernel::TINYENV_KIMAGE_VADDR;
 
 /// Enable FP/SIMD instructions by setting the `FPEN` field in `CPACR_EL1`.
 pub fn enable_fp() {
@@ -220,10 +220,13 @@ unsafe extern "C" fn _start_primary() {
         orr     x0, x0, x1
         str     x0, [x13, #8]
 
-        // L1[2] = table descriptor -> L2 (for KIMAGE_VADDR region)
+        // L1[kimage_l1_idx] = table descriptor -> L2 (for KIMAGE_VADDR region)
         // This allows 2MB granularity for kernel mapping
+        ldr     x5, ={kimage_vaddr}
+        lsr     x5, x5, #30
+        and     x5, x5, #0x1FF          // x5 = kimage_l1_idx
         orr     x0, x24, #0x3
-        str     x0, [x13, #16]
+        str     x0, [x13, x5, lsl #3]
 
         // L1[3] = 1GB block for device memory (0xC0000000)
         mov     x0, #0xC0000000
@@ -232,24 +235,20 @@ unsafe extern "C" fn _start_primary() {
         str     x0, [x13, #24]
 
         // Fill L2 for kernel mapping
-        // VA 0xffff_0000_8000_0000 + i*2MB -> phys_base + i*2MB
-        // The key: we start mapping from the beginning of the 1GB VA region,
-        // but map to phys_base (not to the beginning of the 1GB PA region)
-        //
-        // For VA = 0xffff_0000_8000_0000, L2 index = 0
-        // We want L2[0] to map to phys_base (e.g., 0x4020_0000)
-        // 
-        // But wait - this is the insight from Linux:
-        // VA[20:0] = offset within 2MB block (passes through)
-        // To map VA 0xffff_0000_8000_0000 to PA 0x4020_0000:
-        // - L2 index for VA = (0xffff_0000_8000_0000 >> 21) & 0x1FF = 0
-        // - We need L2[0] = 0x4020_0000 | attrs
-        //
-        // But the kernel code is linked at 0xffff_0000_8000_0000, meaning
-        // the first instruction is at that address. To map correctly:
-        // L2[i] should map VA (0xffff_0000_8000_0000 + i*2MB) to PA (phys_base + i*2MB)
+        // We need to map VA corresponding to KIMAGE_VADDR to phys_base.
+        // KIMAGE_VADDR corresponds to L2 index: kimage_l2_idx
+        // So L2[kimage_l2_idx] -> phys_base
+        // L2[i] -> phys_base + (i - kimage_l2_idx) * 2MB
+        
+        // Calculate kimage_l2_idx
+        ldr     x5, ={kimage_vaddr}
+        lsr     x5, x5, #21
+        and     x5, x5, #0x1FF          // x5 = kimage_l2_idx
+        
+        // Calculate start_pa = phys_base - (kimage_l2_idx * 2MB)
+        lsl     x6, x5, #21             // x6 = offset
+        sub     x0, x21, x6             // x0 = start_pa
 
-        mov     x0, x21                     // Start from phys_base (2MB aligned)
         mov     x1, #0                      // i = 0
         mov     x2, #0x200000               // 2MB
         mov     x3, #0x705                  // Normal memory attrs
@@ -289,7 +288,7 @@ unsafe extern "C" fn _start_primary() {
         boot_pt_l0_ident = sym super::init::BOOT_PT_L0_IDENT,
         boot_pt_l1_ident = sym super::init::BOOT_PT_L1_IDENT,
         boot_pt_l2_ident = sym super::init::BOOT_PT_L2_IDENT,
-        kimage_vaddr = const KIMAGE_VADDR,
+        kimage_vaddr = const TINYENV_KIMAGE_VADDR,
         boot_stack_size = const crate::config::kernel::BOOT_STACK_SIZE,
         rust_main = sym super::rust_main,
     )
@@ -346,7 +345,7 @@ pub unsafe extern "C" fn _start_secondary() {
         boot_pt = sym super::init::BOOT_PT_L0,
         boot_pt_ident = sym super::init::BOOT_PT_L0_IDENT,
         init_mmu = sym super::mmu::init_mmu,
-        kimage_vaddr = const KIMAGE_VADDR,
+        kimage_vaddr = const TINYENV_KIMAGE_VADDR,
         rust_main_secondary = sym super::rust_main_secondary,
     )
 }

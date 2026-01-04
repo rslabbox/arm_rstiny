@@ -11,6 +11,8 @@ struct BuildConfig {
     tool_path: String,
     load_address: usize,
     entry_point: usize,
+    #[serde(default = "default_virt_addr")]
+    virt_addr: String,
     #[serde(default)]
     features: Option<Vec<String>>,
     #[serde(default = "default_smp")]
@@ -19,6 +21,10 @@ struct BuildConfig {
 
 fn default_smp() -> u16 {
     1
+}
+
+fn default_virt_addr() -> String {
+    "0xffff_0000_8000_0000".to_string()
 }
 
 pub struct BuildTask {
@@ -95,18 +101,38 @@ impl BuildTask {
         }
         info!("    Output Dir: {}", self.elf_name().display());
 
+        // Generate linker script from template
+        let template_path = project_root.join("link.lds.template");
+        let template = std::fs::read_to_string(&template_path)
+            .map_err(|e| crate::utils::TaskError::Other(format!("Failed to read linker template: {}", e)))?;
+        
+        let virt_addr_val = u64::from_str_radix(
+            &self.build_config.virt_addr.trim().replace("_", "").trim_start_matches("0x"), 
+            16
+        ).map_err(|e| crate::utils::TaskError::Other(format!("Invalid virt_addr: {}", e)))?;
+        
+        let virt_addr_str = format!("0x{:x}", virt_addr_val);
+        let linker_script = template.replace("{BASE_ADDRESS}", &virt_addr_str);
+        
+        let output_dir = self.elf_name().parent().unwrap().to_path_buf();
+        std::fs::create_dir_all(&output_dir)?;
+        let linker_path = output_dir.join("link.lds");
+        std::fs::write(&linker_path, linker_script)?;
+        info!("    Generated linker script: {}", linker_path.display());
+
         // Prepare environment variables
-        let linker_path = "link.lds";
-        let rustflags = format!("-C link-arg=-T{} -C force-frame-pointers=yes", linker_path);
+        let rustflags = format!("-C link-arg=-T{} -C force-frame-pointers=yes", linker_path.display());
         let log_level = &self.build_config.log;
         let build_time = chrono::Local::now().to_string();
         let smp = self.build_config.smp.to_string();
+        let kimage_vaddr = virt_addr_str;
 
         // Set environment variables for cargo
         sh.set_var("RUSTFLAGS", &rustflags);
         sh.set_var("TINYENV_LOG", log_level);
         sh.set_var("TINYENV_BUILD_TIME", &build_time);
         sh.set_var("TINYENV_SMP", &smp);
+        sh.set_var("TINYENV_KIMAGE_VADDR", &kimage_vaddr);
 
         // Build cargo command
         let target = &self.build_config.target;
