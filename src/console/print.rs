@@ -4,35 +4,9 @@
 //! multiple CPUs from being interleaved.
 
 use core::fmt::{self, Write};
-use core::sync::atomic::{AtomicBool, Ordering};
+use crate::hal::Mutex;
 
-/// Simple spinlock for print synchronization across CPUs.
-/// Uses acquire-release ordering for proper SMP synchronization.
-struct PrintLock;
-
-static PRINT_LOCK_FLAG: AtomicBool = AtomicBool::new(false);
-
-impl PrintLock {
-    /// Acquire the print lock, spinning until it's available.
-    #[inline]
-    fn acquire() {
-        while PRINT_LOCK_FLAG
-            .compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed)
-            .is_err()
-        {
-            // Spin with a hint to reduce contention
-            while PRINT_LOCK_FLAG.load(Ordering::Relaxed) {
-                core::hint::spin_loop();
-            }
-        }
-    }
-
-    /// Release the print lock.
-    #[inline]
-    fn release() {
-        PRINT_LOCK_FLAG.store(false, Ordering::Release);
-    }
-}
+static PRINT_LOCK: Mutex<()> = Mutex::new(());
 
 /// Buffer size for formatting output before sending to UART.
 /// This should be large enough for most log lines.
@@ -85,15 +59,12 @@ impl Drop for BufferedPrinter {
 
 pub fn _print(args: fmt::Arguments) {
     // Acquire global print lock - only one CPU can print at a time
-    PrintLock::acquire();
+    let _guard = PRINT_LOCK.lock();
 
     let mut printer = BufferedPrinter::new();
     // Ignore write errors - printing should not panic
     let _ = printer.write_fmt(args);
     // Flush happens automatically in Drop
-
-    drop(printer); // Ensure flush before releasing lock
-    PrintLock::release();
 }
 
 /// Simple console print operation.

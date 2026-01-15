@@ -29,7 +29,7 @@ impl<T> Deref for FifoTask<T> {
     }
 }
 
-intrusive_adapter!(NodeAdapter<T> = Arc<FifoTask<T>>: FifoTask<T> { link: LinkedListAtomicLink });
+intrusive_adapter!(NodeAdapter<T> = Arc<FifoTask<T>>: FifoTask<T> { link => LinkedListAtomicLink });
 
 struct RunQueue {
     run_queue: LinkedList<NodeAdapter<TaskInner>>,

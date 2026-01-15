@@ -8,10 +8,11 @@ use arm_gic::{
     },
 };
 use core::ptr::NonNull;
+use lazyinit::LazyInit;
 use memory_addr::VirtAddr;
 
-use crate::{TinyResult, hal::Mutex};
 use crate::hal::percpu;
+use crate::{TinyResult, hal::Mutex};
 
 /// The type of an interrupt handler.
 pub type IrqHandler = fn(usize);
@@ -24,7 +25,7 @@ static IRQ_HANDLER_TABLE: Mutex<[Option<IrqHandler>; MAX_IRQ_COUNT]> =
     Mutex::new([None; MAX_IRQ_COUNT]);
 
 /// Global GIC instance.
-static GIC: Mutex<Option<GicV3>> = Mutex::new(None);
+static GIC: LazyInit<Mutex<GicV3>> = LazyInit::new();
 
 /// IRQ handler called from exception vector.
 pub fn irq_handler() {
@@ -69,45 +70,37 @@ pub fn irqset_unregister(intid: IntId) {
 /// Enable the given interrupt.
 pub fn irqset_enable(intid: IntId, priority: u8) {
     let mut gic = GIC.lock();
-    if let Some(ref mut gic) = *gic {
-        let intid_val = u32::from(intid);
-        // Determine the core ID based on interrupt type
-        // SGIs and PPIs are per-core, use current CPU ID
-        let core_id = if intid_val < 32 {
-            Some(percpu::cpu_id())
-        } else {
-            None // SPIs are shared
-        };
-        // Set interrupt priority
-        gic.set_interrupt_priority(intid, core_id, priority)
-            .unwrap_or_else(|e| error!("Failed to set priority for IRQ {:?}: {:?}", intid, e));
-        gic.enable_interrupt(intid, core_id, true)
-            .unwrap_or_else(|e| error!("Failed to enable IRQ {:?}: {:?}", intid, e));
-        debug!("IRQ enabled: {:?} on CPU {}", intid, percpu::cpu_id());
+    let intid_val = u32::from(intid);
+    // Determine the core ID based on interrupt type
+    // SGIs and PPIs are per-core, use current CPU ID
+    let core_id = if intid_val < 32 {
+        Some(percpu::cpu_id())
     } else {
-        warn!("GIC not initialized, cannot enable IRQ: {:?}", intid);
-    }
+        None // SPIs are shared
+    };
+    // Set interrupt priority
+    gic.set_interrupt_priority(intid, core_id, priority)
+        .unwrap_or_else(|e| error!("Failed to set priority for IRQ {:?}: {:?}", intid, e));
+    gic.enable_interrupt(intid, core_id, true)
+        .unwrap_or_else(|e| error!("Failed to enable IRQ {:?}: {:?}", intid, e));
+    debug!("IRQ enabled: {:?} on CPU {}", intid, percpu::cpu_id());
 }
 
 /// Disable the given interrupt.
 #[allow(dead_code)]
 pub fn irqset_disable(intid: IntId) {
     let mut gic = GIC.lock();
-    if let Some(ref mut gic) = *gic {
-        let intid_val = u32::from(intid);
-        // Determine the core ID based on interrupt type
-        // SGIs and PPIs are per-core, use current CPU ID
-        let core_id = if intid_val < 32 {
-            Some(percpu::cpu_id())
-        } else {
-            None // SPIs are shared
-        };
-
-        let _ = gic.enable_interrupt(intid, core_id, false);
-        debug!("IRQ disabled: {:?}", intid);
+    let intid_val = u32::from(intid);
+    // Determine the core ID based on interrupt type
+    // SGIs and PPIs are per-core, use current CPU ID
+    let core_id = if intid_val < 32 {
+        Some(percpu::cpu_id())
     } else {
-        warn!("GIC not initialized, cannot disable IRQ: {:?}", intid);
-    }
+        None // SPIs are shared
+    };
+
+    let _ = gic.enable_interrupt(intid, core_id, false);
+    debug!("IRQ disabled: {:?}", intid);
 }
 
 /// Initialize the GICv3 interrupt controller.
@@ -118,7 +111,9 @@ pub fn init(gicd_virt: VirtAddr, gicr_virt: VirtAddr) -> TinyResult<()> {
     let gicr_base_address: *mut GicrSgi = gicr_virt.as_mut_ptr_of();
 
     let gicd = unsafe {
-        UniqueMmioPointer::new(NonNull::new(gicd_base_address).context("Invalid GIC distributor pointer")?)
+        UniqueMmioPointer::new(
+            NonNull::new(gicd_base_address).context("Invalid GIC distributor pointer")?,
+        )
     };
     let gicr = NonNull::new(gicr_base_address).context("Invalid GIC redistributor pointer")?;
 
@@ -127,7 +122,7 @@ pub fn init(gicd_virt: VirtAddr, gicr_virt: VirtAddr) -> TinyResult<()> {
     gic.setup(0);
 
     // Store the GIC instance globally for later use
-    *GIC.lock() = Some(gic);
+    GIC.init_once(Mutex::new(gic));
 
     // Set priority mask to allow all priorities
     GicCpuInterface::set_priority_mask(0xff);
@@ -145,20 +140,12 @@ pub fn init_secondary(cpu_id: usize) {
     // Setup GIC CPU interface for this CPU
     let mut gic = GIC.lock();
 
-    if let Some(ref mut gic) = *gic {
-        // gic.setup(cpu_id);
-        gic.init_cpu(cpu_id);
-        // gic.gicd.configure_default_settings();
+    // gic.setup(cpu_id);
+    gic.init_cpu(cpu_id);
+    // gic.gicd.configure_default_settings();
 
-        // Enable group 1 for the current security state.
-        GicCpuInterface::enable_group1(true);
-    } else {
-        warn!(
-            "GIC not initialized, cannot setup CPU interface for CPU {}",
-            cpu_id
-        );
-        return;
-    }
+    // Enable group 1 for the current security state.
+    GicCpuInterface::enable_group1(true);
 
     // Set priority mask to allow all priorities
     GicCpuInterface::set_priority_mask(0xff);
