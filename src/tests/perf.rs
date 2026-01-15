@@ -13,7 +13,7 @@ use crate::hal::percpu::cpu_id;
 use crate::task::thread;
 
 /// Matrix size for the benchmark (N x N)
-const MATRIX_SIZE: usize = 200;
+const MATRIX_SIZE: usize = 100;
 
 /// Number of iterations for the benchmark
 const ITERATIONS: usize = 50;
@@ -139,7 +139,7 @@ fn bench_multi_core() -> u64 {
         // Each worker gets a unique seed based on its index
         let seed = 42u64 + i as u64;
 
-        let handle = thread::spawn(move || {
+        let handle = thread::spawn("Perf Task", move || {
             let cpu = cpu_id();
             debug!("[Worker {}] Starting on CPU {}, iterations: {}", i, cpu, iters);
 

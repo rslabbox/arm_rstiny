@@ -2,8 +2,8 @@
 
 use alloc::collections::BTreeMap;
 use alloc::string::{String, ToString};
-use spin::Mutex;
 
+use crate::hal::Mutex;
 use crate::user::{Command, CommandContext};
 use crate::TinyResult;
 

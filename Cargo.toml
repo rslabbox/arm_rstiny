@@ -17,8 +17,6 @@ aarch64-cpu = "11.2.0"
 
 log = "0.4"
 talc = "4.4.3"
-kspin = { version = "0.1", features = ["smp"] }
-spin = "0.10.0"
 dw_apb_uart = "0.1"
 lazyinit = "0.2"
 lazy_static = { version = "1.5.0", features = ["spin_no_std"] }
@@ -32,6 +30,7 @@ weak-map = "0.1"
 axbacktrace = { version = "0.1.1", features = ["alloc", "dwarf"] }
 intrusive-collections = { version = "0.9.7", features = ["nightly"] }
 rand = { version = "0.9", default-features = false, features = ["small_rng"] }
+lock_api = "0.4.14"
 
 [profile.dev]
 panic = "abort"

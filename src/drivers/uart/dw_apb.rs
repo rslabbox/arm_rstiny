@@ -2,11 +2,11 @@
 
 use crate::TinyResult;
 use dw_apb_uart::DW8250;
-use kspin::SpinNoIrq;
+use crate::hal::Mutex;
 use lazyinit::LazyInit;
 use memory_addr::VirtAddr;
 
-static UART: LazyInit<SpinNoIrq<DW8250>> = LazyInit::new();
+static UART: LazyInit<Mutex<DW8250>> = LazyInit::new();
 
 fn do_putchar(uart: &mut DW8250, c: u8) {
     match c {
@@ -42,7 +42,7 @@ pub fn getchar() -> Option<u8> {
 /// UART early initialization.
 #[allow(unused)]
 pub fn init_early(uart_base: VirtAddr) {
-    UART.init_once(SpinNoIrq::new(DW8250::new(uart_base.as_usize())));
+    UART.init_once(Mutex::new(DW8250::new(uart_base.as_usize())));
     UART.lock().init();
 }
 

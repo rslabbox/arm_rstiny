@@ -9,9 +9,8 @@ use arm_gic::{
 };
 use core::ptr::NonNull;
 use memory_addr::VirtAddr;
-use spin::Mutex;
 
-use crate::TinyResult;
+use crate::{TinyResult, hal::Mutex};
 use crate::hal::percpu;
 
 /// The type of an interrupt handler.

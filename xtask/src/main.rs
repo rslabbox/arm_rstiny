@@ -32,6 +32,10 @@ pub struct BuildOptions {
     /// Build features (comma-separated, e.g., "qemu,net")
     #[arg(long)]
     pub features: Option<String>,
+
+    /// Enable QEMU debug (waits for gdb connection)
+    #[arg(long)]
+    pub debug: bool,
 }
 
 #[derive(Debug, Subcommand)]

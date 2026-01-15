@@ -2,11 +2,12 @@
 
 use arm_gic::IntId;
 use arm_pl011::Pl011Uart;
-use kspin::SpinNoIrq;
 use lazyinit::LazyInit;
 use memory_addr::VirtAddr;
 
-static UART: LazyInit<SpinNoIrq<Pl011Uart>> = LazyInit::new();
+use crate::hal::Mutex;
+
+static UART: LazyInit<Mutex<Pl011Uart>> = LazyInit::new();
 
 fn do_putchar(uart: &mut Pl011Uart, c: u8) {
     match c {
@@ -40,6 +41,6 @@ pub fn getchar() -> Option<u8> {
 
 /// Early stage initialization of the PL011 UART driver.
 pub fn init_early(uart_base: VirtAddr, _irq_num: IntId) {
-    UART.init_once(SpinNoIrq::new(Pl011Uart::new(uart_base.as_mut_ptr())));
+    UART.init_once(Mutex::new(Pl011Uart::new(uart_base.as_mut_ptr())));
     UART.lock().init();
 }

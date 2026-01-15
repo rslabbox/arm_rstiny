@@ -8,7 +8,9 @@ pub mod cpu;
 pub mod exception;
 pub mod mmu;
 pub mod percpu;
+mod spin;
 
 pub use context::TrapFrame;
 pub use cpu::{clear_bss, flush_tlb};
 pub use exception::init_exception;
+pub use spin::{Mutex, SpinNoIrq};

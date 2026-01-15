@@ -1,6 +1,6 @@
 //! CPU-related operations and utilities.
 
-use aarch64_cpu::registers::TPIDR_EL1;
+use aarch64_cpu::registers::{DAIF, TPIDR_EL1};
 use core::arch::asm;
 use memory_addr::VirtAddr;
 use tock_registers::interfaces::{Readable, Writeable};
@@ -65,4 +65,29 @@ pub fn clear_bss() {
         )
         .fill(0);
     }
+}
+
+
+/// Enables interrupts.
+///
+/// This function clears the DAIF I bit to enable IRQ interrupts.
+#[inline]
+pub fn enable_irqs() {
+    unsafe { asm!("msr daifclr, #2") };
+}
+
+/// Disables interrupts.
+///
+/// This function sets the DAIF I bit to disable IRQ interrupts.
+#[inline]
+pub fn disable_irqs() {
+    unsafe { asm!("msr daifset, #2") };
+}
+
+/// Checks if interrupts are disabled.
+///
+/// Returns `true` if the DAIF I bit is set (masked).
+#[inline]
+pub fn irqs_disabled() -> bool {
+    DAIF.matches_all(DAIF::I::Masked)
 }

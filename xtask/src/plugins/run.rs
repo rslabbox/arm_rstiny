@@ -16,6 +16,7 @@ struct RunConfig {
 pub struct RunTask {
     build: super::build::BuildTask,
     run_config: RunConfig,
+    debug: bool,
 }
 
 impl RunTask {
@@ -25,9 +26,14 @@ impl RunTask {
             .and_then(|v| v.clone().try_into().ok())
             .unwrap_or_default();
 
+        let debug = options.debug;
         let build = super::build::BuildTask::new(options, config)?;
 
-        Ok(RunTask { build, run_config })
+        Ok(RunTask {
+            build,
+            run_config,
+            debug,
+        })
     }
 
     pub fn execute(&self) -> TaskResult<()> {
@@ -96,6 +102,12 @@ impl RunTask {
         if smp > 1 {
             args.push("-smp".to_string());
             args.push(smp.to_string());
+        }
+
+        if self.debug {
+            info!("    Debug Mode: Enabled (-s -S)");
+            args.push("-s".to_string());
+            args.push("-S".to_string());
         }
 
         if self.run_config.nographic {

@@ -5,11 +5,10 @@ use core::{
 };
 
 use alloc::{boxed::Box, vec::Vec};
-use kspin::SpinNoIrq;
 
 use crate::{
     config::kernel::TASK_STACK_SIZE,
-    hal::{context::TaskContext, percpu},
+    hal::{Mutex, context::TaskContext, percpu},
     task::TaskRef,
 };
 
@@ -54,7 +53,7 @@ pub struct TaskInner {
     /// Parent task ID.
     parent_id: TaskId,
     /// List of child task IDs.
-    children: SpinNoIrq<Vec<TaskId>>,
+    children: Mutex<Vec<TaskId>>,
     /// Task context (registers, stack pointer, etc.).
     context: UnsafeCell<TaskContext>,
     /// Kernel stack for this task. None for ROOT which uses bootstrap stack.
@@ -62,7 +61,7 @@ pub struct TaskInner {
     /// Entry function pointer (type-erased closure that returns a boxed Any).
     entry: Option<Box<dyn FnOnce() -> Box<dyn Any + Send> + Send>>,
     /// Task result (type-erased return value).
-    result: SpinNoIrq<Option<Box<dyn Any + Send>>>,
+    result: Mutex<Option<Box<dyn Any + Send>>>,
     /// is idle task
     is_idle: bool,
 }
@@ -105,12 +104,12 @@ impl TaskInner {
             name,
             state: AtomicU8::new(TaskState::Ready as u8),
             parent_id,
-            children: SpinNoIrq::new(Vec::new()),
+            children: Mutex::new(Vec::new()),
             context: UnsafeCell::new(context),
             kstack: Some(kstack),
             is_idle,
             entry: Some(wrapped_entry),
-            result: SpinNoIrq::new(None),
+            result: Mutex::new(None),
         }
     }
 

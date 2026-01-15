@@ -1,18 +1,15 @@
 use alloc::sync::Arc;
-use kspin::SpinNoIrq;
 
 use crate::{
-    config::kernel::TINYENV_SMP,
-    drivers::{
+    config::kernel::TINYENV_SMP, drivers::{
         power::system_off,
         timer::{busy_wait, current_nanoseconds},
-    },
-    task::{
+    }, hal::Mutex, task::{
         manager::TaskManager,
         task_ref::TaskState,
         thread::JoinHandle,
         timers::{check_events, set_timer},
-    },
+    }
 };
 
 use super::TaskRef;
@@ -44,8 +41,8 @@ lazy_static::lazy_static! {
 }
 
 lazy_static::lazy_static! {
-    pub static ref TASK_MANAGER: SpinNoIrq<TaskManager> = {
-        SpinNoIrq::new(TaskManager::new())
+    pub static ref TASK_MANAGER: Mutex<TaskManager> = {
+        Mutex::new(TaskManager::new())
     };
 }
 

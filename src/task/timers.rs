@@ -1,9 +1,8 @@
 use core::sync::atomic::{AtomicU64, Ordering};
 
-use kspin::SpinNoIrq;
 use weak_map::WeakMap;
 
-use crate::{drivers::timer::current_nanoseconds, task::task_ref::TaskState};
+use crate::{drivers::timer::current_nanoseconds, hal::Mutex, task::task_ref::TaskState};
 
 type WeakTaskRef = alloc::sync::Weak<super::SchedulableTask>;
 
@@ -15,7 +14,7 @@ pub(crate) struct TimerKey {
     key: u64,
 }
 
-static TIMER_WHEEL: SpinNoIrq<WeakMap<TimerKey, WeakTaskRef>> = SpinNoIrq::new(WeakMap::new());
+static TIMER_WHEEL: Mutex<WeakMap<TimerKey, WeakTaskRef>> = Mutex::new(WeakMap::new());
 
 pub(crate) fn set_timer(deadline: u64, task: &super::TaskRef) -> Option<TimerKey> {
     if deadline <= current_nanoseconds() {
