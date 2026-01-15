@@ -16,6 +16,7 @@ mod console;
 mod error;
 
 mod drivers;
+mod fs;
 mod hal;
 mod mm;
 mod platform;

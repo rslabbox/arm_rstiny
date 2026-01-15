@@ -10,27 +10,40 @@ opi5p = []
 qemu = []
 
 [dependencies]
-bitflags = "2.10"
+# Architecture & Hardware
+aarch64-cpu = "11.2.0"
+arm-gic = "0.7.1"
+tock-registers = "0.10.1"
+
+# Memory Management
 memory_addr = "0.4"
 page_table_entry = "0.5"
-aarch64-cpu = "11.2.0"
-
-log = "0.4"
 talc = "4.4.3"
-dw_apb_uart = "0.1"
-lazyinit = "0.2"
-lazy_static = { version = "1.5.0", features = ["spin_no_std"] }
-arm-gic = "0.7.1"
-int_ratio = "0.1"
-anyhow = { version = "1.0", default-features = false }
+
+# Drivers
 arm_pl011 = "0.1"
-tock-registers = "0.10.1"
+dw_apb_uart = "0.1"
+virtio-drivers = "0.12.0"
+flat_device_tree = "3.1.1"
+
+# Utilities & Common
+anyhow = { version = "1.0", default-features = false }
+bitflags = "2.10"
 const_env = "0.1.5"
-weak-map = "0.1"
-axbacktrace = { version = "0.1.1", features = ["alloc", "dwarf"] }
-intrusive-collections = "0.10"
-rand = { version = "0.9", default-features = false, features = ["small_rng"] }
+int_ratio = "0.1"
+lazy_static = { version = "1.5.0", features = ["spin_no_std"] }
+lazyinit = "0.2"
 lock_api = "0.4.14"
+log = "0.4"
+rand = { version = "0.9", default-features = false, features = ["small_rng"] }
+
+# Data Structures
+intrusive-collections = "0.10"
+weak-map = "0.1"
+
+# Debugging
+axbacktrace = { version = "0.1.1", features = ["alloc", "dwarf"] }
+fatfs = { git = "https://github.com/rafalh/rust-fatfs", default-features = false, features = ["alloc", "unicode"] }
 
 [profile.dev]
 panic = "abort"

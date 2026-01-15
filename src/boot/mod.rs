@@ -72,7 +72,7 @@ fn boot_secondary_cpus() {
 }
 
 /// Rust main entry point (called from assembly).
-pub fn rust_main(_cpu_id: usize, _arg: usize) -> ! {
+pub fn rust_main(_cpu_id: usize, arg: usize) -> ! {
     // Initialize kernel subsystems
     // Clear BSS, initialize exceptions, early UART
     crate::hal::clear_bss();
@@ -107,8 +107,16 @@ pub fn rust_main(_cpu_id: usize, _arg: usize) -> ! {
 
     println!("\nHello RustTinyOS!\n");
 
+    // Safe because the pointer is a valid pointer to unaliased memory.
+    crate::drivers::fdt::fdt_init(arg);
+
+    crate::drivers::driver_init();
+
     // Boot secondary CPUs
     boot_secondary_cpus();
+
+    // Initialize/Mount Filesystem
+    crate::fs::init();
 
     // Create main user task as child of ROOT
     crate::task::thread::spawn("Main Task", crate::main);
