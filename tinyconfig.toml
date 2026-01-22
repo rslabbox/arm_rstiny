@@ -14,7 +14,7 @@ tftp_path = "/data/docker/tftpboot/data/kernel.uimg"
 [run]
 memory = "1G"
 cpu = "cortex-a72"
-machine = "virt,gic-version=3"
+machine = "virt,acpi=on,gic-version=3"
 disk_image = "disk.img"
 tcp_port = 5555
 udp_port = 5555

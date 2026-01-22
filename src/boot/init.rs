@@ -38,7 +38,7 @@ pub unsafe fn init_boot_page_table() {
         // 0x0000_0000_0000..0x0000_4000_0000, 1G block, normal memory
         BOOT_PT_L1[0] = A64PTE::new_page(
             pa!(0x0),
-            MappingFlags::READ | MappingFlags::WRITE | MappingFlags::EXECUTE,
+            MappingFlags::READ | MappingFlags::WRITE | MappingFlags::DEVICE,
             true,
         );
         // 1G block, normal memory
@@ -56,7 +56,7 @@ pub unsafe fn init_boot_page_table() {
         // 1G block, device memory. From 0xfb000000
         BOOT_PT_L1[3] = A64PTE::new_page(
             pa!(0xc0000000),
-            MappingFlags::READ | MappingFlags::WRITE | MappingFlags::DEVICE,
+            MappingFlags::READ | MappingFlags::WRITE | MappingFlags::EXECUTE,
             true,
         );
 

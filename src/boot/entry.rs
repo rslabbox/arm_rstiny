@@ -96,6 +96,66 @@ pub unsafe extern "C" fn _start() -> ! {
 #[unsafe(link_section = ".text.boot")]
 unsafe extern "C" fn _start_primary() -> ! {
     core::arch::naked_asm!("
+        // dump x0/x1 to PL011 (0x0900_0000)
+        mov     x21, x0
+        mov     x22, x1
+        ldr     x2, ={uart_base}
+
+        // print x0 (hex)
+        mov     x6, #60
+    1:
+        lsr     x7, x21, x6
+        and     x7, x7, #0xf
+        add     x7, x7, #0x30
+        cmp     x7, #0x39
+        ble     2f
+        add     x7, x7, #0x27
+    2:
+    3:
+        ldr     w4, [x2, #0x18]
+        tst     w4, #0x20
+        b.ne    3b
+        strb    w7, [x2]
+        subs    x6, x6, #4
+        b.ge    1b
+
+        // print space
+        mov     w7, #0x20
+    4:
+        ldr     w4, [x2, #0x18]
+        tst     w4, #0x20
+        b.ne    4b
+        strb    w7, [x2]
+
+        // print x1 (hex)
+        mov     x6, #60
+    5:
+        lsr     x7, x22, x6
+        and     x7, x7, #0xf
+        add     x7, x7, #0x30
+        cmp     x7, #0x39
+        ble     6f
+        add     x7, x7, #0x27
+    6:
+    7:
+        ldr     w4, [x2, #0x18]
+        tst     w4, #0x20
+        b.ne    7b
+        strb    w7, [x2]
+        subs    x6, x6, #4
+        b.ge    5b
+
+        // newline
+        mov     w7, #0x0a
+    8:
+        ldr     w4, [x2, #0x18]
+        tst     w4, #0x20
+        b.ne    8b
+        strb    w7, [x2]
+
+        mov     x0, x21
+        mov     x1, x22
+
         mrs     x19, mpidr_el1
         and     x19, x19, #0xffffff     // get current CPU id
         mov     x20, x0                 // save DTB pointer
@@ -107,8 +167,17 @@ unsafe extern "C" fn _start_primary() -> ! {
         bl      {switch_to_el1}         // switch to EL1
         bl      {enable_fp}             // enable fp/neon
         bl      {init_boot_page_table}
+
+        ldr x10, =0x09000000
+        mov w11, #'A'
+        str w11, [x10]
+
         adrp    x0, {boot_pt}
         bl      {init_mmu}            // setup MMU
+
+        ldr x10, =0x09000000
+        mov w11, #'B'
+        str w11, [x10]
 
         mov     x8, {phys_virt_offset}  // set SP to the high address
         add     sp, sp, x8
@@ -127,6 +196,7 @@ unsafe extern "C" fn _start_primary() -> ! {
         phys_virt_offset = const PHYS_VIRT_OFFSET,
         boot_stack_size = const crate::config::kernel::BOOT_STACK_SIZE,
         rust_main = sym super::rust_main,
+        uart_base = const 0x0900_0000,
     )
 }
 

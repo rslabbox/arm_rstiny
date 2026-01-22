@@ -73,6 +73,16 @@ fn boot_secondary_cpus() {
 
 /// Rust main entry point (called from assembly).
 pub fn rust_main(_cpu_id: usize, arg: usize) -> ! {
+    unsafe {
+        core::arch::asm!(
+            "
+                ldr x10, =0xffff000009000000
+                mov w11, #'C'
+                str w11, [x10]
+            "
+        );
+    }
+
     // Initialize kernel subsystems
     // Clear BSS, initialize exceptions, early UART
     crate::hal::clear_bss();
