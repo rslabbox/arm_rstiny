@@ -45,6 +45,9 @@ weak-map = "0.1"
 axbacktrace = { version = "0.1.1", features = ["alloc", "dwarf"] }
 fatfs = { git = "https://github.com/rafalh/rust-fatfs", default-features = false, features = ["alloc", "unicode"] }
 
+# Testing & Benchmarking
+unittest = { path = "unittest" }
+
 [profile.dev]
 panic = "abort"
 debug = 2

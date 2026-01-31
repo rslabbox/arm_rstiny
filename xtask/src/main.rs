@@ -33,6 +33,10 @@ pub struct BuildOptions {
     #[arg(long)]
     pub features: Option<String>,
 
+    /// Enable unittest feature (include test code in build)
+    #[arg(long)]
+    pub test: bool,
+
     /// Enable QEMU debug (waits for gdb connection)
     #[arg(long)]
     pub debug: bool,

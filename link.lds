@@ -133,5 +133,12 @@ SECTIONS {
     linkme_SYSCALL : { *(linkme_SYSCALL) }
     linkm2_SYSCALL : { *(linkm2_SYSCALL) }
     scope_local : { *(scope_local) }
+
+    /* Unittest section */
+    .unittest : ALIGN(8) {
+        __unittest_start = .;
+        KEEP(*(.unittest .unittest.*))
+        __unittest_end = .;
+    }
 }
 INSERT AFTER .tbss;

@@ -1,7 +1,7 @@
-use crate::utils::{project_root, TaskResult};
+use crate::utils::{TaskResult, project_root};
 use serde::Deserialize;
 use std::path::PathBuf;
-use xshell::{cmd, Shell};
+use xshell::{Shell, cmd};
 
 #[derive(Debug, Deserialize, Default)]
 struct BuildConfig {
@@ -25,6 +25,7 @@ pub struct BuildTask {
     project_name: String,
     build_config: BuildConfig,
     features: Option<Vec<String>>,
+    enable_test: bool,
 }
 
 impl BuildTask {
@@ -33,7 +34,7 @@ impl BuildTask {
             .get("build")
             .and_then(|v| v.clone().try_into().ok())
             .unwrap_or_default();
-        
+
         // 用命令行参数覆盖配置文件
         if let Some(log) = options.log {
             build_config.log = log;
@@ -50,7 +51,7 @@ impl BuildTask {
                     .split(',')
                     .map(|s| s.trim().to_string())
                     .filter(|s| !s.is_empty())
-                    .collect()
+                    .collect(),
             )
         } else {
             // 使用配置文件中的 features
@@ -61,6 +62,7 @@ impl BuildTask {
             project_name: env!("PROJECT_NAME").to_string(),
             build_config,
             features,
+            enable_test: options.test,
         })
     }
 
@@ -88,6 +90,14 @@ impl BuildTask {
         info!("    Log Level: {}", self.build_config.log);
         info!("    Tool path: {}", self.build_config.tool_path);
         info!("    SMP: {}", self.build_config.smp);
+        info!(
+            "    Unittest: {}",
+            if self.enable_test {
+                "enabled"
+            } else {
+                "disabled"
+            }
+        );
         if let Some(ref features) = self.features {
             info!("    Features: {}", features.join(", "));
         } else {
@@ -97,10 +107,22 @@ impl BuildTask {
 
         // Prepare environment variables
         let linker_path = "link.lds";
-        let rustflags = format!("-C link-arg=-T{} -C force-frame-pointers=yes", linker_path);
+        // Add --cfg unittest and --check-cfg to RUSTFLAGS when --test is enabled
+        let rustflags = if self.enable_test {
+            format!(
+                "-C link-arg=-T{} -C force-frame-pointers=yes --cfg unittest --check-cfg cfg(unittest)",
+                linker_path
+            )
+        } else {
+            format!(
+                "-C link-arg=-T{} -C force-frame-pointers=yes --check-cfg cfg(unittest)",
+                linker_path
+            )
+        };
         let log_level = &self.build_config.log;
         let build_time = chrono::Local::now().to_string();
         let smp = self.build_config.smp.to_string();
+        let target = &self.build_config.target;
 
         // Set environment variables for cargo
         sh.set_var("RUSTFLAGS", &rustflags);
@@ -109,20 +131,26 @@ impl BuildTask {
         sh.set_var("TINYENV_SMP", &smp);
 
         // Build cargo command
-        let target = &self.build_config.target;
-        
         info!("==> Execute build command");
         if self.build_config.mode == "release" {
             if let Some(ref features) = self.features {
                 let features_str = features.join(",");
-                cmd!(sh, "cargo build --release --target {target} --features {features_str}").run()?;
+                cmd!(
+                    sh,
+                    "cargo build --release --target {target} --features {features_str}"
+                )
+                .run()?;
             } else {
                 cmd!(sh, "cargo build --release --target {target}").run()?;
             }
         } else {
             if let Some(ref features) = self.features {
                 let features_str = features.join(",");
-                cmd!(sh, "cargo build --target {target} --features {features_str}").run()?;
+                cmd!(
+                    sh,
+                    "cargo build --target {target} --features {features_str}"
+                )
+                .run()?;
             } else {
                 cmd!(sh, "cargo build --target {target}").run()?;
             }
@@ -157,11 +185,10 @@ impl BuildTask {
         let load_addr = format!("0x{:x}", self.build_config.load_address);
         let entry_point = format!("0x{:x}", self.build_config.entry_point);
         let project_name = &self.project_name;
-        
+
         cmd!(sh, "mkimage -A arm -O linux -T kernel -C none -a {load_addr} -e {entry_point} -n {project_name} -d {bin_path} {uimg_path}").run()?;
         info!("    UIMG file: {}", uimg_path.display());
 
         Ok(())
     }
 }
-

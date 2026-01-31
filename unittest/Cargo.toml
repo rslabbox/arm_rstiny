@@ -1,0 +1,8 @@
+[package]
+name = "unittest"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+log = "0.4"
+unittest-macros = { path = "../unittest-macros" }

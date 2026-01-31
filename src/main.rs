@@ -27,7 +27,6 @@ mod user;
 #[macro_use]
 extern crate log;
 
-
 pub use console::print;
 
 extern crate alloc;
@@ -39,6 +38,7 @@ pub use error::TinyResult;
 fn main() {
     // Run tests in main task
     // tests::rstiny_tests();
+    unittest::test_run();
 
     // debug!("User main task completed");
     // Start a user-space TTY service so users can interact over UART.
