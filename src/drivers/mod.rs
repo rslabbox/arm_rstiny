@@ -29,6 +29,9 @@ pub fn driver_init() {
                             virtio_drivers::transport::DeviceType::Block => {
                                 virtio::blk::init(transport);
                             }
+                            virtio_drivers::transport::DeviceType::_9P => {
+                                virtio::p9::init(transport);
+                            }
                             _ => {
                                 // Unsupported device type; ignore.
                             }

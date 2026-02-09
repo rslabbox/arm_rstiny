@@ -38,6 +38,7 @@ pub use error::TinyResult;
 fn main() {
     // Run tests in main task
     // tests::rstiny_tests();
+    #[cfg(unittest)]
     unittest::test_run();
 
     // debug!("User main task completed");

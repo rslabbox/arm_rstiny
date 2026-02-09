@@ -1,5 +1,6 @@
 mod disk;
 mod ops;
+mod p9;
 
 use alloc::string::String;
 use lazy_static::lazy_static;
@@ -7,6 +8,7 @@ use crate::hal::Mutex;
 
 pub use disk::DiskIo;
 pub use ops::{list_dir, change_dir, make_dir, current_dir};
+pub use p9::is_available as p9_available;
 
 type FS = fatfs::FileSystem<DiskIo, fatfs::NullTimeProvider, fatfs::LossyOemCpConverter>;
 
@@ -28,5 +30,7 @@ pub fn init() {
             log::warn!("Make sure disk.img is formatted with FAT32");
         }
     }
+
+    p9::init();
 }
 

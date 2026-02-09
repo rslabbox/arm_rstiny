@@ -48,6 +48,9 @@ fatfs = { git = "https://github.com/rafalh/rust-fatfs", default-features = false
 # Testing & Benchmarking
 unittest = { path = "unittest" }
 
+[patch.crates-io]
+virtio-drivers = { path = "virtio-drivers" }
+
 [profile.dev]
 panic = "abort"
 debug = 2

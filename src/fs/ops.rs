@@ -2,6 +2,8 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use alloc::format;
 use crate::fs::{FILESYSTEM, CWD};
+use crate::fs::p9;
+use crate::fs::p9_available;
 
 pub fn resolve_path(path: &str) -> String {
     let cwd = CWD.lock().clone();
@@ -33,10 +35,17 @@ pub fn resolve_path(path: &str) -> String {
 }
 
 pub fn list_dir(path: Option<&str>) -> Result<(), String> {
+    let target_path = resolve_path(path.unwrap_or(""));
+    if is_9p_path(&target_path) {
+        let rel = to_9p_path(&target_path);
+        let entries = p9::list_dir(rel)?;
+        for name in entries {
+            println!("{}", name);
+        }
+        return Ok(());
+    }
     let fs_guard = FILESYSTEM.lock();
     let fs = fs_guard.as_ref().ok_or("Filesystem not initialized")?;
-    
-    let target_path = resolve_path(path.unwrap_or(""));
     // fatfs expects paths without leading '/' usually, unless it treats it as root. 
     // root_dir() is root.
     let root = fs.root_dir();
@@ -52,14 +61,22 @@ pub fn list_dir(path: Option<&str>) -> Result<(), String> {
         let e = entry.map_err(|e| format!("Error reading entry: {:?}", e))?;
         println!("{}", e.file_name());
     }
+    if target_path == "/" && p9_available() {
+        println!("tools");
+    }
     Ok(())
 }
 
 pub fn change_dir(path: &str) -> Result<(), String> {
+    let target_path = resolve_path(path);
+    if is_9p_path(&target_path) {
+        let rel = to_9p_path(&target_path);
+        p9::change_dir(rel)?;
+        *CWD.lock() = target_path;
+        return Ok(());
+    }
     let fs_guard = FILESYSTEM.lock();
     let fs = fs_guard.as_ref().ok_or("Filesystem not initialized")?;
-
-    let target_path = resolve_path(path);
     let root = fs.root_dir();
     
     if target_path != "/" {
@@ -75,10 +92,16 @@ pub fn change_dir(path: &str) -> Result<(), String> {
 }
 
 pub fn make_dir(path: &str) -> Result<(), String> {
+    let target_path = resolve_path(path);
+    if is_9p_path(&target_path) {
+        if target_path == "/tools" {
+            return Err(String::from("Cannot create mount point"));
+        }
+        let rel = to_9p_path(&target_path);
+        return p9::make_dir(rel);
+    }
     let fs_guard = FILESYSTEM.lock();
     let fs = fs_guard.as_ref().ok_or("Filesystem not initialized")?;
-    
-    let target_path = resolve_path(path);
     if target_path == "/" {
         return Err(String::from("Cannot create root directory"));
     }
@@ -90,4 +113,17 @@ pub fn make_dir(path: &str) -> Result<(), String> {
 
 pub fn current_dir() -> String {
     CWD.lock().clone()
+}
+
+fn is_9p_path(path: &str) -> bool {
+    path == "/tools" || path.starts_with("/tools/")
+}
+
+fn to_9p_path(path: &str) -> &str {
+    let rel = path.strip_prefix("/tools").unwrap_or(path);
+    if rel.is_empty() {
+        "/"
+    } else {
+        rel
+    }
 }
