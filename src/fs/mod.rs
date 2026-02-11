@@ -1,36 +1,50 @@
-mod disk;
 mod ops;
-mod p9;
 
+#[cfg(feature = "fat32")]
+mod fat32;
+
+#[cfg(feature = "fs9p")]
+mod fs9p;
+
+use crate::hal::Mutex;
 use alloc::string::String;
 use lazy_static::lazy_static;
-use crate::hal::Mutex;
 
-pub use disk::DiskIo;
-pub use ops::{list_dir, change_dir, make_dir, current_dir};
-pub use p9::is_available as p9_available;
+#[allow(unused)]
+pub use ops::{
+    FileHandle, OpenOptions, change_dir, close, create_file, current_dir, dir_remove, file_remove,
+    file_truncate, link, list_dir, make_dir, mkdir, mount, open, read_file, read_link, umount,
+    unlink, write_file,
+};
 
-type FS = fatfs::FileSystem<DiskIo, fatfs::NullTimeProvider, fatfs::LossyOemCpConverter>;
+#[cfg(feature = "fat32")]
+pub use fat32::DiskIo;
+
+#[cfg(feature = "fat32")]
+pub(crate) type FS = fatfs::FileSystem<DiskIo, fatfs::NullTimeProvider, fatfs::LossyOemCpConverter>;
 
 lazy_static! {
-    pub static ref FILESYSTEM: Mutex<Option<FS>> = Mutex::new(None);
     pub static ref CWD: Mutex<String> = Mutex::new(String::from("/"));
 }
 
-pub fn init() {
-    let disk = DiskIo::new();
-    let options = fatfs::FsOptions::new().update_accessed_date(false);
-    match fatfs::FileSystem::new(disk, options) {
-        Ok(fs) => {
-            log::info!("FAT32 Filesystem mounted!");
-            *FILESYSTEM.lock() = Some(fs);
-        },
-        Err(e) => {
-            log::error!("Failed to mount FAT32: {:?}", e);
-            log::warn!("Make sure disk.img is formatted with FAT32");
-        }
-    }
-
-    p9::init();
+#[cfg(feature = "fat32")]
+lazy_static! {
+    pub static ref FILESYSTEM: Mutex<Option<FS>> = Mutex::new(None);
 }
 
+#[cfg(feature = "fs9p")]
+lazy_static! {
+    pub static ref P9_SESSION: Mutex<Option<::fs9p::Session>> = Mutex::new(None);
+}
+
+#[cfg(all(feature = "fat32", feature = "fs9p"))]
+compile_error!("fat32 and fs9p features are mutually exclusive; enable only one.");
+
+#[cfg(not(any(feature = "fat32", feature = "fs9p")))]
+compile_error!("Either fat32 or fs9p feature must be enabled.");
+
+pub fn init() {
+    if let Err(err) = mount() {
+        log::warn!("Filesystem mount failed: {}", err);
+    }
+}
