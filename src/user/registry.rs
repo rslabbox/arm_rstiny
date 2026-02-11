@@ -21,6 +21,17 @@ static COMMANDS: &[&dyn Command] = &[
     &commands::CD,
     &commands::MKDIR,
     &commands::PWD,
+    &commands::CAT,
+    &commands::TOUCH,
+    &commands::RM,
+    &commands::RMDIR,
+    &commands::CP,
+    &commands::MV,
+    &commands::LN,
+    &commands::STAT,
+    &commands::CHMOD,
+    &commands::TREE,
+    &commands::WRITE,
 ];
 
 /// Find a command by name or alias.

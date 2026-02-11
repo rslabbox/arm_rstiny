@@ -46,7 +46,7 @@ weak-map = "0.1"
 # Debugging
 axbacktrace = { version = "0.1.1", features = ["alloc", "dwarf"] }
 fatfs = { git = "https://github.com/rafalh/rust-fatfs", default-features = false, features = ["alloc", "unicode"], optional = true }
-fs9p = { path = "fs9p", optional = true }
+fs9p = { version = "0.1", optional = true }
 ext4_rs = "1.3.3"
 
 # Testing & Benchmarking

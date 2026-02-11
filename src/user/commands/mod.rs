@@ -17,4 +17,4 @@ pub use help::HELP;
 pub use history::HISTORY_CMD;
 pub use system::EXIT;
 pub use test::TEST;
-pub use fs_commands::{LS, CD, MKDIR, PWD};
+pub use fs_commands::{LS, CD, MKDIR, PWD, CAT, TOUCH, RM, RMDIR, CP, MV, LN, STAT, CHMOD, TREE, WRITE};
