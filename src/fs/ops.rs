@@ -19,6 +19,33 @@ pub struct OpenOptions {
     pub append: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FileType {
+    File,
+    Directory,
+    Symlink,
+    Other,
+}
+
+#[derive(Clone, Debug)]
+pub struct FileMetadata {
+    pub file_type: FileType,
+    pub size: u64,
+    pub mode: u32,
+    pub nlink: u64,
+    pub uid: u32,
+    pub gid: u32,
+    pub atime: u64,
+    pub mtime: u64,
+    pub ctime: u64,
+}
+
+#[derive(Clone, Debug)]
+pub struct DirEntry {
+    pub name: String,
+    pub file_type: FileType,
+}
+
 pub trait FsOps: Send {
     fn mount(&mut self) -> Result<(), String>;
     fn umount(&mut self) -> Result<(), String>;
@@ -40,6 +67,13 @@ pub trait FsOps: Send {
     fn file_truncate(&mut self, handle: FileHandle, size: u64) -> Result<(), String>;
     fn file_remove(&mut self, path: &str) -> Result<(), String>;
     fn dir_remove(&mut self, path: &str) -> Result<(), String>;
+
+    fn stat(&mut self, path: &str) -> Result<FileMetadata, String>;
+    fn rename(&mut self, old_path: &str, new_path: &str) -> Result<(), String>;
+    fn symlink(&mut self, target: &str, link_path: &str) -> Result<(), String>;
+    fn chmod(&mut self, path: &str, mode: u32) -> Result<(), String>;
+    fn readdir(&mut self, path: &str) -> Result<Vec<DirEntry>, String>;
+    fn fsync(&mut self, handle: FileHandle) -> Result<(), String>;
 }
 
 pub(crate) fn resolve_path(path: &str) -> String {
@@ -148,6 +182,24 @@ impl FsOps for NullBackend {
     fn dir_remove(&mut self, _path: &str) -> Result<(), String> {
         Err(String::from("no filesystem backend selected"))
     }
+    fn stat(&mut self, _path: &str) -> Result<FileMetadata, String> {
+        Err(String::from("no filesystem backend selected"))
+    }
+    fn rename(&mut self, _old_path: &str, _new_path: &str) -> Result<(), String> {
+        Err(String::from("no filesystem backend selected"))
+    }
+    fn symlink(&mut self, _target: &str, _link_path: &str) -> Result<(), String> {
+        Err(String::from("no filesystem backend selected"))
+    }
+    fn chmod(&mut self, _path: &str, _mode: u32) -> Result<(), String> {
+        Err(String::from("no filesystem backend selected"))
+    }
+    fn readdir(&mut self, _path: &str) -> Result<Vec<DirEntry>, String> {
+        Err(String::from("no filesystem backend selected"))
+    }
+    fn fsync(&mut self, _handle: FileHandle) -> Result<(), String> {
+        Err(String::from("no filesystem backend selected"))
+    }
 }
 
 pub fn mount() -> Result<(), String> {
@@ -236,4 +288,165 @@ pub fn dir_remove(path: &str) -> Result<(), String> {
 
 pub fn current_dir() -> String {
     CWD.lock().clone()
+}
+
+pub fn stat(path: &str) -> Result<FileMetadata, String> {
+    let target_path = resolve_path(path);
+    BACKEND.lock().stat(&target_path)
+}
+
+pub fn rename(old_path: &str, new_path: &str) -> Result<(), String> {
+    let old = resolve_path(old_path);
+    let new = resolve_path(new_path);
+    BACKEND.lock().rename(&old, &new)
+}
+
+pub fn symlink(target: &str, link_path: &str) -> Result<(), String> {
+    let target_path = resolve_path(target);
+    let link = resolve_path(link_path);
+    BACKEND.lock().symlink(&target_path, &link)
+}
+
+pub fn chmod(path: &str, mode: u32) -> Result<(), String> {
+    let target_path = resolve_path(path);
+    BACKEND.lock().chmod(&target_path, mode)
+}
+
+pub fn readdir(path: &str) -> Result<Vec<DirEntry>, String> {
+    let target_path = resolve_path(path);
+    BACKEND.lock().readdir(&target_path)
+}
+
+pub fn exists(path: &str) -> bool {
+    stat(path).is_ok()
+}
+
+pub fn is_dir(path: &str) -> bool {
+    stat(path)
+        .map(|m| m.file_type == FileType::Directory)
+        .unwrap_or(false)
+}
+
+pub fn is_file(path: &str) -> bool {
+    stat(path)
+        .map(|m| m.file_type == FileType::File)
+        .unwrap_or(false)
+}
+
+pub fn file_size(path: &str) -> Result<u64, String> {
+    stat(path).map(|m| m.size)
+}
+
+pub fn copy_file(src: &str, dst: &str) -> Result<u64, String> {
+    let src_options = OpenOptions {
+        read: true,
+        ..Default::default()
+    };
+    let src_handle = open(src, src_options)?;
+    let dst_handle = create_file(dst)?;
+    let mut offset = 0u64;
+    loop {
+        let data = read_file(src_handle, offset, 4096)?;
+        if data.is_empty() {
+            break;
+        }
+        let written = write_file(dst_handle, offset, &data)?;
+        offset += written as u64;
+    }
+    close(src_handle)?;
+    close(dst_handle)?;
+    Ok(offset)
+}
+
+/// Recursive mkdir — create all missing parent directories (like `mkdir -p`).
+pub fn mkdir_all(path: &str) -> Result<(), String> {
+    let resolved = resolve_path(path);
+    if resolved == "/" {
+        return Ok(());
+    }
+    // Collect each ancestor that needs creation.
+    let parts: Vec<&str> = resolved
+        .split('/')
+        .filter(|s| !s.is_empty())
+        .collect();
+    let mut current = String::from("/");
+    for part in parts {
+        if current.ends_with('/') {
+            current.push_str(part);
+        } else {
+            current.push('/');
+            current.push_str(part);
+        }
+        if !exists(&current) {
+            mkdir(&current)?;
+        }
+    }
+    Ok(())
+}
+
+/// Recursively remove a directory and all its contents.
+pub fn remove_all(path: &str) -> Result<(), String> {
+    let resolved = resolve_path(path);
+    if resolved == "/" {
+        return Err(String::from("cannot remove root directory"));
+    }
+    let meta = stat(&resolved)?;
+    if meta.file_type != FileType::Directory {
+        return file_remove(&resolved);
+    }
+    // Remove children first
+    let entries = readdir(&resolved)?;
+    for entry in entries {
+        let child = if resolved == "/" {
+            format!("/{}", entry.name)
+        } else {
+            format!("{}/{}", resolved, entry.name)
+        };
+        if entry.file_type == FileType::Directory {
+            remove_all(&child)?;
+        } else {
+            file_remove(&child)?;
+        }
+    }
+    dir_remove(&resolved)
+}
+
+/// Walk a directory tree recursively, calling `visitor` for each entry.
+/// The visitor receives `(full_path, &DirEntry)` and returns `true` to continue, `false` to stop.
+pub fn walk<F>(path: &str, visitor: &mut F) -> Result<(), String>
+where
+    F: FnMut(&str, &DirEntry) -> bool,
+{
+    walk_inner(path, visitor)?;
+    Ok(())
+}
+
+/// Returns Ok(true) to continue walking, Ok(false) if visitor requested early stop.
+fn walk_inner<F>(path: &str, visitor: &mut F) -> Result<bool, String>
+where
+    F: FnMut(&str, &DirEntry) -> bool,
+{
+    let resolved = resolve_path(path);
+    let entries = readdir(&resolved)?;
+    for entry in entries {
+        let child = if resolved == "/" {
+            format!("/{}", entry.name)
+        } else {
+            format!("{}/{}", resolved, entry.name)
+        };
+        if !visitor(&child, &entry) {
+            return Ok(false);
+        }
+        if entry.file_type == FileType::Directory {
+            if !walk_inner(&child, visitor)? {
+                return Ok(false);
+            }
+        }
+    }
+    Ok(true)
+}
+
+/// Flush file data to persistent storage.
+pub fn fsync(handle: FileHandle) -> Result<(), String> {
+    BACKEND.lock().fsync(handle)
 }

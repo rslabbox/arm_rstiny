@@ -12,9 +12,10 @@ use lazy_static::lazy_static;
 
 #[allow(unused)]
 pub use ops::{
-    FileHandle, OpenOptions, change_dir, close, create_file, current_dir, dir_remove, file_remove,
-    file_truncate, link, list_dir, make_dir, mkdir, mount, open, read_file, read_link, umount,
-    unlink, write_file,
+    DirEntry, FileHandle, FileMetadata, FileType, OpenOptions, change_dir, chmod, close, copy_file,
+    create_file, current_dir, dir_remove, exists, file_remove, file_size, file_truncate, fsync,
+    is_dir, is_file, link, list_dir, make_dir, mkdir, mkdir_all, mount, open, read_file, read_link,
+    readdir, remove_all, rename, stat, symlink, umount, unlink, walk, write_file,
 };
 
 #[cfg(feature = "fat32")]

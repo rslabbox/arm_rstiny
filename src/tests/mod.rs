@@ -2,6 +2,7 @@
 #![allow(unused)]
 
 mod allocator;
+mod fs_ops;
 mod gicv3;
 mod perf;
 mod task;

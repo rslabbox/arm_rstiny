@@ -98,7 +98,10 @@ impl FsOps for P9Backend {
     fn open(&mut self, path: &str, options: OpenOptions) -> Result<FileHandle, String> {
         let target_path = resolve_path(path);
         if options.create {
-            return Self::with_session(|session| session.create_file(&target_path));
+            let (mode_9p, mode_dotl) = Self::map_open_options(options);
+            return Self::with_session(|session| {
+                session.create_file_with_flags(&target_path, mode_9p, mode_dotl, 0o644)
+            });
         }
         let (mode_9p, mode_dotl) = Self::map_open_options(options);
         Self::with_session(|session| session.open_path_with_flags(&target_path, mode_9p, mode_dotl))
@@ -150,7 +153,15 @@ impl FsOps for P9Backend {
     fn link(&mut self, target: &str, link_path: &str) -> Result<(), String> {
         let target_path = resolve_path(target);
         let link_path = resolve_path(link_path);
-        Self::with_session(|session| session.link(&target_path, &link_path))
+        Self::with_session(|session| {
+            match session.link(&target_path, &link_path) {
+                Ok(()) => Ok(()),
+                Err(err) => match session.symlink(&target_path, &link_path) {
+                    Ok(()) => Ok(()),
+                    Err(_) => Err(err),
+                },
+            }
+        })
     }
 
     fn unlink(&mut self, path: &str) -> Result<(), String> {
@@ -170,5 +181,79 @@ impl FsOps for P9Backend {
     fn dir_remove(&mut self, path: &str) -> Result<(), String> {
         let target_path = resolve_path(path);
         Self::with_session(|session| session.remove_path(&target_path))
+    }
+
+    fn stat(&mut self, path: &str) -> Result<super::ops::FileMetadata, String> {
+        use super::ops::{FileMetadata, FileType};
+        let target_path = resolve_path(path);
+        Self::with_session(|session| {
+            let attr = session.getattr(&target_path)?;
+            let file_type = if attr.qid_type & 0x80 != 0 {
+                FileType::Directory
+            } else if attr.qid_type & 0x02 != 0 {
+                FileType::Symlink
+            } else {
+                FileType::File
+            };
+            Ok(FileMetadata {
+                file_type,
+                size: attr.size,
+                mode: attr.mode,
+                nlink: attr.nlink,
+                uid: attr.uid,
+                gid: attr.gid,
+                atime: attr.atime_sec,
+                mtime: attr.mtime_sec,
+                ctime: attr.ctime_sec,
+            })
+        })
+    }
+
+    fn rename(&mut self, old_path: &str, new_path: &str) -> Result<(), String> {
+        let old = resolve_path(old_path);
+        let new = resolve_path(new_path);
+        Self::with_session(|session| session.rename_path(&old, &new))
+    }
+
+    fn symlink(&mut self, target: &str, link_path: &str) -> Result<(), String> {
+        let target_path = resolve_path(target);
+        let link = resolve_path(link_path);
+        Self::with_session(|session| session.symlink(&target_path, &link))
+    }
+
+    fn chmod(&mut self, path: &str, mode: u32) -> Result<(), String> {
+        let target_path = resolve_path(path);
+        Self::with_session(|session| session.setattr_mode(&target_path, mode))
+    }
+
+    fn readdir(&mut self, path: &str) -> Result<Vec<super::ops::DirEntry>, String> {
+        use super::ops::{DirEntry, FileType};
+        let target_path = resolve_path(path);
+        Self::with_session(|session| {
+            let entries = session.list_dir_entries(&target_path)?;
+            Ok(entries
+                .into_iter()
+                .map(|e| {
+                    let file_type = match e.entry_type {
+                        4 => FileType::Directory,
+                        8 => FileType::File,
+                        10 => FileType::Symlink,
+                        _ => FileType::Other,
+                    };
+                    DirEntry {
+                        name: e.name,
+                        file_type,
+                    }
+                })
+                .collect())
+        })
+    }
+
+    fn fsync(&mut self, _handle: FileHandle) -> Result<(), String> {
+        // QEMU's 9P local backend does not implement TFSYNC and crashes
+        // if it receives this message type. Data written via virtio-9p
+        // is passed through to the host filesystem synchronously, so
+        // an explicit fsync is not needed.
+        Ok(())
     }
 }

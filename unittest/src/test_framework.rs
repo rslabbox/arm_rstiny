@@ -285,7 +285,7 @@ macro_rules! assert_eq {
                 stringify!($right),
                 $right
             );
-            return TestResult::Failed;
+            return $crate::TestResult::Failed;
         }
     };
     ($left:expr, $right:expr, $($arg:tt)*) => {
@@ -297,7 +297,7 @@ macro_rules! assert_eq {
                 stringify!($right),
                 $right
             );
-            return TestResult::Failed;
+            return $crate::TestResult::Failed;
         }
     };
 }
@@ -313,7 +313,7 @@ macro_rules! assert_ne {
                 stringify!($right),
                 $right
             );
-            return TestResult::Failed;
+            return $crate::TestResult::Failed;
         }
     };
     ($left:expr, $right:expr, $($arg:tt)*) => {
@@ -325,7 +325,7 @@ macro_rules! assert_ne {
                 stringify!($right),
                 $right
             );
-            return TestResult::Failed;
+            return $crate::TestResult::Failed;
         }
     };
 }
@@ -335,13 +335,13 @@ macro_rules! assert {
     ($cond:expr) => {
         if !$cond {
             error!("assert! failed: {}", stringify!($cond));
-            return TestResult::Failed;
+            return $crate::TestResult::Failed;
         }
     };
     ($cond:expr, $($arg:tt)*) => {
         if !$cond {
             error!("assert! failed: {}", stringify!($cond));
-            return TestResult::Failed;
+            return $crate::TestResult::Failed;
         }
     };
 }

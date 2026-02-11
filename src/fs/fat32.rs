@@ -391,4 +391,101 @@ impl FsOps for Fat32Backend {
     fn dir_remove(&mut self, path: &str) -> Result<(), String> {
         self.file_remove(path)
     }
+
+    fn stat(&mut self, path: &str) -> Result<super::ops::FileMetadata, String> {
+        use super::ops::{FileMetadata, FileType};
+        let target_path = resolve_path(path);
+        if target_path == "/" {
+            return Ok(FileMetadata {
+                file_type: FileType::Directory,
+                size: 0,
+                mode: 0o755,
+                nlink: 1,
+                uid: 0,
+                gid: 0,
+                atime: 0,
+                mtime: 0,
+                ctime: 0,
+            });
+        }
+        let rel_path = target_path.strip_prefix('/').unwrap_or(&target_path);
+        let fs_guard = crate::fs::FILESYSTEM.lock();
+        let fs = fs_guard.as_ref().ok_or("Filesystem not initialized")?;
+        let root = fs.root_dir();
+        // Try opening as directory first
+        if root.open_dir(rel_path).is_ok() {
+            return Ok(FileMetadata {
+                file_type: FileType::Directory,
+                size: 0,
+                mode: 0o755,
+                nlink: 1,
+                uid: 0,
+                gid: 0,
+                atime: 0,
+                mtime: 0,
+                ctime: 0,
+            });
+        }
+        // Try opening as file
+        match root.open_file(rel_path) {
+            Ok(_file) => Ok(FileMetadata {
+                file_type: FileType::File,
+                size: 0,
+                mode: 0o644,
+                nlink: 1,
+                uid: 0,
+                gid: 0,
+                atime: 0,
+                mtime: 0,
+                ctime: 0,
+            }),
+            Err(e) => Err(format!("not found: {:?}", e)),
+        }
+    }
+
+    fn rename(&mut self, _old_path: &str, _new_path: &str) -> Result<(), String> {
+        Err(String::from("rename is not supported on FAT32"))
+    }
+
+    fn symlink(&mut self, _target: &str, _link_path: &str) -> Result<(), String> {
+        Err(String::from("symlink is not supported on FAT32"))
+    }
+
+    fn chmod(&mut self, _path: &str, _mode: u32) -> Result<(), String> {
+        Err(String::from("chmod is not supported on FAT32"))
+    }
+
+    fn readdir(&mut self, path: &str) -> Result<Vec<super::ops::DirEntry>, String> {
+        use super::ops::{DirEntry, FileType};
+        let target_path = resolve_path(path);
+        let fs_guard = crate::fs::FILESYSTEM.lock();
+        let fs = fs_guard.as_ref().ok_or("Filesystem not initialized")?;
+        let root = fs.root_dir();
+        let dir = if target_path == "/" {
+            root
+        } else {
+            let rel_path = target_path.strip_prefix('/').unwrap_or(&target_path);
+            root.open_dir(rel_path)
+                .map_err(|e| format!("Failed to open dir: {:?}", e))?
+        };
+        let mut entries = Vec::new();
+        for entry in dir.iter() {
+            let e = entry.map_err(|e| format!("Error reading entry: {:?}", e))?;
+            let file_type = if e.is_dir() {
+                FileType::Directory
+            } else {
+                FileType::File
+            };
+            entries.push(DirEntry {
+                name: e.file_name(),
+                file_type,
+            });
+        }
+        Ok(entries)
+    }
+
+    fn fsync(&mut self, _handle: FileHandle) -> Result<(), String> {
+        // FAT32 via fatfs has no explicit fsync; writes go through immediately.
+        Ok(())
+    }
 }
