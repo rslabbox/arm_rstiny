@@ -29,6 +29,7 @@ pub fn driver_init() {
                             virtio_drivers::transport::DeviceType::Block => {
                                 virtio::blk::init(transport);
                             }
+                            #[cfg(feature = "fs9p")]
                             virtio_drivers::transport::DeviceType::_9P => {
                                 virtio::p9::init(transport);
                             }

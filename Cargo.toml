@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [features]
-default = ["qemu", "fs9p"]
+default = ["qemu", "fat32"]
 
 opi5p = []
 qemu = []
@@ -19,7 +19,7 @@ tock-registers = "0.10.1"
 
 # Memory Management
 memory_addr = "0.4"
-page_table_entry = "0.5"
+page_table_entry = "0.6.0"
 talc = "4.4.3"
 
 # Drivers
