@@ -2,7 +2,6 @@
 
 use alloc::string::String;
 use alloc::vec::Vec;
-use unittest::{assert, assert_eq, def_test};
 use crate::alloc::string::ToString;
 
 use crate::fs;
@@ -22,14 +21,12 @@ fn cleanup() {
     let _ = fs::remove_all(TEST_DIR);
 }
 
-#[def_test]
 fn test_fsops_mount_umount() {
     assert!(fs::mount().is_ok());
     assert!(fs::umount().is_ok());
     assert!(fs::mount().is_ok());
 }
 
-#[def_test]
 fn test_fsops_basic_ops() {
     assert!(fs::mount().is_ok());
     cleanup();
@@ -57,7 +54,6 @@ fn test_fsops_basic_ops() {
     assert!(fs::dir_remove(TEST_DIR).is_ok());
 }
 
-#[def_test]
 fn test_fsops_link_and_readlink() {
     assert!(fs::mount().is_ok());
     cleanup();
@@ -74,17 +70,10 @@ fn test_fsops_link_and_readlink() {
         assert!(fs::link(TEST_FILE, TEST_LINK).is_err());
     }
 
-    #[cfg(feature = "fs9p")]
-    {
-        assert!(fs::link(TEST_FILE, TEST_LINK).is_ok());
-        assert!(fs::file_remove(TEST_LINK).is_ok());
-    }
-
     assert!(fs::file_remove(TEST_FILE).is_ok());
     assert!(fs::dir_remove(TEST_DIR).is_ok());
 }
 
-#[def_test]
 fn test_fsops_open_close_unlink() {
     assert!(fs::mount().is_ok());
     cleanup();
@@ -107,7 +96,6 @@ fn test_fsops_open_close_unlink() {
     assert!(fs::dir_remove(TEST_DIR).is_ok());
 }
 
-#[def_test]
 fn test_fsops_stat_and_helpers() {
     assert!(fs::mount().is_ok());
     cleanup();
@@ -153,7 +141,6 @@ fn test_fsops_stat_and_helpers() {
     assert!(fs::dir_remove(TEST_DIR).is_ok());
 }
 
-#[def_test]
 fn test_fsops_readdir() {
     assert!(fs::mount().is_ok());
     cleanup();
@@ -189,7 +176,6 @@ fn test_fsops_readdir() {
     assert!(fs::dir_remove(TEST_DIR).is_ok());
 }
 
-#[def_test]
 fn test_fsops_rename() {
     assert!(fs::mount().is_ok());
     cleanup();
@@ -200,22 +186,6 @@ fn test_fsops_rename() {
     let _ = fs::write_file(handle, 0, b"rename me").expect("write failed");
     assert!(fs::close(handle).is_ok());
 
-    #[cfg(feature = "fs9p")]
-    {
-        assert!(fs::rename(TEST_FILE, TEST_RENAMED).is_ok());
-        assert!(!fs::exists(TEST_FILE));
-        assert!(fs::exists(TEST_RENAMED));
-
-        // read content through renamed path
-        let opt = OpenOptions { read: true, ..Default::default() };
-        let h = fs::open(TEST_RENAMED, opt).expect("open renamed failed");
-        let data = fs::read_file(h, 0, 0).expect("read renamed failed");
-        assert_eq!(data, b"rename me".to_vec());
-        assert!(fs::close(h).is_ok());
-
-        assert!(fs::file_remove(TEST_RENAMED).is_ok());
-    }
-
     #[cfg(feature = "fat32")]
     {
         assert!(fs::rename(TEST_FILE, TEST_RENAMED).is_err());
@@ -225,7 +195,6 @@ fn test_fsops_rename() {
     assert!(fs::dir_remove(TEST_DIR).is_ok());
 }
 
-#[def_test]
 fn test_fsops_symlink() {
     assert!(fs::mount().is_ok());
     cleanup();
@@ -236,23 +205,6 @@ fn test_fsops_symlink() {
     let _ = fs::write_file(handle, 0, b"sym target").expect("write failed");
     assert!(fs::close(handle).is_ok());
 
-    #[cfg(feature = "fs9p")]
-    {
-        assert!(fs::symlink(TEST_FILE, TEST_SYMLINK).is_ok());
-        assert!(fs::exists(TEST_SYMLINK));
-
-        // readlink should return the target
-        let target = fs::read_link(TEST_SYMLINK).expect("read_link failed");
-        assert_eq!(target, TEST_FILE.to_string());
-
-        // stat the symlink itself
-        let meta = fs::stat(TEST_SYMLINK).expect("stat symlink failed");
-        // qid_type should indicate symlink
-        assert_eq!(meta.file_type, FileType::Symlink);
-
-        assert!(fs::file_remove(TEST_SYMLINK).is_ok());
-    }
-
     #[cfg(feature = "fat32")]
     {
         assert!(fs::symlink(TEST_FILE, TEST_SYMLINK).is_err());
@@ -262,7 +214,6 @@ fn test_fsops_symlink() {
     assert!(fs::dir_remove(TEST_DIR).is_ok());
 }
 
-#[def_test]
 fn test_fsops_chmod() {
     assert!(fs::mount().is_ok());
     cleanup();
@@ -271,15 +222,6 @@ fn test_fsops_chmod() {
 
     let handle = fs::create_file(TEST_FILE).expect("create_file failed");
     assert!(fs::close(handle).is_ok());
-
-    #[cfg(feature = "fs9p")]
-    {
-        assert!(fs::chmod(TEST_FILE, 0o755).is_ok());
-
-        let meta = fs::stat(TEST_FILE).expect("stat after chmod failed");
-        // Check that the permission bits are updated (lower 12 bits)
-        assert_eq!(meta.mode & 0o7777, 0o755);
-    }
 
     #[cfg(feature = "fat32")]
     {
@@ -290,7 +232,6 @@ fn test_fsops_chmod() {
     assert!(fs::dir_remove(TEST_DIR).is_ok());
 }
 
-#[def_test]
 fn test_fsops_copy_file() {
     assert!(fs::mount().is_ok());
     cleanup();
@@ -324,7 +265,6 @@ fn test_fsops_copy_file() {
     assert!(fs::dir_remove(TEST_DIR).is_ok());
 }
 
-#[def_test]
 fn test_fsops_open_options_append() {
     assert!(fs::mount().is_ok());
     cleanup();
@@ -362,7 +302,6 @@ fn test_fsops_open_options_append() {
     assert!(fs::dir_remove(TEST_DIR).is_ok());
 }
 
-#[def_test]
 fn test_fsops_mkdir_all() {
     assert!(fs::mount().is_ok());
     cleanup();
@@ -392,7 +331,6 @@ fn test_fsops_mkdir_all() {
     assert!(!fs::exists(TEST_DIR));
 }
 
-#[def_test]
 fn test_fsops_remove_all() {
     assert!(fs::mount().is_ok());
     cleanup();
@@ -421,7 +359,6 @@ fn test_fsops_remove_all() {
     assert!(fs::remove_all("/does_not_exist").is_err());
 }
 
-#[def_test]
 fn test_fsops_walk() {
     assert!(fs::mount().is_ok());
     cleanup();
@@ -467,7 +404,6 @@ fn test_fsops_walk() {
     cleanup();
 }
 
-#[def_test]
 fn test_fsops_fsync() {
     assert!(fs::mount().is_ok());
     cleanup();

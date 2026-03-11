@@ -14,3 +14,16 @@ pub fn fdt_init(fdt: usize) {
 pub fn get_fdt() -> &'static Mutex<Fdt<'static>> {
     FDT_DATA.get().expect("FDT not initialized")
 }
+
+crate::define_provider!(
+    provider: BOOT_PROVIDER,
+    vendor_id: 0,
+    device_id: 0,
+    priority: 100,
+    ops: crate::device::provider::BootProvider {
+        fdt_init,
+        get_fdt,
+        driver_init_early: crate::drivers::driver_init_early,
+        driver_init: crate::drivers::driver_init,
+    }
+);

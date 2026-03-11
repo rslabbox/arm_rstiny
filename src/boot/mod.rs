@@ -15,6 +15,8 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 use memory_addr::pa;
 
 use crate::{config::kernel::PHYS_VIRT_OFFSET, hal::percpu, mm::phys_to_virt, println};
+use crate::device::capability::with_provider;
+use crate::device::provider::{BootProvider, IrqProvider, PowerProvider, TimerProvider, UartProvider};
 
 use crate::config::kernel::TINYENV_SMP;
 
@@ -60,7 +62,7 @@ fn boot_secondary_cpus() {
 
     for cpu_id in 1..TINYENV_SMP {
         debug!("Starting CPU {}...", cpu_id);
-        crate::drivers::power::cpu_on(cpu_id, entry_paddr, cpu_id);
+        with_provider::<PowerProvider>().cpu_on(cpu_id, entry_paddr, cpu_id);
     }
 
     // Wait for all secondary CPUs to be ready
@@ -87,7 +89,10 @@ pub fn rust_main(_cpu_id: usize, arg: usize) -> ! {
     // Clear BSS, initialize exceptions, early UART
     crate::hal::clear_bss();
     crate::hal::init_exception();
-    crate::drivers::uart::init_early(phys_to_virt(pa!(crate::config::UART_PADDR)), crate::config::UART_IRQ);
+    with_provider::<UartProvider>().init_early(
+        phys_to_virt(pa!(crate::config::UART_PADDR)),
+        crate::config::UART_IRQ.into(),
+    );
 
     percpu::init(0); // Initialize percpu for CPU 0
 
@@ -103,14 +108,17 @@ pub fn rust_main(_cpu_id: usize, arg: usize) -> ! {
 
     backtrace_init();
 
-    crate::drivers::irq::init(
+    with_provider::<IrqProvider>()
+        .init(
         phys_to_virt(pa!(crate::config::GICD_BASE)),
         phys_to_virt(pa!(crate::config::GICR_BASE)),
     )
     .expect("Failed to initialize IRQ");
 
-    crate::drivers::timer::init_early();
-    crate::drivers::power::init("hvc").expect("Failed to initialize PSCI");
+    with_provider::<BootProvider>().driver_init_early();
+    with_provider::<PowerProvider>()
+        .init("hvc")
+        .expect("Failed to initialize PSCI");
 
     // Initialize task scheduler
     crate::task::init_taskmanager();
@@ -118,9 +126,9 @@ pub fn rust_main(_cpu_id: usize, arg: usize) -> ! {
     println!("\nHello RustTinyOS!\n");
 
     // Safe because the pointer is a valid pointer to unaliased memory.
-    crate::drivers::fdt::fdt_init(arg);
+    with_provider::<BootProvider>().fdt_init(arg);
 
-    crate::drivers::driver_init();
+    with_provider::<BootProvider>().driver_init();
 
     // Boot secondary CPUs
     boot_secondary_cpus();
@@ -151,10 +159,10 @@ pub fn rust_main_secondary(cpu_id: usize) -> ! {
     crate::task::init_taskmanager_secondary(cpu_id);
 
     // // Initialize GIC for this CPU
-    crate::drivers::irq::init_secondary(cpu_id);
+    with_provider::<IrqProvider>().init_secondary(cpu_id);
 
     // // Initialize timer for this CPU
-    crate::drivers::timer::init_secondary();
+    with_provider::<TimerProvider>().init_secondary();
 
     debug!("CPU {} online", cpu_id);
 
@@ -179,5 +187,5 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
     // Capture and display backtrace
     error!("\n{}", axbacktrace::Backtrace::capture());
 
-    crate::drivers::power::system_off();
+    with_provider::<PowerProvider>().system_off();
 }

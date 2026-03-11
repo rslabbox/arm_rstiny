@@ -8,14 +8,15 @@
 //! - Runs as a regular task via `task::thread::spawn`, so it cooperates
 //!   with the kernel scheduler.
 //! - Input is interrupt-driven: UART IRQ handler pushes characters to
-//!   `crate::drivers::uart::UART_INPUT` ring buffer.
+//!   the UART ring buffer.
 //! - TTY task consumes from the buffer, providing proper echo and line editing.
 //! - Commands are handled by the modular `crate::user` command system.
 //! - Supports command history navigation with Up/Down arrow keys.
 
 use alloc::string::String;
 
-use crate::drivers::uart::{putchar, puts};
+use crate::device::capability::with_provider;
+use crate::device::provider::UartProvider;
 use crate::user::commands::history::HISTORY;
 
 /// ANSI escape sequence state machine.
@@ -35,14 +36,14 @@ pub fn start_tty() {
 }
 
 fn tty_main() {
-    puts("\r\n[tty] started. Type 'help' for commands.\r\n");
-    puts("> ");
+    with_provider::<UartProvider>().puts("\r\n[tty] started. Type 'help' for commands.\r\n");
+    with_provider::<UartProvider>().puts("> ");
 
     let mut line = String::new();
     let mut esc_state = EscapeState::Normal;
 
     loop {
-        if let Some(c) = crate::drivers::uart::getchar() {
+        if let Some(c) = with_provider::<UartProvider>().getchar() {
             match esc_state {
                 EscapeState::Normal => {
                     match c {
@@ -52,7 +53,7 @@ fn tty_main() {
                         }
                         b'\r' | b'\n' => {
                             // Echo newline
-                            puts("\r\n");
+                            with_provider::<UartProvider>().puts("\r\n");
 
                             // Add to history before executing
                             if !line.trim().is_empty() {
@@ -69,21 +70,21 @@ fn tty_main() {
                             line.clear();
 
                             // Print prompt
-                            puts("> ");
+                            with_provider::<UartProvider>().puts("> ");
                         }
                         8 | 127 => {
                             // Backspace
                             if !line.is_empty() {
                                 line.pop();
                                 // Move cursor back, overwrite with space, move back again
-                                puts("\x08 \x08");
+                                with_provider::<UartProvider>().puts("\x08 \x08");
                             }
                         }
                         c if c.is_ascii_graphic() || c == b' ' => {
                             // Printable character - reset history navigation
                             HISTORY.lock().reset_navigation();
                             line.push(c as char);
-                            putchar(c);
+                            with_provider::<UartProvider>().putchar(c);
                         }
                         _ => {
                             // Ignore other control characters
@@ -132,18 +133,18 @@ fn tty_main() {
 fn redraw_line(old_len: usize, new_line: &str) {
     // Move cursor to start of input (after prompt)
     for _ in 0..old_len {
-        puts("\x08"); // Move back
+        with_provider::<UartProvider>().puts("\x08"); // Move back
     }
     // Clear old content
     for _ in 0..old_len {
-        puts(" ");
+        with_provider::<UartProvider>().puts(" ");
     }
     // Move back again
     for _ in 0..old_len {
-        puts("\x08");
+        with_provider::<UartProvider>().puts("\x08");
     }
     // Print new content
-    puts(new_line);
+    with_provider::<UartProvider>().puts(new_line);
 }
 
 /// Handle up arrow - navigate to previous history entry.

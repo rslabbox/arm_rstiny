@@ -3,9 +3,6 @@ mod ops;
 #[cfg(feature = "fat32")]
 mod fat32;
 
-#[cfg(feature = "fs9p")]
-mod fs9p;
-
 use crate::hal::Mutex;
 use alloc::string::String;
 use lazy_static::lazy_static;
@@ -33,16 +30,8 @@ lazy_static! {
     pub static ref FILESYSTEM: Mutex<Option<FS>> = Mutex::new(None);
 }
 
-#[cfg(feature = "fs9p")]
-lazy_static! {
-    pub static ref P9_SESSION: Mutex<Option<::fs9p::Session>> = Mutex::new(None);
-}
-
-#[cfg(all(feature = "fat32", feature = "fs9p"))]
-compile_error!("fat32 and fs9p features are mutually exclusive; enable only one.");
-
-#[cfg(not(any(feature = "fat32", feature = "fs9p")))]
-compile_error!("Either fat32 or fs9p feature must be enabled.");
+#[cfg(not(feature = "fat32"))]
+compile_error!("fat32 feature must be enabled.");
 
 pub fn init() {
     if let Err(err) = mount() {

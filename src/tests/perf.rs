@@ -7,10 +7,18 @@ use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
 
 use crate::config::kernel::TINYENV_SMP;
-use crate::drivers::timer::busy_wait;
-use crate::drivers::timer::generic_timer::current_nanoseconds;
+use crate::device::capability::with_provider;
+use crate::device::provider::TimerProvider;
 use crate::hal::percpu::cpu_id;
 use crate::task::thread;
+
+fn current_nanoseconds() -> u64 {
+    with_provider::<TimerProvider>().current_nanoseconds()
+}
+
+fn busy_wait(duration: core::time::Duration) {
+    with_provider::<TimerProvider>().busy_wait(duration);
+}
 
 /// Matrix size for the benchmark (N x N)
 const MATRIX_SIZE: usize = 100;

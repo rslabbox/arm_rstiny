@@ -116,10 +116,6 @@ fn select_backend() -> Box<dyn FsOps> {
     {
         return Box::new(crate::fs::fat32::Fat32Backend::new());
     }
-    #[cfg(feature = "fs9p")]
-    {
-        return Box::new(crate::fs::fs9p::P9Backend);
-    }
     #[allow(unreachable_code)]
     Box::new(NullBackend)
 }

@@ -132,6 +132,8 @@ SECTIONS {
     linkm2_PAGE_FAULT : { *(linkm2_PAGE_FAULT) }
     linkme_SYSCALL : { *(linkme_SYSCALL) }
     linkm2_SYSCALL : { *(linkm2_SYSCALL) }
+    linkme_PROVIDERS : { *(linkme_PROVIDERS) }
+    linkm2_PROVIDERS : { *(linkm2_PROVIDERS) }
     scope_local : { *(scope_local) }
 
     /* Unittest section */

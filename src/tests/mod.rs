@@ -6,7 +6,6 @@ mod fs_ops;
 mod gicv3;
 mod perf;
 mod task;
-pub mod unittest_demo;
 mod tests;
 
 fn logger_test() {
@@ -20,19 +19,16 @@ fn logger_test() {
 }
 
 pub fn rstiny_tests() {
-    // unittest::test_run();
-    // logger_test();
+    logger_test();
 
-    // allocator::run_allocator_tests();
+    allocator::run_allocator_tests();
 
-    // gicv3::gicv3_tests();
+    gicv3::gicv3_tests();
 
-    // // // Run scheduler tests
-    // task::run_scheduler_tests();
+    // // Run scheduler tests
+    task::run_scheduler_tests();
 
-    // // Run performance tests (single-core and multi-core)
-    // perf::run_perf_tests();
+    // Run performance tests (single-core and multi-core)
+    perf::run_perf_tests();
 
-    #[cfg(feature = "opi5p")]
-    crate::drivers::pci::test_dw_pcie_atu();
 }

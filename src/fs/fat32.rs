@@ -6,7 +6,8 @@ use core::cmp::min;
 use fatfs::{IoBase, Read, Seek, SeekFrom, Write};
 use log::error;
 
-use crate::drivers::virtio::blk::BLOCK_DEVICE;
+use crate::device::capability::with_provider;
+use crate::device::provider::BlockProvider;
 use super::ops::{resolve_path, set_cwd, FileHandle, FsOps, OpenOptions};
 
 /// A wrapper struct needed by fatfs to access the disk.
@@ -52,9 +53,6 @@ const SECTOR_SIZE: u64 = 512;
 
 impl Read for DiskIo {
     fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
-        let mut blk_guard = BLOCK_DEVICE.lock();
-        let blk = blk_guard.as_mut().ok_or(IoError::ReadError)?;
-
         let mut read_len = 0;
         let mut trash = [0u8; SECTOR_SIZE as usize];
 
@@ -62,11 +60,10 @@ impl Read for DiskIo {
             let sector = self.pos / SECTOR_SIZE;
             let offset = (self.pos % SECTOR_SIZE) as usize;
 
-            // Read sector
-            if let Err(e) = blk.read_blocks(sector as usize, &mut trash) {
-                error!("virtio-blk read error: {:?}", e);
-                return Err(IoError::ReadError);
-            }
+            with_provider::<BlockProvider>().read_blocks(sector as usize, &mut trash).map_err(|e| {
+                error!("block read error: {:?}", e);
+                IoError::ReadError
+            })?;
 
             let bytes_to_copy = cmp::min(buf.len() - read_len, SECTOR_SIZE as usize - offset);
             buf[read_len..read_len + bytes_to_copy]
@@ -82,9 +79,6 @@ impl Read for DiskIo {
 
 impl Write for DiskIo {
     fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
-        let mut blk_guard = BLOCK_DEVICE.lock();
-        let blk = blk_guard.as_mut().ok_or(IoError::WriteError)?;
-
         let mut written_len = 0;
         let mut trash = [0u8; SECTOR_SIZE as usize];
 
@@ -93,19 +87,19 @@ impl Write for DiskIo {
             let offset = (self.pos % SECTOR_SIZE) as usize;
 
             // Read-Modify-Write
-            if let Err(e) = blk.read_blocks(sector as usize, &mut trash) {
-                error!("virtio-blk read-for-write error: {:?}", e);
-                return Err(IoError::WriteError);
-            }
+            with_provider::<BlockProvider>().read_blocks(sector as usize, &mut trash).map_err(|e| {
+                error!("block read-for-write error: {:?}", e);
+                IoError::WriteError
+            })?;
 
             let bytes_to_copy = cmp::min(buf.len() - written_len, SECTOR_SIZE as usize - offset);
             trash[offset..offset + bytes_to_copy]
                 .copy_from_slice(&buf[written_len..written_len + bytes_to_copy]);
 
-            if let Err(e) = blk.write_blocks(sector as usize, &trash) {
-                error!("virtio-blk write error: {:?}", e);
-                return Err(IoError::WriteError);
-            }
+            with_provider::<BlockProvider>().write_blocks(sector as usize, &trash).map_err(|e| {
+                error!("block write error: {:?}", e);
+                IoError::WriteError
+            })?;
 
             self.pos += bytes_to_copy as u64;
             written_len += bytes_to_copy;
@@ -125,9 +119,10 @@ impl Seek for DiskIo {
             SeekFrom::Start(off) => self.pos = off,
             SeekFrom::Current(off) => self.pos = (self.pos as i64 + off) as u64,
             SeekFrom::End(off) => {
-                let mut blk_guard = BLOCK_DEVICE.lock();
-                let blk = blk_guard.as_mut().ok_or(IoError::SeekError)?;
-                let capacity = blk.capacity() * SECTOR_SIZE;
+                let capacity = with_provider::<BlockProvider>()
+                    .capacity_blocks()
+                    .map_err(|_| IoError::SeekError)?
+                    * SECTOR_SIZE;
                 self.pos = (capacity as i64 + off) as u64;
             }
         }

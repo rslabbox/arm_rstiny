@@ -4,6 +4,8 @@
 //! multiple CPUs from being interleaved.
 
 use core::fmt::{self, Write};
+use crate::device::capability::with_provider;
+use crate::device::provider::UartProvider;
 use crate::hal::Mutex;
 
 static PRINT_LOCK: Mutex<()> = Mutex::new(());
@@ -31,7 +33,7 @@ impl BufferedPrinter {
             // Safety: buffer contains valid UTF-8 since we only write from str
             let s = unsafe { core::str::from_utf8_unchecked(&self.buffer[..self.pos]) };
             // Output the entire string atomically (UART lock held for whole string)
-            crate::drivers::uart::puts(s);
+            with_provider::<UartProvider>().puts(s);
             self.pos = 0;
         }
     }

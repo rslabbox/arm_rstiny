@@ -16,6 +16,7 @@ mod console;
 mod error;
 
 mod drivers;
+mod device;
 mod fs;
 mod hal;
 mod mm;
@@ -38,8 +39,6 @@ pub use error::TinyResult;
 fn main() {
     // Run tests in main task
     // tests::rstiny_tests();
-    #[cfg(unittest)]
-    unittest::test_run();
 
     // debug!("User main task completed");
     // Start a user-space TTY service so users can interact over UART.

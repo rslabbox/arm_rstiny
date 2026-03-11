@@ -7,7 +7,6 @@ use arm_gic::{
     IntId,
     gicv3::{GicCpuInterface, SgiTarget, SgiTargetGroup},
 };
-use unittest::def_test;
 
 use crate::{
     drivers::{
@@ -19,8 +18,7 @@ use crate::{
 
 static IS_INTERRUPT: AtomicBool = AtomicBool::new(false);
 
-#[def_test]
-fn gicv3_tests() {
+pub fn gicv3_tests() {
     warn!("\n=== GICv3 tests ===");
 
     let cpu_id = percpu::cpu_id();

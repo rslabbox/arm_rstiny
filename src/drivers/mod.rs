@@ -2,6 +2,8 @@
 //!
 //! This module contains drivers for various hardware devices organized by category.
 
+use crate::device::core::Bus;
+
 pub mod irq;
 pub mod power;
 pub mod timer;
@@ -9,38 +11,21 @@ pub mod uart;
 pub mod virtio;
 pub mod fdt;
 
-use core::ptr::NonNull;
-
-use virtio_drivers::{transport::{Transport, mmio::{MmioTransport, VirtIOHeader}}};
+pub fn driver_init_early() {
+    let early_bus = crate::device::core::EarlyBus;
+    for level in [crate::device::core::InitLevel::Early, crate::device::core::InitLevel::Core] {
+        early_bus.for_each_device(|dev| {
+            crate::device::core::driver_manager().bind_device_for_level(&dev, level);
+        });
+    }
+}
 
 pub fn driver_init() {
-    let fdt = crate::drivers::fdt::get_fdt().lock();
-    for node in fdt.all_nodes() {
-        // Check whether it is a VirtIO MMIO device.
-        if let (Some(compatible), Some(region)) = (node.compatible(), node.reg().next()) {
-            if compatible.all().any(|s| s == "virtio,mmio")
-                && region.size.unwrap_or(0) > size_of::<VirtIOHeader>()
-            {
-                let header = NonNull::new(region.starting_address as *mut VirtIOHeader).unwrap();
-                match unsafe { MmioTransport::new(header, region.size.unwrap()) } {
-                    Err(_e) =>  {}, 
-                    Ok(transport) => {
-                        match transport.device_type() {
-                            virtio_drivers::transport::DeviceType::Block => {
-                                virtio::blk::init(transport);
-                            }
-                            #[cfg(feature = "fs9p")]
-                            virtio_drivers::transport::DeviceType::_9P => {
-                                virtio::p9::init(transport);
-                            }
-                            _ => {
-                                // Unsupported device type; ignore.
-                            }
-                        }
-                    }
-                }
-            }
-        }
+    let bus = crate::device::core::FdtBus;
+    for level in [crate::device::core::InitLevel::Normal, crate::device::core::InitLevel::Late] {
+        bus.for_each_device(|dev| {
+            crate::device::core::driver_manager().bind_device_for_level(&dev, level);
+        });
     }
 }
 

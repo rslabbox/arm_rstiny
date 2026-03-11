@@ -3,6 +3,8 @@
 use aarch64_cpu::registers::{ESR_EL1, FAR_EL1};
 use aarch64_cpu::registers::{Readable, VBAR_EL1, Writeable};
 
+use crate::device::capability::with_provider;
+use crate::device::provider::IrqProvider;
 use crate::hal::TrapFrame;
 
 core::arch::global_asm!(include_str!("trap.S"));
@@ -41,7 +43,7 @@ fn invalid_exception(tf: &TrapFrame, kind: TrapKind, source: TrapSource) {
 
 #[unsafe(no_mangle)]
 fn handle_irq_exception(_tf: &mut TrapFrame) {
-    crate::drivers::irq::gicv3::irq_handler();
+    with_provider::<IrqProvider>().handle();
 
     // After handling interrupt, check if we need to schedule
     crate::task::task_ops::task_timer_tick();

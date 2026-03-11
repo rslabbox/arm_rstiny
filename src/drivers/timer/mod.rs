@@ -9,7 +9,8 @@ pub use generic_timer::*;
 
 use crate::{
     config,
-    drivers::{self},
+    device::core::{DeviceInfo, InitLevel},
+    TinyResult,
 };
 
 // Setup timer interrupt handler
@@ -43,9 +44,14 @@ pub fn init_early() {
     NEXT_PERIODIC_DEADLINE.store(deadline, Ordering::Release);
     update_deadline(deadline);
     // Enable Timer interrupt
-    drivers::irq::irqset_register(config::kernel::TIMER_IRQ, handle_timer_irq);
+    crate::drivers::irq::irqset_register(config::kernel::TIMER_IRQ, handle_timer_irq);
     // Timer interrupt ID on ARM GIC
     enable_irqs(config::kernel::TIMER_IRQ);
+}
+
+fn probe_impl(_dev: &DeviceInfo) -> TinyResult<()> {
+    init_early();
+    Ok(())
 }
 
 /// Initialize timer for secondary CPU.
@@ -57,3 +63,23 @@ pub fn init_secondary() {
     // Note: The timer IRQ handler is already registered by primary CPU
     enable_irqs(IntId::ppi(14));
 }
+
+crate::define_provider!(
+    provider: TIMER_PROVIDER,
+    vendor_id: 0,
+    device_id: 0,
+    priority: 100,
+    ops: crate::device::provider::TimerProvider {
+        boot_nanoseconds,
+        nanos_per_sec: || NANOS_PER_SEC,
+        current_nanoseconds: generic_timer::current_nanoseconds,
+        busy_wait,
+        init_secondary,
+    },
+    driver: {
+        name: "generic-timer",
+        level: InitLevel::Early,
+        compatibles: ["arm,armv8-timer", "arm,armv7-timer"],
+        probe: probe_impl,
+    }
+);

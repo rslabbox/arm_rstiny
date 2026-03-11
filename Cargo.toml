@@ -9,7 +9,6 @@ default = ["qemu", "fat32"]
 opi5p = []
 qemu = []
 fat32 = ["dep:fatfs"]
-fs9p = ["dep:fs9p"]
 
 [dependencies]
 # Architecture & Hardware
@@ -25,7 +24,7 @@ talc = "4.4.3"
 # Drivers
 arm_pl011 = "0.1"
 dw_apb_uart = "0.1"
-virtio-drivers = "0.12.0"
+virtio-drivers = "0.13.0"
 flat_device_tree = "3.1.1"
 
 # Utilities & Common
@@ -36,7 +35,9 @@ int_ratio = "0.1"
 lazy_static = { version = "1.5.0", features = ["spin_no_std"] }
 lazyinit = "0.2"
 lock_api = "0.4.14"
+linkme = "0.3"
 log = "0.4"
+provider-macros = { path = "provider-macros" }
 rand = { version = "0.9", default-features = false, features = ["small_rng"] }
 
 # Data Structures
@@ -46,14 +47,7 @@ weak-map = "0.1"
 # Debugging
 axbacktrace = { version = "0.1.1", features = ["alloc", "dwarf"] }
 fatfs = { git = "https://github.com/rafalh/rust-fatfs", default-features = false, features = ["alloc", "unicode"], optional = true }
-fs9p = { version = "0.1", optional = true }
 ext4_rs = "1.3.3"
-
-# Testing & Benchmarking
-unittest = { path = "unittest" }
-
-[patch.crates-io]
-virtio-drivers = { path = "virtio-drivers" }
 
 [profile.dev]
 panic = "abort"

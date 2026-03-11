@@ -5,6 +5,8 @@ use log::{Level, LevelFilter, Log, Metadata, Record};
 
 use crate::TinyResult;
 use crate::config::kernel::TINYENV_LOG;
+use crate::device::capability::with_provider;
+use crate::device::provider::TimerProvider;
 use crate::println;
 
 pub struct SimpleLogger;
@@ -54,8 +56,8 @@ impl Log for SimpleLogger {
             Level::Trace => (ColorCode::BrightBlack, ColorCode::BrightBlack),
         };
 
-        let current_nanos = crate::drivers::timer::boot_nanoseconds();
-        let secs = (current_nanos as f64) / (crate::drivers::timer::NANOS_PER_SEC as f64);
+        let current_nanos = with_provider::<TimerProvider>().boot_nanoseconds();
+        let secs = (current_nanos as f64) / (with_provider::<TimerProvider>().nanos_per_sec() as f64);
 
         // 彩色输出格式：[时间 文件:行号] 消息
         println!("[{secs:.5} {file}:{line}] {args_color}{args}{color_reset}");

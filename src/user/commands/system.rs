@@ -1,5 +1,7 @@
 //! System commands - power management and system control.
 
+use crate::device::capability::with_provider;
+use crate::device::provider::PowerProvider;
 use crate::TinyResult;
 use crate::user::{Command, CommandContext};
 
@@ -35,6 +37,6 @@ impl Command for ExitCommand {
 
     fn execute(&self, _ctx: &CommandContext) -> TinyResult<()> {
         println!("Powering off...");
-        crate::drivers::power::system_off();
+        with_provider::<PowerProvider>().system_off();
     }
 }
