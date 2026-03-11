@@ -1,8 +1,9 @@
 use core::sync::atomic::{AtomicU64, Ordering};
 
+use provider_core::with_provider;
 use weak_map::WeakMap;
 
-use crate::{drivers::timer::current_nanoseconds, hal::Mutex, task::task_ref::TaskState};
+use crate::{device::provider::TimerProvider, hal::Mutex, task::task_ref::TaskState};
 
 type WeakTaskRef = alloc::sync::Weak<super::SchedulableTask>;
 
@@ -17,7 +18,7 @@ pub(crate) struct TimerKey {
 static TIMER_WHEEL: Mutex<WeakMap<TimerKey, WeakTaskRef>> = Mutex::new(WeakMap::new());
 
 pub(crate) fn set_timer(deadline: u64, task: &super::TaskRef) -> Option<TimerKey> {
-    if deadline <= current_nanoseconds() {
+    if deadline <= with_provider::<TimerProvider>().current_nanoseconds() {
         return None;
     }
 
@@ -45,7 +46,7 @@ pub(crate) fn has_timer(key: &TimerKey) -> bool {
 pub(crate) fn check_events() {
     let mut wheel = TIMER_WHEEL.lock();
     for (key, maybe_task) in &mut *wheel {
-        if key.deadline <= current_nanoseconds() {
+        if key.deadline <= with_provider::<TimerProvider>().current_nanoseconds() {
             if let Some(task) = maybe_task.upgrade() {
                 // task_unblock(&task);
                 if task.try_set_state(TaskState::Sleeping, TaskState::Ready) {

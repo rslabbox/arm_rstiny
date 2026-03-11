@@ -67,7 +67,6 @@ pub fn clear_bss() {
     }
 }
 
-
 /// Enables interrupts.
 ///
 /// This function clears the DAIF I bit to enable IRQ interrupts.

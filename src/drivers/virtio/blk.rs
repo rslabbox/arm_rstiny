@@ -70,7 +70,7 @@ fn probe(dev: &DeviceInfo) -> TinyResult<()> {
     Ok(())
 }
 
-crate::define_provider!(
+provider_core::define_provider!(
     provider: BLOCK_PROVIDER,
     vendor_id: 0x1af4,
     device_id: 2,

@@ -1,8 +1,8 @@
 //! DesignWare APB UART driver.
 
 use crate::TinyResult;
-use dw_apb_uart::DW8250;
 use crate::hal::Mutex;
+use dw_apb_uart::DW8250;
 use lazyinit::LazyInit;
 use memory_addr::VirtAddr;
 

@@ -14,9 +14,11 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 
 use memory_addr::pa;
 
+use crate::device::provider::{
+    BootProvider, IrqProvider, PowerProvider, TimerProvider, UartProvider,
+};
 use crate::{config::kernel::PHYS_VIRT_OFFSET, hal::percpu, mm::phys_to_virt, println};
-use crate::device::capability::with_provider;
-use crate::device::provider::{BootProvider, IrqProvider, PowerProvider, TimerProvider, UartProvider};
+use provider_core::with_provider;
 
 use crate::config::kernel::TINYENV_SMP;
 
@@ -110,10 +112,10 @@ pub fn rust_main(_cpu_id: usize, arg: usize) -> ! {
 
     with_provider::<IrqProvider>()
         .init(
-        phys_to_virt(pa!(crate::config::GICD_BASE)),
-        phys_to_virt(pa!(crate::config::GICR_BASE)),
-    )
-    .expect("Failed to initialize IRQ");
+            phys_to_virt(pa!(crate::config::GICD_BASE)),
+            phys_to_virt(pa!(crate::config::GICR_BASE)),
+        )
+        .expect("Failed to initialize IRQ");
 
     with_provider::<BootProvider>().driver_init_early();
     with_provider::<PowerProvider>()

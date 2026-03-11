@@ -7,10 +7,10 @@ use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
 
 use crate::config::kernel::TINYENV_SMP;
-use crate::device::capability::with_provider;
 use crate::device::provider::TimerProvider;
 use crate::hal::percpu::cpu_id;
 use crate::task::thread;
+use provider_core::with_provider;
 
 fn current_nanoseconds() -> u64 {
     with_provider::<TimerProvider>().current_nanoseconds()
@@ -149,7 +149,10 @@ fn bench_multi_core() -> u64 {
 
         let handle = thread::spawn("Perf Task", move || {
             let cpu = cpu_id();
-            debug!("[Worker {}] Starting on CPU {}, iterations: {}", i, cpu, iters);
+            debug!(
+                "[Worker {}] Starting on CPU {}, iterations: {}",
+                i, cpu, iters
+            );
 
             let time_ns = matrix_benchmark(iters, seed);
 
@@ -183,7 +186,10 @@ fn bench_multi_core() -> u64 {
     let total_time = end - start;
     let total_time_ms = total_time / 1_000_000;
 
-    info!("Multi-core total time: {} ms ({} ns)", total_time_ms, total_time);
+    info!(
+        "Multi-core total time: {} ms ({} ns)",
+        total_time_ms, total_time
+    );
 
     // Print individual worker times
     for (i, time) in worker_times.iter().enumerate() {
@@ -209,14 +215,8 @@ pub fn run_perf_tests() {
 
     // Calculate and print results
     info!("========== Performance Summary ==========");
-    info!(
-        "Single-core time: {} ms",
-        single_time / 1_000_000
-    );
-    info!(
-        "Multi-core time:  {} ms",
-        multi_time / 1_000_000
-    );
+    info!("Single-core time: {} ms", single_time / 1_000_000);
+    info!("Multi-core time:  {} ms", multi_time / 1_000_000);
 
     if multi_time > 0 && single_time > 0 {
         // Calculate speedup: single_time / multi_time

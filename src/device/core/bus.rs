@@ -1,7 +1,7 @@
 //! Device discovery bus abstractions.
 
-use crate::device::capability::with_provider;
 use crate::device::provider::BootProvider;
+use provider_core::with_provider;
 
 use super::model::{DeviceInfo, MAX_COMPAT_ENTRIES};
 

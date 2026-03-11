@@ -3,9 +3,9 @@
 use aarch64_cpu::registers::{ESR_EL1, FAR_EL1};
 use aarch64_cpu::registers::{Readable, VBAR_EL1, Writeable};
 
-use crate::device::capability::with_provider;
 use crate::device::provider::IrqProvider;
 use crate::hal::TrapFrame;
+use provider_core::with_provider;
 
 core::arch::global_asm!(include_str!("trap.S"));
 

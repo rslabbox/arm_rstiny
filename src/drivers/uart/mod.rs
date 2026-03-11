@@ -15,7 +15,7 @@ pub use dw_apb::{getchar, init_early, irq_handler, putchar, puts};
 #[cfg(feature = "qemu")]
 pub use pl011::{getchar, init_early, putchar, puts};
 
-crate::define_provider!(
+provider_core::define_provider!(
     provider: UART_PROVIDER,
     vendor_id: 0,
     device_id: 0,

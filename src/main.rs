@@ -15,8 +15,8 @@ mod console;
 
 mod error;
 
-mod drivers;
 mod device;
+mod drivers;
 mod fs;
 mod hal;
 mod mm;
@@ -29,6 +29,7 @@ mod user;
 extern crate log;
 
 pub use console::print;
+pub use provider_core::define_provider;
 
 extern crate alloc;
 extern crate axbacktrace;

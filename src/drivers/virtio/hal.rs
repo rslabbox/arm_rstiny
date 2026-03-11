@@ -1,9 +1,9 @@
+use alloc::alloc::{alloc_zeroed, dealloc, handle_alloc_error};
 use core::alloc::Layout;
 use core::ptr::NonNull;
-use alloc::alloc::{alloc_zeroed, dealloc, handle_alloc_error};
-use virtio_drivers::{BufferDirection, Hal, PhysAddr};
-use memory_addr::{PAGE_SIZE_4K, pa, va};
 use log::trace;
+use memory_addr::{PAGE_SIZE_4K, pa, va};
+use virtio_drivers::{BufferDirection, Hal, PhysAddr};
 
 pub struct VirtioHalImpl;
 
@@ -17,7 +17,7 @@ unsafe impl Hal for VirtioHalImpl {
         } else {
             handle_alloc_error(layout)
         };
-        
+
         let paddr = crate::mm::virt_to_phys(va!(vaddr.as_ptr() as usize)).as_usize();
 
         trace!("alloc DMA: paddr={:#x}, pages={}", paddr, pages);
@@ -42,7 +42,10 @@ unsafe impl Hal for VirtioHalImpl {
 
     unsafe fn share(buffer: NonNull<[u8]>, _direction: BufferDirection) -> PhysAddr {
         let vaddr = buffer.as_ptr() as *mut u8 as usize;
-        crate::mm::virt_to_phys(va!(vaddr)).as_usize().try_into().unwrap()
+        crate::mm::virt_to_phys(va!(vaddr))
+            .as_usize()
+            .try_into()
+            .unwrap()
     }
 
     unsafe fn unshare(_paddr: PhysAddr, _buffer: NonNull<[u8]>, _direction: BufferDirection) {

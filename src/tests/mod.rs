@@ -30,5 +30,4 @@ pub fn rstiny_tests() {
 
     // Run performance tests (single-core and multi-core)
     perf::run_perf_tests();
-
 }

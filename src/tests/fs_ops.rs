@@ -1,8 +1,8 @@
 #![allow(unused)]
 
+use crate::alloc::string::ToString;
 use alloc::string::String;
 use alloc::vec::Vec;
-use crate::alloc::string::ToString;
 
 use crate::fs;
 use crate::fs::{DirEntry, FileType, OpenOptions};
@@ -115,7 +115,10 @@ fn test_fsops_stat_and_helpers() {
     // stat on directory
     let dir_meta = fs::stat(TEST_DIR).expect("stat dir failed");
     assert_eq!(dir_meta.file_type, FileType::Directory);
-    println!("  stat({}): type={:?} mode={:o} size={}", TEST_DIR, dir_meta.file_type, dir_meta.mode, dir_meta.size);
+    println!(
+        "  stat({}): type={:?} mode={:o} size={}",
+        TEST_DIR, dir_meta.file_type, dir_meta.mode, dir_meta.size
+    );
 
     // create file with content and verify
     let handle = fs::create_file(TEST_FILE).expect("create_file failed");
@@ -129,9 +132,16 @@ fn test_fsops_stat_and_helpers() {
     let file_meta = fs::stat(TEST_FILE).expect("stat file failed");
     assert_eq!(file_meta.file_type, FileType::File);
     assert_eq!(file_meta.size, 11);
-    println!("  stat({}): type={:?} mode={:o} size={} nlink={} uid={} gid={}",
-        TEST_FILE, file_meta.file_type, file_meta.mode, file_meta.size,
-        file_meta.nlink, file_meta.uid, file_meta.gid);
+    println!(
+        "  stat({}): type={:?} mode={:o} size={} nlink={} uid={} gid={}",
+        TEST_FILE,
+        file_meta.file_type,
+        file_meta.mode,
+        file_meta.size,
+        file_meta.nlink,
+        file_meta.uid,
+        file_meta.gid
+    );
 
     let size = fs::file_size(TEST_FILE).expect("file_size failed");
     assert_eq!(size, 11);
@@ -249,7 +259,10 @@ fn test_fsops_copy_file() {
     assert_eq!(copied, data.len() as u64);
 
     // verify copy content
-    let opt = OpenOptions { read: true, ..Default::default() };
+    let opt = OpenOptions {
+        read: true,
+        ..Default::default()
+    };
     let h = fs::open(TEST_COPY, opt).expect("open copy failed");
     let read = fs::read_file(h, 0, 0).expect("read copy failed");
     assert_eq!(read, data.to_vec());
@@ -292,7 +305,10 @@ fn test_fsops_open_options_append() {
     assert!(fs::close(h).is_ok());
 
     // read back full content
-    let ropt = OpenOptions { read: true, ..Default::default() };
+    let ropt = OpenOptions {
+        read: true,
+        ..Default::default()
+    };
     let rh = fs::open(TEST_FILE, ropt).expect("open for read failed");
     let content = fs::read_file(rh, 0, 0).expect("read failed");
     assert_eq!(content, b"hello world".to_vec());

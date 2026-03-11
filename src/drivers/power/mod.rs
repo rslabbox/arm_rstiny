@@ -5,7 +5,7 @@ pub mod psci;
 #[allow(unused)]
 pub use psci::{cpu_off, cpu_on, halt, init, system_off};
 
-crate::define_provider!(
+provider_core::define_provider!(
     provider: POWER_PROVIDER,
     vendor_id: 0,
     device_id: 0,

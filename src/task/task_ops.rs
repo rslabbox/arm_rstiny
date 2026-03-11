@@ -1,15 +1,16 @@
 use alloc::sync::Arc;
+use provider_core::with_provider;
 
 use crate::{
-    config::kernel::TINYENV_SMP, drivers::{
-        power::system_off,
-        timer::{busy_wait, current_nanoseconds},
-    }, hal::Mutex, task::{
+    config::kernel::TINYENV_SMP,
+    device::provider::{PowerProvider, TimerProvider},
+    hal::Mutex,
+    task::{
         manager::TaskManager,
         task_ref::TaskState,
         thread::JoinHandle,
         timers::{check_events, set_timer},
-    }
+    },
 };
 
 use super::TaskRef;
@@ -137,7 +138,7 @@ pub fn task_exit(curr_task: TaskRef) {
     let remaining = ACTIVE_TASK_COUNT.fetch_sub(1, Ordering::SeqCst) - 1;
     if remaining == 0 {
         debug!("All tasks have exited. System will halt.");
-        system_off();
+        with_provider::<PowerProvider>().system_off();
     }
 
     task_drop_to_idle(&curr_task);
@@ -150,13 +151,13 @@ pub fn task_exit(curr_task: TaskRef) {
 pub fn task_sleep(duration: Duration) {
     let nanos = duration.as_nanos() as u64;
     let curr_task = crate::hal::percpu::current_task();
-    let deadline_ns = current_nanoseconds() + nanos;
+    let deadline_ns = with_provider::<TimerProvider>().current_nanoseconds() + nanos;
 
     assert!(curr_task.state() == TaskState::Running);
     assert!(!curr_task.is_idle());
 
     // Calculate duration from now to deadline
-    let now = current_nanoseconds();
+    let now = with_provider::<TimerProvider>().current_nanoseconds();
     let duration = Duration::from_nanos(deadline_ns - now);
 
     debug!(
@@ -200,7 +201,7 @@ pub(crate) fn idle_loop() -> ! {
                 task.id(),
                 task.state()
             );
-            // busy_wait(Duration::from_nanos(10));
+            // with_provider::<TimerProvider>().busy_wait(Duration::from_nanos(10));
             idle_task.switch_to(&task);
 
             continue;

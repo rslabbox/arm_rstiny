@@ -1,14 +1,14 @@
-use alloc::{collections::BTreeMap, format};
 use alloc::string::String;
 use alloc::vec::Vec;
+use alloc::{collections::BTreeMap, format};
 use core::cmp;
 use core::cmp::min;
 use fatfs::{IoBase, Read, Seek, SeekFrom, Write};
 use log::error;
 
-use crate::device::capability::with_provider;
+use super::ops::{FileHandle, FsOps, OpenOptions, resolve_path, set_cwd};
 use crate::device::provider::BlockProvider;
-use super::ops::{resolve_path, set_cwd, FileHandle, FsOps, OpenOptions};
+use provider_core::with_provider;
 
 /// A wrapper struct needed by fatfs to access the disk.
 /// It maintains a current seek position/cursor.
@@ -60,10 +60,12 @@ impl Read for DiskIo {
             let sector = self.pos / SECTOR_SIZE;
             let offset = (self.pos % SECTOR_SIZE) as usize;
 
-            with_provider::<BlockProvider>().read_blocks(sector as usize, &mut trash).map_err(|e| {
-                error!("block read error: {:?}", e);
-                IoError::ReadError
-            })?;
+            with_provider::<BlockProvider>()
+                .read_blocks(sector as usize, &mut trash)
+                .map_err(|e| {
+                    error!("block read error: {:?}", e);
+                    IoError::ReadError
+                })?;
 
             let bytes_to_copy = cmp::min(buf.len() - read_len, SECTOR_SIZE as usize - offset);
             buf[read_len..read_len + bytes_to_copy]
@@ -87,19 +89,23 @@ impl Write for DiskIo {
             let offset = (self.pos % SECTOR_SIZE) as usize;
 
             // Read-Modify-Write
-            with_provider::<BlockProvider>().read_blocks(sector as usize, &mut trash).map_err(|e| {
-                error!("block read-for-write error: {:?}", e);
-                IoError::WriteError
-            })?;
+            with_provider::<BlockProvider>()
+                .read_blocks(sector as usize, &mut trash)
+                .map_err(|e| {
+                    error!("block read-for-write error: {:?}", e);
+                    IoError::WriteError
+                })?;
 
             let bytes_to_copy = cmp::min(buf.len() - written_len, SECTOR_SIZE as usize - offset);
             trash[offset..offset + bytes_to_copy]
                 .copy_from_slice(&buf[written_len..written_len + bytes_to_copy]);
 
-            with_provider::<BlockProvider>().write_blocks(sector as usize, &trash).map_err(|e| {
-                error!("block write error: {:?}", e);
-                IoError::WriteError
-            })?;
+            with_provider::<BlockProvider>()
+                .write_blocks(sector as usize, &trash)
+                .map_err(|e| {
+                    error!("block write error: {:?}", e);
+                    IoError::WriteError
+                })?;
 
             self.pos += bytes_to_copy as u64;
             written_len += bytes_to_copy;
@@ -251,7 +257,12 @@ impl FsOps for Fat32Backend {
         Ok(())
     }
 
-    fn read_file(&mut self, handle: FileHandle, offset: u64, len: usize) -> Result<Vec<u8>, String> {
+    fn read_file(
+        &mut self,
+        handle: FileHandle,
+        offset: u64,
+        len: usize,
+    ) -> Result<Vec<u8>, String> {
         use fatfs::Read;
         use fatfs::Seek;
         use fatfs::SeekFrom;
@@ -312,7 +323,12 @@ impl FsOps for Fat32Backend {
         self.open(path, options)
     }
 
-    fn write_file(&mut self, handle: FileHandle, offset: u64, data: &[u8]) -> Result<usize, String> {
+    fn write_file(
+        &mut self,
+        handle: FileHandle,
+        offset: u64,
+        data: &[u8],
+    ) -> Result<usize, String> {
         use fatfs::Seek;
         use fatfs::SeekFrom;
         use fatfs::Write;

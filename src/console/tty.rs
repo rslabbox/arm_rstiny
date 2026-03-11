@@ -15,9 +15,9 @@
 
 use alloc::string::String;
 
-use crate::device::capability::with_provider;
 use crate::device::provider::UartProvider;
 use crate::user::commands::history::HISTORY;
+use provider_core::with_provider;
 
 /// ANSI escape sequence state machine.
 #[derive(Clone, Copy, PartialEq)]

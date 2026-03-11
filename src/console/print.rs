@@ -3,10 +3,10 @@
 //! This module provides thread-safe printing that prevents output from
 //! multiple CPUs from being interleaved.
 
-use core::fmt::{self, Write};
-use crate::device::capability::with_provider;
 use crate::device::provider::UartProvider;
 use crate::hal::Mutex;
+use core::fmt::{self, Write};
+use provider_core::with_provider;
 
 static PRINT_LOCK: Mutex<()> = Mutex::new(());
 

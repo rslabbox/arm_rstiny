@@ -3,9 +3,9 @@
 use alloc::collections::BTreeMap;
 use alloc::string::{String, ToString};
 
+use crate::TinyResult;
 use crate::hal::Mutex;
 use crate::user::{Command, CommandContext};
-use crate::TinyResult;
 
 /// Global environment variables storage.
 pub static ENV_VARS: Mutex<BTreeMap<String, String>> = Mutex::new(BTreeMap::new());
@@ -75,10 +75,7 @@ impl Command for EnvCommand {
             }
             Some("get") => {
                 use anyhow::Context;
-                let name = ctx
-                    .args
-                    .get(1)
-                    .context("Usage: env get <name>")?;
+                let name = ctx.args.get(1).context("Usage: env get <name>")?;
                 match get_var(name) {
                     Some(value) => {
                         println!("{}", value);
@@ -92,9 +89,7 @@ impl Command for EnvCommand {
             }
             Some("set") => {
                 use anyhow::Context;
-                let name = ctx.args.get(1).context(
-                    "Usage: env set <name> <value>",
-                )?;
+                let name = ctx.args.get(1).context("Usage: env set <name> <value>")?;
                 // Join remaining args as value (allows spaces in value)
                 let value = if ctx.args.len() > 2 {
                     // Get everything after "set <name> "
@@ -109,10 +104,7 @@ impl Command for EnvCommand {
             }
             Some("unset") => {
                 use anyhow::Context;
-                let name = ctx
-                    .args
-                    .get(1)
-                    .context("Usage: env unset <name>")?;
+                let name = ctx.args.get(1).context("Usage: env unset <name>")?;
                 if unset_var(name).is_some() {
                     println!("Unset '{}'", name);
                     Ok(())

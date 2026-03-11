@@ -1,10 +1,10 @@
 //! Filesystem commands.
 
 use crate::TinyResult;
-use crate::user::Command;
-use crate::user::CommandContext;
 use crate::fs;
 use crate::fs::{FileType, OpenOptions};
+use crate::user::Command;
+use crate::user::CommandContext;
 
 /// List directory contents.
 pub static LS: LsCommand = LsCommand;
@@ -44,7 +44,11 @@ impl Command for LsCommand {
                 Ok(entries) => {
                     for entry in entries {
                         let child = if target == "/" || target == "." {
-                            alloc::format!("{}/{}", fs::current_dir().trim_end_matches('/'), entry.name)
+                            alloc::format!(
+                                "{}/{}",
+                                fs::current_dir().trim_end_matches('/'),
+                                entry.name
+                            )
                         } else {
                             let base = fs::current_dir();
                             let full = if target.starts_with('/') {
@@ -63,7 +67,13 @@ impl Command for LsCommand {
                             FileType::Other => '?',
                         };
                         if let Ok(meta) = fs::stat(&child) {
-                            println!("{}{:o}  {:>8}  {}", type_char, meta.mode & 0o7777, meta.size, entry.name);
+                            println!(
+                                "{}{:o}  {:>8}  {}",
+                                type_char,
+                                meta.mode & 0o7777,
+                                meta.size,
+                                entry.name
+                            );
                         } else {
                             println!("{}           {}", type_char, entry.name);
                         }
@@ -148,7 +158,11 @@ impl Command for MkdirCommand {
         }
         match path {
             Some(p) => {
-                let result = if recursive { fs::mkdir_all(p) } else { fs::mkdir(p) };
+                let result = if recursive {
+                    fs::mkdir_all(p)
+                } else {
+                    fs::mkdir(p)
+                };
                 if let Err(e) = result {
                     println!("mkdir: {}", e);
                 }
@@ -158,7 +172,6 @@ impl Command for MkdirCommand {
         Ok(())
     }
 }
-
 
 /// Print current working directory.
 pub static PWD: PwdCommand = PwdCommand;
@@ -214,25 +227,40 @@ impl Command for CatCommand {
     fn execute(&self, ctx: &CommandContext) -> TinyResult<()> {
         let path = match ctx.args.get(0) {
             Some(p) => p,
-            None => { println!("Usage: cat <file>"); return Ok(()); }
+            None => {
+                println!("Usage: cat <file>");
+                return Ok(());
+            }
         };
-        let opt = OpenOptions { read: true, ..Default::default() };
+        let opt = OpenOptions {
+            read: true,
+            ..Default::default()
+        };
         match fs::open(path, opt) {
             Ok(handle) => {
                 let mut offset = 0u64;
                 loop {
                     match fs::read_file(handle, offset, 4096) {
                         Ok(data) => {
-                            if data.is_empty() { break; }
+                            if data.is_empty() {
+                                break;
+                            }
                             if let Ok(text) = core::str::from_utf8(&data) {
                                 print!("{}", text);
                             } else {
-                                println!("cat: binary file, {} bytes at offset {}", data.len(), offset);
+                                println!(
+                                    "cat: binary file, {} bytes at offset {}",
+                                    data.len(),
+                                    offset
+                                );
                                 break;
                             }
                             offset += data.len() as u64;
                         }
-                        Err(e) => { println!("cat: read error: {}", e); break; }
+                        Err(e) => {
+                            println!("cat: read error: {}", e);
+                            break;
+                        }
                     }
                 }
                 let _ = fs::close(handle);
@@ -269,13 +297,18 @@ impl Command for TouchCommand {
     fn execute(&self, ctx: &CommandContext) -> TinyResult<()> {
         let path = match ctx.args.get(0) {
             Some(p) => p,
-            None => { println!("Usage: touch <file>"); return Ok(()); }
+            None => {
+                println!("Usage: touch <file>");
+                return Ok(());
+            }
         };
         if fs::exists(path) {
             return Ok(());
         }
         match fs::create_file(path) {
-            Ok(handle) => { let _ = fs::close(handle); }
+            Ok(handle) => {
+                let _ = fs::close(handle);
+            }
             Err(e) => println!("touch: {}", e),
         }
         Ok(())
@@ -396,7 +429,10 @@ impl Command for CpCommand {
     fn execute(&self, ctx: &CommandContext) -> TinyResult<()> {
         let (src, dst) = match (ctx.args.get(0), ctx.args.get(1)) {
             (Some(s), Some(d)) => (s, d),
-            _ => { println!("Usage: cp <source> <destination>"); return Ok(()); }
+            _ => {
+                println!("Usage: cp <source> <destination>");
+                return Ok(());
+            }
         };
         match fs::copy_file(src, dst) {
             Ok(bytes) => println!("{} bytes copied", bytes),
@@ -431,7 +467,10 @@ impl Command for MvCommand {
     fn execute(&self, ctx: &CommandContext) -> TinyResult<()> {
         let (src, dst) = match (ctx.args.get(0), ctx.args.get(1)) {
             (Some(s), Some(d)) => (s, d),
-            _ => { println!("Usage: mv <source> <destination>"); return Ok(()); }
+            _ => {
+                println!("Usage: mv <source> <destination>");
+                return Ok(());
+            }
         };
         if let Err(e) = fs::rename(src, dst) {
             println!("mv: {}", e);
@@ -474,7 +513,10 @@ impl Command for LnCommand {
         }
         let (target, link_name) = match (positional.get(0), positional.get(1)) {
             (Some(t), Some(l)) => (*t, *l),
-            _ => { println!("Usage: ln [-s] <target> <link_name>"); return Ok(()); }
+            _ => {
+                println!("Usage: ln [-s] <target> <link_name>");
+                return Ok(());
+            }
         };
         let result = if symbolic {
             fs::symlink(target, link_name)
@@ -513,7 +555,10 @@ impl Command for StatCommand {
     fn execute(&self, ctx: &CommandContext) -> TinyResult<()> {
         let path = match ctx.args.get(0) {
             Some(p) => p,
-            None => { println!("Usage: stat <path>"); return Ok(()); }
+            None => {
+                println!("Usage: stat <path>");
+                return Ok(());
+            }
         };
         match fs::stat(path) {
             Ok(meta) => {
@@ -526,7 +571,12 @@ impl Command for StatCommand {
                 println!("  File: {}", path);
                 println!("  Type: {}", type_str);
                 println!("  Size: {}  Links: {}", meta.size, meta.nlink);
-                println!("  Mode: {:o}  Uid: {}  Gid: {}", meta.mode & 0o7777, meta.uid, meta.gid);
+                println!(
+                    "  Mode: {:o}  Uid: {}  Gid: {}",
+                    meta.mode & 0o7777,
+                    meta.uid,
+                    meta.gid
+                );
                 if let Ok(target) = fs::read_link(path) {
                     println!("  Link: -> {}", target);
                 }
@@ -562,11 +612,17 @@ impl Command for ChmodCommand {
     fn execute(&self, ctx: &CommandContext) -> TinyResult<()> {
         let (mode_str, path) = match (ctx.args.get(0), ctx.args.get(1)) {
             (Some(m), Some(p)) => (m, p),
-            _ => { println!("Usage: chmod <mode> <file>"); return Ok(()); }
+            _ => {
+                println!("Usage: chmod <mode> <file>");
+                return Ok(());
+            }
         };
         let mode = match u32::from_str_radix(mode_str, 8) {
             Ok(m) => m,
-            Err(_) => { println!("chmod: invalid mode: {}", mode_str); return Ok(()); }
+            Err(_) => {
+                println!("chmod: invalid mode: {}", mode_str);
+                return Ok(());
+            }
         };
         if let Err(e) = fs::chmod(path, mode) {
             println!("chmod: {}", e);
@@ -609,7 +665,9 @@ impl Command for TreeCommand {
             } else {
                 alloc::string::String::from(path)
             };
-            let relative = child_path.strip_prefix(base.trim_end_matches('/')).unwrap_or(child_path);
+            let relative = child_path
+                .strip_prefix(base.trim_end_matches('/'))
+                .unwrap_or(child_path);
             let depth = relative.matches('/').count();
             for _ in 1..depth {
                 print!("    ");
@@ -667,12 +725,18 @@ impl Command for WriteCommand {
     fn execute(&self, ctx: &CommandContext) -> TinyResult<()> {
         let path = match ctx.args.get(0) {
             Some(p) => p,
-            None => { println!("Usage: write <file> <text...>"); return Ok(()); }
+            None => {
+                println!("Usage: write <file> <text...>");
+                return Ok(());
+            }
         };
         // Everything after the first arg is the content
         let content = match ctx.args_raw.strip_prefix(path) {
             Some(rest) => rest.trim_start(),
-            None => { println!("Usage: write <file> <text...>"); return Ok(()); }
+            None => {
+                println!("Usage: write <file> <text...>");
+                return Ok(());
+            }
         };
         if content.is_empty() {
             println!("write: nothing to write");

@@ -1,9 +1,9 @@
 //! System commands - power management and system control.
 
-use crate::device::capability::with_provider;
-use crate::device::provider::PowerProvider;
 use crate::TinyResult;
+use crate::device::provider::PowerProvider;
 use crate::user::{Command, CommandContext};
+use provider_core::with_provider;
 
 /// Exit/poweroff command instance.
 pub static EXIT: ExitCommand = ExitCommand;

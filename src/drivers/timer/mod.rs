@@ -6,11 +6,12 @@ use core::sync::atomic::{AtomicU64, Ordering};
 
 use arm_gic::IntId;
 pub use generic_timer::*;
+use provider_core::with_provider;
 
 use crate::{
-    config,
+    TinyResult, config,
     device::core::{DeviceInfo, InitLevel},
-    TinyResult,
+    device::provider::IrqProvider,
 };
 
 // Setup timer interrupt handler
@@ -36,7 +37,7 @@ fn handle_timer_irq(_irq: usize) {
     update_deadline(next_deadline);
 }
 
-pub fn init_early() {
+fn probe(_dev: &DeviceInfo) -> TinyResult<()> {
     // Initialize the generic timer early in the boot process
     generic_timer::init_early();
     // set Deadline
@@ -44,13 +45,9 @@ pub fn init_early() {
     NEXT_PERIODIC_DEADLINE.store(deadline, Ordering::Release);
     update_deadline(deadline);
     // Enable Timer interrupt
-    crate::drivers::irq::irqset_register(config::kernel::TIMER_IRQ, handle_timer_irq);
+    with_provider::<IrqProvider>().register(config::kernel::TIMER_IRQ, handle_timer_irq);
     // Timer interrupt ID on ARM GIC
     enable_irqs(config::kernel::TIMER_IRQ);
-}
-
-fn probe_impl(_dev: &DeviceInfo) -> TinyResult<()> {
-    init_early();
     Ok(())
 }
 
@@ -64,7 +61,7 @@ pub fn init_secondary() {
     enable_irqs(IntId::ppi(14));
 }
 
-crate::define_provider!(
+provider_core::define_provider!(
     provider: TIMER_PROVIDER,
     vendor_id: 0,
     device_id: 0,
@@ -80,6 +77,6 @@ crate::define_provider!(
         name: "generic-timer",
         level: InitLevel::Early,
         compatibles: ["arm,armv8-timer", "arm,armv7-timer"],
-        probe: probe_impl,
+        probe: probe,
     }
 );

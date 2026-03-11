@@ -1,7 +1,8 @@
 //! Driver manager with explicit registration and level-based binding.
 
+use provider_core::PROVIDERS;
+
 use crate::hal::Mutex;
-use crate::device::capability::PROVIDERS;
 
 use super::model::{DeviceInfo, InitLevel};
 
@@ -31,7 +32,10 @@ impl DriverManager {
             };
 
             if driver.level != level
-                || !driver.compatibles.iter().any(|compatible| dev.has_compatible(compatible))
+                || !driver
+                    .compatibles
+                    .iter()
+                    .any(|compatible| dev.has_compatible(compatible))
             {
                 continue;
             }
@@ -44,9 +48,7 @@ impl DriverManager {
             if let Err(err) = (driver.probe)(dev) {
                 warn!(
                     "driver probe failed: driver={} node={} err={:?}",
-                    driver.name,
-                    dev.node_name,
-                    err
+                    driver.name, dev.node_name, err
                 );
                 continue;
             }

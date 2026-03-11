@@ -361,10 +361,7 @@ pub fn mkdir_all(path: &str) -> Result<(), String> {
         return Ok(());
     }
     // Collect each ancestor that needs creation.
-    let parts: Vec<&str> = resolved
-        .split('/')
-        .filter(|s| !s.is_empty())
-        .collect();
+    let parts: Vec<&str> = resolved.split('/').filter(|s| !s.is_empty()).collect();
     let mut current = String::from("/");
     for part in parts {
         if current.ends_with('/') {

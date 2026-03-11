@@ -37,6 +37,7 @@ lazyinit = "0.2"
 lock_api = "0.4.14"
 linkme = "0.3"
 log = "0.4"
+provider-core = { path = "provider-core" }
 provider-macros = { path = "provider-macros" }
 rand = { version = "0.9", default-features = false, features = ["small_rng"] }
 

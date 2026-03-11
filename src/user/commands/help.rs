@@ -1,7 +1,7 @@
 //! Help command - displays available commands and their usage.
 
-use crate::user::{Command, CommandContext};
 use crate::TinyResult;
+use crate::user::{Command, CommandContext};
 
 /// Help command instance.
 pub static HELP: HelpCommand = HelpCommand;

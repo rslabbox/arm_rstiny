@@ -5,9 +5,12 @@ use syn::{Error, Fields, ItemStruct, Type, parse_macro_input};
 #[proc_macro_attribute]
 pub fn capability_provider(attr: TokenStream, item: TokenStream) -> TokenStream {
     if !attr.is_empty() {
-        return Error::new(proc_macro2::Span::call_site(), "capability_provider takes no arguments")
-            .to_compile_error()
-            .into();
+        return Error::new(
+            proc_macro2::Span::call_site(),
+            "capability_provider takes no arguments",
+        )
+        .to_compile_error()
+        .into();
     }
 
     let item_struct = parse_macro_input!(item as ItemStruct);
@@ -61,11 +64,11 @@ pub fn capability_provider(attr: TokenStream, item: TokenStream) -> TokenStream 
             #(#methods)*
         }
 
-        impl crate::device::capability::CapabilityProvider for #struct_ident {
+        impl provider_core::CapabilityProvider for #struct_ident {
             type Handle = #handle_ident;
 
             fn resolve() -> Self::Handle {
-                let ops = crate::device::capability::PROVIDERS
+                let ops = provider_core::PROVIDERS
                     .iter()
                     .copied()
                     .filter_map(|provider| {

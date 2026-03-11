@@ -15,7 +15,7 @@ pub fn get_fdt() -> &'static Mutex<Fdt<'static>> {
     FDT_DATA.get().expect("FDT not initialized")
 }
 
-crate::define_provider!(
+provider_core::define_provider!(
     provider: BOOT_PROVIDER,
     vendor_id: 0,
     device_id: 0,

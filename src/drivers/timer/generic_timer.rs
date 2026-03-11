@@ -7,8 +7,9 @@ use aarch64_cpu::registers::{CNTFRQ_EL0, CNTP_CTL_EL0, CNTP_TVAL_EL0, CNTPCT_EL0
 use aarch64_cpu::registers::{Readable, Writeable};
 use arm_gic::IntId;
 use int_ratio::Ratio;
+use provider_core::with_provider;
 
-use crate::drivers::irq::irqset_enable;
+use crate::device::provider::IrqProvider;
 
 static mut CNTPCT_TO_NANOS_RATIO: Ratio = Ratio::zero();
 static mut NANOS_TO_CNTPCT_RATIO: Ratio = Ratio::zero();
@@ -82,7 +83,7 @@ pub fn init_early() {
 pub fn enable_irqs(timer_irq_num: IntId) {
     CNTP_CTL_EL0.write(CNTP_CTL_EL0::ENABLE::SET);
     CNTP_TVAL_EL0.set(0);
-    irqset_enable(timer_irq_num, 0x00);
+    with_provider::<IrqProvider>().enable(timer_irq_num, 0x00);
 }
 
 /// Busy-wait for the specified duration.
