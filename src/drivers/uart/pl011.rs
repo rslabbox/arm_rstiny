@@ -44,3 +44,17 @@ pub fn init_early(uart_base: VirtAddr, _irq_num: IntId) {
     UART.init_once(Mutex::new(Pl011Uart::new(uart_base.as_mut_ptr())));
     UART.lock().init();
 }
+
+provider_core::define_provider!(
+    provider: UART_PROVIDER,
+    vendor_id: 0,
+    device_id: 0,
+    priority: 100,
+    ops: crate::device::provider::UartProvider {
+        init_early,
+        puts,
+        putchar,
+        getchar,
+    }
+);
+
