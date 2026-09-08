@@ -86,3 +86,19 @@ pub fn panic_with_lock_held() -> ! {
     WRITING.store(true, Ordering::Relaxed);
     panic!("Kernel injected panic while logger locked");
 }
+
+/// Temporary root-task debug console syscall; ordinary services will use IPC.
+pub fn debug_putchar(byte: u8) {
+    if !READY.load(Ordering::Relaxed)
+        || WRITING
+            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .is_err()
+    {
+        return;
+    }
+    if byte == b'\n' {
+        let _ = super::console::put_byte(b'\r');
+    }
+    let _ = super::console::put_byte(byte);
+    WRITING.store(false, Ordering::Release);
+}

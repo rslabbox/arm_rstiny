@@ -98,9 +98,9 @@ extern "C" fn init_el1(entry_el: u64) -> ! {
 
 #[derive(Clone, Copy)]
 #[repr(C, align(4096))]
-struct Table([PageTableEntry; 512]);
+pub(super) struct Table(pub(super) [PageTableEntry; 512]);
 impl Table {
-    const EMPTY: Self = Self([PageTableEntry::empty(); 512]);
+    pub(super) const EMPTY: Self = Self([PageTableEntry::empty(); 512]);
 }
 
 static mut ROOT: Table = Table::EMPTY;
@@ -231,4 +231,23 @@ extern "C" fn boot_main(entry_el: u64) -> ! {
         enable_mmu();
     }
     crate::rust_main()
+}
+
+/// Construct a private TTBR0 root while retaining immutable, EL1-only kernel
+/// mappings. The user image occupies [4 MiB, 6 MiB), separate from MMIO/RAM.
+/// Caller owns all destination tables and has not made them active yet.
+pub(super) unsafe fn prepare_user_tables(
+    root: *mut Table,
+    l1: *mut Table,
+    l2: *mut Table,
+    l3: *mut Table,
+) {
+    unsafe {
+        core::ptr::copy_nonoverlapping(addr_of!(ROOT), root, 1);
+        core::ptr::copy_nonoverlapping(addr_of!(RAM_L1), l1, 1);
+        core::ptr::copy_nonoverlapping(addr_of!(DEVICE_L2), l2, 1);
+        set(root, 0, table_entry(l1));
+        set(l1, 0, table_entry(l2));
+        set(l2, 2, table_entry(l3));
+    }
 }

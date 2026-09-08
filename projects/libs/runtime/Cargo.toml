@@ -1,0 +1,13 @@
+[package]
+name = "rstiny-runtime"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+test = false
+bench = false
+
+[dependencies]
+kernel-abi = { path = "../abi" }
+rstiny = { path = "../user" }
+rstiny-runtime-macros = { path = "../runtime-macros" }

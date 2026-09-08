@@ -210,7 +210,7 @@ def boot(qemu, elf, printing, tests=False, probe=None, el2=True, layout=False, q
             gdb = None
             try:
                 gdb = Gdb(directory / "gdb.sock", process)
-                gdb.run_to(syms["kernel_shutdown"])
+                gdb.run_to(syms["start_root"])
                 assert gdb.word(syms["BOOT_ENTRY_EL_VALUE"]) == (2 if el2 else 1)
                 if tests:
                     assert gdb.word(syms["SELF_TEST_PASSED"]) == 1
@@ -241,6 +241,9 @@ def boot(qemu, elf, printing, tests=False, probe=None, el2=True, layout=False, q
                                 assert 4 <= esr & 0x3F <= 7, "not a translation fault"
                         if probe != "probe_execute_stack":
                             assert syms[probe] <= record[36] < syms[probe] + 32
+                if not probe:
+                    # This suite isolates kernel bootstrap; check_fatboot runs EL0.
+                    gdb.write_reg("pc", syms["kernel_shutdown"])
                 # After inspection, execute the real PSCI call, not host termination.
                 reply = gdb.command("c")
                 assert reply.startswith("W00"), f"guest did not shut down cleanly: {reply}"
