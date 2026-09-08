@@ -5,7 +5,7 @@ use core::{
 };
 use log::{Level, LevelFilter, Log, Metadata, Record};
 
-static WRITING: AtomicBool = AtomicBool::new(false);
+static WRITING: super::single_core::SingleCore<()> = super::single_core::SingleCore::new(());
 static READY: AtomicBool = AtomicBool::new(false);
 
 fn level() -> LevelFilter {
@@ -46,14 +46,12 @@ impl Log for Logger {
     }
 
     fn log(&self, record: &Record<'_>) {
-        if !self.enabled(record.metadata())
-            || !READY.load(Ordering::Relaxed)
-            || WRITING
-                .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
-                .is_err()
-        {
+        if !self.enabled(record.metadata()) || !READY.load(Ordering::Relaxed) {
             return;
         }
+        let Some(_guard) = WRITING.try_borrow_mut() else {
+            return;
+        };
         let level = record.level();
         let (level_color, args_color) = match level {
             Level::Error => (ColorCode::BrightRed, ColorCode::Red),
@@ -70,7 +68,6 @@ impl Log for Logger {
             record.line().unwrap_or(0),
             record.args()
         ));
-        WRITING.store(false, Ordering::Release);
     }
     fn flush(&self) {}
 }
@@ -83,22 +80,20 @@ pub fn init() {
 
 #[cfg(feature = "kernel-test")]
 pub fn panic_with_lock_held() -> ! {
-    WRITING.store(true, Ordering::Relaxed);
+    let _guard = WRITING.borrow_mut();
     panic!("Kernel injected panic while logger locked");
 }
 
 /// Temporary root-task debug console syscall; ordinary services will use IPC.
 pub fn debug_putchar(byte: u8) {
-    if !READY.load(Ordering::Relaxed)
-        || WRITING
-            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
-            .is_err()
-    {
+    if !READY.load(Ordering::Relaxed) {
         return;
     }
+    let Some(_guard) = WRITING.try_borrow_mut() else {
+        return;
+    };
     if byte == b'\n' {
         let _ = super::console::put_byte(b'\r');
     }
     let _ = super::console::put_byte(byte);
-    WRITING.store(false, Ordering::Release);
 }

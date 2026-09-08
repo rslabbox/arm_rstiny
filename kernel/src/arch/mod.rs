@@ -1,5 +1,4 @@
 mod context;
-mod dtb;
 mod page_table;
 pub mod trap;
 

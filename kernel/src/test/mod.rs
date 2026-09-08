@@ -1,10 +1,12 @@
 //! Opt-in in-kernel tests and debugger-invoked fault probes. No test syscall.
 mod allocator;
+mod single_core;
 
 #[unsafe(no_mangle)]
 static mut SELF_TEST_PASSED: u64 = 0;
 
 pub fn run() {
+    single_core::run();
     allocator::run_allocator_tests();
     // Standard log macros must skip argument evaluation when LOG=off.
     if log::max_level() == log::LevelFilter::Off {

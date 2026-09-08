@@ -32,14 +32,6 @@ pub fn information() -> BootInfo {
     unsafe { core::ptr::addr_of!(LOADER_BOOT_INFO).read() }
 }
 
-pub fn psci_smc() -> bool {
-    let info = information();
-    // SAFETY: boot checked the DTB extent and mapped it into the kernel window.
-    let data =
-        unsafe { core::slice::from_raw_parts(phys_to_virt(info.dtb) as *const u8, info.dtb_size) };
-    super::dtb::psci_smc(data).expect("unsupported PSCI DTB method")
-}
-
 #[unsafe(naked)]
 #[unsafe(no_mangle)]
 #[unsafe(link_section = ".text.boot")]
@@ -99,6 +91,7 @@ extern "C" fn start_rust(
         || !(kernel_abi::IMAGE_START as usize..kernel_abi::IMAGE_END as usize).contains(&entry)
         || dtb < kernel_end
         || dtb_size < 40
+        || dtb_size > kernel_abi::MAX_DTB_SIZE as usize
         || dtb
             .checked_add(dtb_size)
             .is_none_or(|end| end > image_start)

@@ -12,3 +12,4 @@ bench = false
 [dependencies]
 rstiny = { path = "../../libs/user" }
 rstiny-runtime = { path = "../../libs/runtime" }
+rs_fdtree = { path = "../../../drivers/platform/rs-fdtree" }

@@ -82,6 +82,34 @@ pub extern "C" fn start_root() -> ! {
     space
         .map(BOOTINFO_VA as usize, PAGE_SIZE as usize, 1, true)
         .expect("root BootInfo");
+    // Forward the opaque DTB as extended BootInfo, without parsing its contents.
+    let header_size = core::mem::size_of::<BootInfoHeader>();
+    let extra_size = header_size + loaded.dtb_size;
+    space
+        .map(
+            EXTRA_BOOTINFO_VA as usize,
+            extra_size.next_multiple_of(PAGE_SIZE as usize),
+            1,
+            true,
+        )
+        .expect("root extra BootInfo");
+    let header = BootInfoHeader {
+        id: BOOTINFO_HEADER_FDT,
+        len: extra_size as u64,
+    };
+    // SAFETY: two initialized u64 fields; DTB extent was checked during boot.
+    let header_bytes = unsafe {
+        core::slice::from_raw_parts((&header as *const BootInfoHeader).cast::<u8>(), header_size)
+    };
+    let dtb = unsafe {
+        core::slice::from_raw_parts(phys_to_virt(loaded.dtb) as *const u8, loaded.dtb_size)
+    };
+    space
+        .initialize(EXTRA_BOOTINFO_VA as usize, header_bytes)
+        .expect("extra BootInfo header");
+    space
+        .initialize(EXTRA_BOOTINFO_VA as usize + header_size, dtb)
+        .expect("extra BootInfo DTB");
     let info = BootInfo {
         magic: BOOTINFO_MAGIC,
         version: ABI_VERSION,
@@ -97,6 +125,8 @@ pub extern "C" fn start_root() -> ! {
         image_end: STACK_END,
         stack_start: STACK_START,
         stack_end: STACK_END,
+        extra: EXTRA_BOOTINFO_VA,
+        extra_size: extra_size as u64,
     };
     // SAFETY: BootInfo contains only initialized u64 fields, with no padding.
     let bytes = unsafe {

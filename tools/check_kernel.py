@@ -20,8 +20,8 @@ TARGET = "aarch64-unknown-none-softfloat"
 KERNEL_OFFSET = 0xffff000000000000
 
 
-def boot_image(kernel, el2=True):
-    return kernel.parents[2] / 'image' / ('el2' if el2 else 'el1') / 'elfloader'
+def boot_image(kernel):
+    return kernel.parents[2] / 'image' / 'elfloader'
 
 
 def kernel_output(output):
@@ -30,8 +30,8 @@ def kernel_output(output):
     return output.split(boundary, 1)[1]
 
 
-def check_handoff(gdb, kernel, el2):
-    directory = boot_image(kernel, el2).parent
+def check_handoff(gdb, kernel):
+    directory = boot_image(kernel).parent
     root_bytes = (directory / 'rootserver').read_bytes()
     root_info = parse_elf(root_bytes)
     kernel_info = parse_elf((directory / 'kernel.elf').read_bytes())
@@ -247,7 +247,7 @@ def check_layout(gdb, syms):
             assert bool(entry & (1 << 53)) == (not executable)
 
 
-def boot(qemu, elf, printing, tests=False, probe=None, el2=True, layout=False, quiet_boot=False):
+def boot(qemu, elf, printing, tests=False, probe=None, layout=False, quiet_boot=False):
     syms = symbols(elf)
     with tempfile.TemporaryDirectory(prefix="rstiny-kernel-") as directory:
         directory = Path(directory)
@@ -255,10 +255,10 @@ def boot(qemu, elf, printing, tests=False, probe=None, el2=True, layout=False, q
         error = directory / "qemu.log"
         with error.open("wb") as stderr:
             process = subprocess.Popen([
-                qemu, "-machine", f"virt,gic-version=3,virtualization={'on' if el2 else 'off'}",
+                qemu, "-machine", "virt,gic-version=3,virtualization=off",
                 "-cpu", "cortex-a72", "-smp", "1", "-m", "128M", "-display", "none",
                 "-monitor", "none", "-serial", f"file:{serial}", "-nic", "none",
-                "-kernel", str(boot_image(elf, el2)), "-S", "-gdb",
+                "-kernel", str(boot_image(elf)), "-S", "-gdb",
                 f"unix:{directory / 'gdb.sock'},server=on,wait=off",
             ], stdout=subprocess.DEVNULL, stderr=stderr)
             gdb = None
@@ -266,7 +266,7 @@ def boot(qemu, elf, printing, tests=False, probe=None, el2=True, layout=False, q
                 gdb = Gdb(directory / "gdb.sock", process)
                 if layout:
                     gdb.run_to(syms['_start'])
-                    check_handoff(gdb, elf, el2)
+                    check_handoff(gdb, elf)
                 gdb.run_to(syms["start_root"])
                 assert gdb.word(syms["BOOT_ENTRY_EL_VALUE"]) == 1
                 if tests:
@@ -362,7 +362,6 @@ def main():
             elf = build(mode, level, False)
             assert not any(s.startswith("probe_") for s in symbols(elf))
             boot(args.qemu, elf, printing, layout=True)
-            boot(args.qemu, elf, printing, el2=False)
             elf = build(mode, level, True)
             probes = ["probe_brk", "probe_write_text", "probe_execute_stack",
                       "probe_read_guard", "probe_read_unmapped", "probe_panic", "probe_panic_locked"]
@@ -375,7 +374,7 @@ def main():
     # Error filtering must retain fatal diagnostics while suppressing info.
     elf = build("debug", "error", True)
     boot(args.qemu, elf, True, tests=True, probe="probe_panic", quiet_boot=True)
-    print("PASS: dev/release x LOG=off/info; EL1/EL2; page permissions; allocator; "
+    print("PASS: dev/release x LOG=off/info; EL1; page permissions; allocator; "
           "disabled log arguments; faults/panic; UART silence; all log levels.", flush=True)
 
 

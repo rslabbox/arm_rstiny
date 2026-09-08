@@ -22,16 +22,16 @@ def mov(register, value):
     return instructions
 
 
-def run(qemu, kernel, el2):
+def run(qemu, kernel):
     with tempfile.TemporaryDirectory(prefix='rstiny-tasks-') as temp:
         temp = Path(temp)
         serial = temp / 'serial'
         with (temp / 'errors').open('wb') as errors:
             proc = subprocess.Popen([
-                qemu, '-machine', f"virt,gic-version=3,virtualization={'on' if el2 else 'off'}",
+                qemu, '-machine', "virt,gic-version=3,virtualization=off",
                 '-cpu', 'cortex-a72', '-smp', '1', '-m', '128M', '-display', 'none',
                 '-monitor', 'none', '-serial', f'file:{serial}', '-nic', 'none',
-                '-kernel', str(boot_image(kernel, el2)), '-S', '-gdb', f'unix:{temp / "gdb"},server=on,wait=off',
+                '-kernel', str(boot_image(kernel)), '-S', '-gdb', f'unix:{temp / "gdb"},server=on,wait=off',
             ], stderr=errors, stdout=subprocess.DEVNULL)
             gdb = None
             try:
@@ -63,6 +63,9 @@ def run(qemu, kernel, el2):
                     return gdb.reg('x1')
 
                 root = call(3)
+                # Extra BootInfo remains immutable for the runtime's DTB slice.
+                call(13, root, 0x602000, PAGE, status=6)
+                call(14, root, 0x602000, PAGE, 3, status=6)
                 baseline = call(17)
                 child = call(4)
                 assert call(17) == baseline - 3
@@ -253,9 +256,8 @@ def main():
     for mode in ('debug', 'release'):
         for level in ('off', 'info'):
             kernel = build(mode, level, False)
-            for el2 in (True, False):
-                print(f'CHECK memory/tasks {mode} LOG={level} EL{2 if el2 else 1}', flush=True)
-                run(args.qemu, kernel, el2)
+            print(f'CHECK memory/tasks {mode} LOG={level}', flush=True)
+            run(args.qemu, kernel)
     print('PASS: memory transactions/recycling; task ownership/lifecycle; timer preemption; idle wakeup; wait/fault isolation.', flush=True)
 
 

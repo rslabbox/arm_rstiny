@@ -1,22 +1,18 @@
 //! QEMU virt GICv3 and the non-secure physical timer, single CPU only.
 use crate::config::{GICD_BASE, GICR_BASE, phys_to_virt};
+use crate::utils::single_core::SingleCore;
 use aarch64_cpu::{asm::barrier, registers::*};
 use arm_gic_driver::{
     IntId, VirtAddr,
     v3::{CpuInterface, Gic, Trigger},
 };
-use core::cell::UnsafeCell;
 
-const TIMER_IRQ: IntId = IntId::ppi(14); // Non-secure physical timer, INTID 30.
+const TIMER_IRQ: IntId = IntId::ppi(crate::config::TIMER_IRQ - 16);
 struct Controller {
     gic: Gic,
     cpu: CpuInterface,
 }
-struct LocalController(UnsafeCell<Option<Controller>>);
-// SAFETY: single CPU; initialization and IRQ handling run with IRQs masked.
-// No reference to the controller escapes either operation.
-unsafe impl Sync for LocalController {}
-static CONTROLLER: LocalController = LocalController(UnsafeCell::new(None));
+static CONTROLLER: SingleCore<Option<Controller>> = SingleCore::new(None);
 
 pub fn masked() -> bool {
     DAIF.is_set(DAIF::I)
@@ -34,8 +30,7 @@ pub fn rearm() {
 }
 pub fn init() {
     assert!(masked());
-    // SAFETY: exclusive boot-time access on the sole CPU.
-    let slot = unsafe { &mut *CONTROLLER.0.get() };
+    let mut slot = CONTROLLER.borrow_mut();
     assert!(slot.is_none(), "GIC already initialized");
     CNTP_CTL_EL0.set(0);
     // SAFETY: one controller, permanently mapped Device memory at EL1 only.
@@ -61,10 +56,8 @@ pub fn init() {
 /// Quiesce the source before EOI; special/spurious IDs require no EOI.
 pub fn handle() -> bool {
     assert!(masked());
-    // SAFETY: non-reentrant IRQ handling on the sole CPU.
-    let controller = unsafe { &mut *CONTROLLER.0.get() }
-        .as_mut()
-        .expect("IRQ before GIC initialization");
+    let mut guard = CONTROLLER.borrow_mut();
+    let controller = guard.as_mut().expect("IRQ before GIC initialization");
     let id = controller.cpu.ack1();
     if id.is_special() {
         return false;

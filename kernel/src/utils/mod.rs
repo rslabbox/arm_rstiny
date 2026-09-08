@@ -1,6 +1,7 @@
 mod console;
 pub mod heap_allocator;
 pub mod logging;
+pub(crate) mod single_core;
 
 use core::{
     panic::PanicInfo,
@@ -16,15 +17,15 @@ pub extern "C" fn kernel_halt() -> ! {
 }
 pub use kernel_halt as halt;
 
-/// Select the PSCI conduit from the DTB supplied by elfloader.
-/// Kernel entry is EL1 for both firmware configurations.
+/// Use the PSCI conduit selected from the DTB at build time.
+/// The fixed QEMU platform enters EL1 and uses HVC.
 #[inline(never)]
 #[unsafe(no_mangle)]
 pub extern "C" fn kernel_shutdown() -> ! {
     const PSCI_SYSTEM_OFF: u64 = 0x8400_0008;
     unsafe {
         core::arch::asm!("msr daifset, #0xf", options(nomem, nostack));
-        if crate::arch::boot::psci_smc() {
+        if crate::config::PSCI_SMC {
             core::arch::asm!("smc #0",
                 inlateout("x0") PSCI_SYSTEM_OFF => _,
                 inlateout("x1") 0_u64 => _,

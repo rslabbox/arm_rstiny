@@ -26,7 +26,7 @@
 `make check` 中的 `tools/check_kernel.py` 完成以下内核检查；用户态与打包器另外验证。脚本只依赖 Python 标准库与 QEMU GDB stub，通过本地 Unix socket 读取 CPU/内存；每个故障用例启动独立 QEMU，并设连接、执行超时和进程清理。
 
 - dev/release × LOG=info/off，共四种正式构建，全部到达 `start_root`；测试显式跳转 `kernel_shutdown`，继续执行后 QEMU 实际以状态 0 退出。
-- 四种正式构建分别验证 EL1 与 EL2 入口，最终 CPU 为 EL1h，异常屏蔽位正确。
+- 四种正式构建验证固定 EL1 入口，最终 CPU 为 EL1h，异常屏蔽位正确。
 - 遍历实际页表，核对全部映射集合、高地址虚拟地址对应的物理地址、页面大小、AP、PXN/UXN、内存属性、保护页及始终保留的 UART 页。
 - 核对 MMU/cache/WXN、TTBR1 启用和 VBAR/栈对齐。
 - 四种对应测试构建运行分配器自测，检查成功状态；LOG=off 的测试验证日志参数不会求值。
@@ -42,7 +42,7 @@
 
 ## 当前边界与下一步
 
-当前固定平台为 128 MiB QEMU RAM，链接脚本限制整个内核、堆和独立 8 MiB 用户帧池落在最初 32 MiB 页表覆盖区内。root image 原地接管后加入可回收帧管理；DTB 仅解析 PSCI method，尚未发现或分配剩余 RAM；动态 map/unmap/protect 与空间切换现由 memory/task 模块负责。链接脚本预留栈和堆为 NOLOAD，避免把 16 MiB 零字节塞进启动 bin。
+当前固定平台为 128 MiB QEMU RAM，链接脚本限制整个内核、堆和独立 8 MiB 用户帧池落在最初 32 MiB 页表覆盖区内。root image 原地接管后加入可回收帧管理；设备树在构建时生成平台常量，运行时经扩展 BootInfo 交给 fatboot，尚未发现或分配剩余 RAM；动态 map/unmap/protect 与空间切换现由 memory/task 模块负责。链接脚本预留栈和堆为 NOLOAD，避免把 16 MiB 零字节塞进启动 bin。
 
 异常记录面向仍有有效内核栈的故障。保护页能阻止越界访问，但真正耗尽异常保存栈后的双重故障尚无专用紧急栈恢复能力。
 
@@ -50,4 +50,4 @@
 
 现已建立独立用户 ELF、用户页表、初始任务上下文、BootInfo 和 SVC 往返。用户 TTBR0 与内核高地址 TTBR1 分离，硬件权限测试验证隔离。下一步是能力与内核对象管理。
 
-内核启动实现不使用独立 boot.S；EL 转换与早期 MMU 初始化直接使用 vendored seL4 elfloader 的原版 C/汇编。EL1/EL2 固件入口均通过 dev/release 集成验证，内核入口统一为 EL1；trap.S 的异常寄存器保存入口保持独立。引导产物、上游来源及兼容范围见 [引导链](boot.md)。
+内核启动实现不使用独立 boot.S；早期 MMU 初始化直接使用 vendored seL4 elfloader 的原版 C/汇编。固定 EL1 入口通过 dev/release 集成验证；trap.S 的异常寄存器保存入口保持独立。引导产物、上游来源及兼容范围见 [引导链](boot.md)。

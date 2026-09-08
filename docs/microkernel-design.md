@@ -38,7 +38,7 @@ QEMU / 启动加载器
 | 项目 | 选择 |
 | --- | --- |
 | 平台 | QEMU AArch64 `virt`，Cortex-A72，单核 |
-| 特权级 | 内核 EL1，用户程序 EL0；启动时按实际入口处理 EL2 |
+| 特权级 | 内核 EL1，用户程序 EL0；QEMU 固定 virtualization=off，以 EL1 启动 |
 | 内存 | 4 KiB 页；最初固定受支持的 RAM 范围，之后读取 DTB |
 | 调度 | 简单固定优先级抢占，同优先级轮转，非 MCS |
 | 隔离 | 每个进程独立 VSpace 与 CSpace；内核检查所有对象操作权限 |

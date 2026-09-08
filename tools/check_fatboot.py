@@ -10,6 +10,7 @@ from check_kernel import Gdb, ROOT, TARGET, KERNEL_OFFSET, build, symbols, boot_
 USER_START = 0x400000
 BOOTINFO = 0x601000
 IPC = 0x600000
+EXTRA = 0x602000
 STACK_START, STACK_END = 0x5fc000, 0x600000
 
 
@@ -38,13 +39,16 @@ def pages(gdb):
     return result
 
 
-def check_layout(gdb, syms, elf, level):
+def check_layout(gdb, syms, elf, level, dtb):
     mapping = pages(gdb)
     user = {va: p for va, p in mapping.items() if p[1] & (1 << 6)}
     data = elf.read_bytes()
     phoff = struct.unpack_from('<Q', data, 32)[0]
     phnum = struct.unpack_from('<H', data, 56)[0]
     expected = {BOOTINFO: 4, IPC: 6, **{va: 6 for va in range(STACK_START, STACK_END, 4096)}}
+    extra_size = len(dtb) + 16
+    extra_pages = (extra_size + 4095) // 4096 * 4096
+    expected.update({va: 4 for va in range(EXTRA, EXTRA + extra_pages, 4096)})
     for i in range(phnum):
         typ, flags, _, va, _, _, size, _ = struct.unpack_from('<IIQQQQQQ', data, phoff + i * 56)
         if typ == 1:
@@ -54,7 +58,7 @@ def check_layout(gdb, syms, elf, level):
     assert len({pa for pa, _ in user.values()}) == len(user), 'aliased user frames'
     for va, flags in expected.items():
         pa, attr = user[va]
-        if va in (BOOTINFO, IPC):
+        if va in (BOOTINFO, IPC) or EXTRA <= va < EXTRA + extra_pages:
             assert syms['__frames_start'] - KERNEL_OFFSET <= pa < syms['__frames_end'] - KERNEL_OFFSET
         else:
             assert gdb.command('Qqemu.PhyMemMode:1') == 'OK'
@@ -67,23 +71,26 @@ def check_layout(gdb, syms, elf, level):
     for va in (syms['_start'], syms['boot_stack'], 0x09000000):
         assert va not in mapping, 'kernel/MMIO present in user TTBR0'
     assert STACK_START - 4096 not in mapping
-    bi = struct.unpack('<10Q', gdb.memory(BOOTINFO, 80))
-    assert bi[:6] == (0x525354494e594249, 1, 80, 4096, int(level != 'off'), IPC)
-    assert bi[6] == USER_START and bi[8:] == (STACK_START, STACK_END)
-    assert gdb.memory(BOOTINFO + 80, 4096 - 80) == bytes(4096 - 80)
+    bi = struct.unpack('<12Q', gdb.memory(BOOTINFO, 96))
+    assert bi[:6] == (0x525354494e594249, 2, 96, 4096, int(level != 'off'), IPC)
+    assert bi[6] == USER_START and bi[8:] == (STACK_START, STACK_END, EXTRA, extra_size)
+    assert gdb.memory(BOOTINFO + 96, 4096 - 96) == bytes(4096 - 96)
+    assert gdb.memory(EXTRA, 16) == struct.pack('<QQ', 6, extra_size)
+    assert gdb.memory(EXTRA + 16, len(dtb)) == dtb, 'DTB changed during BootInfo transfer'
+    assert gdb.memory(EXTRA + extra_size, extra_pages - extra_size) == bytes(extra_pages - extra_size)
 
 
-def run(qemu, kernel, user, level, scenario, el2=True):
+def run(qemu, kernel, user, level, scenario):
     ks, us = symbols(kernel), symbols(user)
     with tempfile.TemporaryDirectory(prefix='rstiny-fatboot-') as temp:
         temp = Path(temp)
         output, errors = temp / 'serial.log', temp / 'qemu.log'
         with errors.open('wb') as err:
             proc = subprocess.Popen([
-                qemu, '-machine', f"virt,gic-version=3,virtualization={'on' if el2 else 'off'}",
+                qemu, '-machine', "virt,gic-version=3,virtualization=off",
                 '-cpu', 'cortex-a72', '-smp', '1', '-m', '128M', '-display', 'none',
                 '-monitor', 'none', '-serial', f'file:{output}', '-nic', 'none',
-                '-kernel', str(boot_image(kernel, el2)), '-S', '-gdb', f'unix:{temp / "gdb"},server=on,wait=off',
+                '-kernel', str(boot_image(kernel)), '-S', '-gdb', f'unix:{temp / "gdb"},server=on,wait=off',
             ], stderr=err, stdout=subprocess.DEVNULL)
             gdb = None
             try:
@@ -108,7 +115,7 @@ def run(qemu, kernel, user, level, scenario, el2=True):
                     finally:
                         assert gdb.command('Qqemu.PhyMemMode:0') == 'OK'
                 if scenario == 'normal':
-                    check_layout(gdb, ks, user, level)
+                    check_layout(gdb, ks, user, level, (boot_image(kernel).parent / 'kernel.dtb').read_bytes())
                     assert user_word(us['RESULT']) == 0
                     for _ in range(10):
                         gdb.run_to(ks['root_idle'])
@@ -120,14 +127,19 @@ def run(qemu, kernel, user, level, scenario, el2=True):
                     assert user_word(us['RESULT']) == 1
                     assert user_word(us['BOOTINFO_ADDRESS']) == BOOTINFO
                     assert user_word(IPC) == 0xfacecafe
-                elif scenario == 'invalid-bootinfo':
+                elif scenario in ('invalid-bootinfo', 'invalid-extra', 'invalid-dtb'):
                     # Corrupt the version through the debugger, before the
                     # runtime constructs its safe BootInfo view.
-                    write(gdb, BOOTINFO + 8, struct.pack('<Q', 999))
+                    if scenario == 'invalid-bootinfo':
+                        write(gdb, BOOTINFO + 8, struct.pack('<Q', 999))
+                    elif scenario == 'invalid-extra':
+                        write(gdb, EXTRA + 8, struct.pack('<Q', 0))
+                    else:
+                        write(gdb, EXTRA + 16, bytes(4))
                     gdb.run_to(ks['root_idle'])
                     assert gdb.word(ks['SCHEDULER']) == 2
                     assert user_word(us['RESULT']) == 0
-                    assert user_word(us['BOOTINFO_ADDRESS']) == 0, 'application entered with invalid ABI'
+                    assert user_word(us['BOOTINFO_ADDRESS']) == (BOOTINFO if scenario == 'invalid-dtb' else 0)
                     assert proc.poll() is None
                 elif scenario == 'svc-registers':
                     # Patch a scratch instruction at the user entry through the
@@ -158,6 +170,7 @@ def run(qemu, kernel, user, level, scenario, el2=True):
                         'uart-read': (0x09000000, 0xf9400001, 0x24, False),
                         'text-write': (us['_start'], 0xf9000001, 0x24, True),
                         'bootinfo-write': (BOOTINFO, 0xf9000001, 0x24, True),
+                        'dtb-write': (EXTRA + 16, 0xf9000001, 0x24, True),
                         'guard-read': (STACK_START - 4096, 0xf9400001, 0x24, False),
                         'null-read': (0, 0xf9400001, 0x24, False),
                         'stack-execute': (STACK_START, 0xd61f0000, 0x20, True),
@@ -177,10 +190,11 @@ def run(qemu, kernel, user, level, scenario, el2=True):
                     assert not text, text
                 elif scenario == 'normal':
                     assert b'[fatboot] root task started in EL0' in text
+                    assert b'[fatboot] DTB parsed in EL0' in text
                     assert b'[fatboot] SVC round-trip passed' in text
-                elif scenario == 'invalid-bootinfo':
+                elif scenario in ('invalid-bootinfo', 'invalid-extra', 'invalid-dtb'):
                     assert b'[user panic]' in text
-                    assert b'[fatboot] root task started' not in text
+                    assert (b'[fatboot] root task started' in text) == (scenario == 'invalid-dtb')
             except Exception:
                 print(errors.read_text(), output.read_text(errors='replace') if output.exists() else '', flush=True)
                 raise
@@ -203,11 +217,10 @@ def main():
         for level in ('off', 'info'):
             kernel = build(mode, level, False)
             user = ROOT / f'target/apps/{mode}/{TARGET}/{mode}/fatboot'
-            for el2 in (True, False):
-                print(f'CHECK fatboot {mode} LOG={level} entry=EL{2 if el2 else 1}', flush=True)
-                run(args.qemu, kernel, user, level, 'normal', el2)
-            for scenario in ('invalid-bootinfo', 'svc-registers', 'kernel-read', 'uart-read', 'text-write',
-                             'bootinfo-write', 'guard-read', 'null-read', 'stack-execute'):
+            print(f'CHECK fatboot {mode} LOG={level}', flush=True)
+            run(args.qemu, kernel, user, level, 'normal')
+            for scenario in ('invalid-bootinfo', 'invalid-extra', 'invalid-dtb', 'svc-registers', 'kernel-read', 'uart-read', 'text-write',
+                             'bootinfo-write', 'dtb-write', 'guard-read', 'null-read', 'stack-execute'):
                 print(f'  {scenario}', flush=True)
                 run(args.qemu, kernel, user, level, scenario)
     print('PASS: EL0 fatboot; BootInfo; SVC register preservation; user fault isolation.', flush=True)

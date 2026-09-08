@@ -20,12 +20,13 @@ endif
 BUILD_DIR := target/kernel/$(MODE)-log$(LOG)-test$(KERNEL_TEST)
 KERNEL_ELF := $(BUILD_DIR)/$(TARGET)/$(MODE)/kernel
 KERNEL_BIN := $(KERNEL_ELF).bin
+PLATFORM_DIR := $(abspath target/platform/qemu-arm-virt)
 APP_DIR := target/apps/$(MODE)
 FATBOOT_ELF := $(APP_DIR)/$(TARGET)/$(MODE)/fatboot
 IMAGE_DIR := $(BUILD_DIR)/image
-BOOT_IMAGE := $(IMAGE_DIR)/el2/elfloader
+BOOT_IMAGE := $(IMAGE_DIR)/elfloader
 APP_FLAGS := -p fatboot --target $(TARGET) --target-dir $(APP_DIR)
-CARGO_FLAGS := -p kernel --target $(TARGET) --target-dir $(BUILD_DIR) --no-default-features
+CARGO_FLAGS := -p kernel --target $(TARGET) --no-default-features
 ifeq ($(MODE),release)
 CARGO_FLAGS += --release
 APP_FLAGS += --release
@@ -35,18 +36,21 @@ CARGO_FLAGS += --features kernel-test
 endif
 
 # Fixed platform contract; no disks or network backends.
-QEMU_ARGS := -machine virt,gic-version=3,virtualization=on -cpu cortex-a72 \
+QEMU_ARGS := -machine virt,gic-version=3,virtualization=off -cpu cortex-a72 \
 	-smp 1 -m 128M -display none -monitor none -serial stdio -nic none \
 	-kernel $(BOOT_IMAGE)
-export LOG
+export LOG QEMU
 
-.PHONY: all build fatboot run run-kernel run-root debug check fmt clean
+.PHONY: all build platform fatboot run run-kernel run-root debug check fmt clean
 all: build
 
-build: fatboot
-	cargo build $(CARGO_FLAGS)
+platform:
+	python3 tools/build_platform.py $(PLATFORM_DIR) --qemu $(QEMU)
+
+build: fatboot platform
+	PLATFORM_DIR=$(PLATFORM_DIR) cargo build $(CARGO_FLAGS) --target-dir $(BUILD_DIR)
 	rust-objcopy -O binary $(KERNEL_ELF) $(KERNEL_BIN)
-	python3 tools/build_image.py $(KERNEL_ELF) $(FATBOOT_ELF) $(IMAGE_DIR) --qemu $(QEMU)
+	python3 tools/build_image.py $(KERNEL_ELF) $(FATBOOT_ELF) $(IMAGE_DIR) --platform $(PLATFORM_DIR)
 
 fatboot:
 	cargo build $(APP_FLAGS)
@@ -58,6 +62,7 @@ debug: build
 	$(QEMU) $(QEMU_ARGS) -gdb tcp::$(GDB_PORT) -S
 
 check:
+	cargo test -p rs_fdtree --target $(HOST_TARGET)
 	cargo test -p rstiny-runtime-macros --target $(HOST_TARGET)
 	python3 -m unittest discover -s tools -p 'test_*.py'
 	python3 tools/check_kernel.py --qemu $(QEMU)

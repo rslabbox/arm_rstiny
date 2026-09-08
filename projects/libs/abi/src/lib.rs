@@ -4,11 +4,14 @@ pub const PAGE_SIZE: u64 = 4096;
 pub const IMAGE_START: u64 = 0x0040_0000;
 pub const IMAGE_END: u64 = 0x0060_0000;
 pub const BOOTINFO_VA: u64 = 0x0060_1000;
+pub const EXTRA_BOOTINFO_VA: u64 = 0x0060_2000;
+pub const MAX_DTB_SIZE: u64 = 1024 * 1024;
+pub const BOOTINFO_HEADER_FDT: u64 = 6;
 pub const IPC_BUFFER_VA: u64 = 0x0060_0000;
 pub const STACK_START: u64 = 0x005f_c000;
 pub const STACK_END: u64 = 0x0060_0000;
 pub const BOOTINFO_MAGIC: u64 = 0x5253_5449_4e59_4249;
-pub const ABI_VERSION: u64 = 1;
+pub const ABI_VERSION: u64 = 2;
 pub const FEATURE_DEBUG_CONSOLE: u64 = 1;
 pub const SYS_YIELD: u64 = 0;
 pub const SYS_DEBUG_PUTCHAR: u64 = 1;
@@ -30,6 +33,16 @@ pub struct BootInfo {
     pub image_end: u64,
     pub stack_start: u64,
     pub stack_end: u64,
+    pub extra: u64,
+    pub extra_size: u64,
+}
+
+/// Length includes this header; payload immediately follows it.
+#[derive(Clone, Copy)]
+#[repr(C)]
+pub struct BootInfoHeader {
+    pub id: u64,
+    pub len: u64,
 }
 
 // Memory and task APIs use x0..x4 arguments; result calls return a value in x1.

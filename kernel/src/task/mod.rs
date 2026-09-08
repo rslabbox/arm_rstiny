@@ -2,12 +2,12 @@
 mod boot;
 mod queue;
 mod syscall;
+use crate::utils::single_core::SingleCore;
 use crate::{
     arch::{TrapFrame, irq},
     memory::{self, AddressSpace},
 };
 pub use boot::start_root;
-use core::cell::UnsafeCell;
 use kernel_abi::*;
 use queue::{MAX_TASKS, RunQueue};
 
@@ -57,22 +57,17 @@ struct Scheduler {
     queue: RunQueue,
     generation: u64,
 }
-#[repr(transparent)]
-struct SingleCore(UnsafeCell<Scheduler>);
-// SAFETY: only CPU 0 runs; all accesses are scoped to IRQ-masked EL1 handlers.
-unsafe impl Sync for SingleCore {}
 #[unsafe(no_mangle)]
-static SCHEDULER: SingleCore = SingleCore(UnsafeCell::new(Scheduler {
+static SCHEDULER: SingleCore<Scheduler> = SingleCore::new(Scheduler {
     tasks: [const { Task::empty() }; MAX_TASKS],
     current: None,
     queue: RunQueue::new(),
     generation: 1,
-}));
+});
 fn with_scheduler<T>(operation: impl FnOnce(&mut Scheduler) -> T) -> T {
     assert!(irq::masked());
-    // SAFETY: IRQ-masked, nonrecursive, single-core access. References cannot
-    // escape the closure, and no closure switches task or enables interrupts.
-    operation(unsafe { &mut *SCHEDULER.0.get() })
+    // The mutable borrow ends before restoring a task context or entering idle.
+    operation(&mut SCHEDULER.borrow_mut())
 }
 
 impl Scheduler {

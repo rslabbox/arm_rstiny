@@ -1,0 +1,7 @@
+/* Build-time ownership of devices used by the kernel and seL4 elfloader. */
+/ {
+    chosen {
+        seL4,elfloader-devices = &{/pl011@9000000}, &{/psci}, &{/timer};
+        seL4,kernel-devices = &{/pl011@9000000}, &{/intc@8000000}, &{/timer};
+    };
+};
