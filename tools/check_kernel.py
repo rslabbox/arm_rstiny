@@ -56,7 +56,12 @@ class Gdb:
             wire += b
         checksum = int(self.byte() + self.byte(), 16)
         assert sum(wire) & 255 == checksum, "GDB checksum mismatch"
-        self.sock.sendall(b"+")
+        try:
+            self.sock.sendall(b"+")
+        except BrokenPipeError:
+            # QEMU may close immediately after sending the exit packet.
+            if not wire.startswith(b"W"):
+                raise
         result = bytearray()
         i = 0
         while i < len(wire):
@@ -205,8 +210,7 @@ def boot(qemu, elf, printing, tests=False, probe=None, el2=True, layout=False, q
             gdb = None
             try:
                 gdb = Gdb(directory / "gdb.sock", process)
-                gdb.run_to(syms["kernel_idle"])
-                assert gdb.word(syms["BOOT_STATE"]) == 3
+                gdb.run_to(syms["kernel_shutdown"])
                 assert gdb.word(syms["BOOT_ENTRY_EL_VALUE"]) == (2 if el2 else 1)
                 if tests:
                     assert gdb.word(syms["SELF_TEST_PASSED"]) == 1
@@ -214,11 +218,8 @@ def boot(qemu, elf, printing, tests=False, probe=None, el2=True, layout=False, q
                     check_layout(gdb, syms)
                 if probe:
                     gdb.write_reg("pc", syms[probe])
-                    gdb.run_to(syms["kernel_halt"])
-                    if probe and probe.startswith("probe_panic"):
-                        assert gdb.word(syms["BOOT_STATE"]) == 0xE2
-                    else:
-                        assert gdb.word(syms["BOOT_STATE"]) == 0xE1
+                    gdb.run_to(syms["kernel_shutdown"])
+                    if not probe.startswith("probe_panic"):
                         record = struct.unpack("<38Q", gdb.memory(syms["LAST_FAULT"], 38 * 8))
                         kind, source, esr, far = record[:4]
                         assert (kind, source) == (0, 1)
@@ -240,6 +241,10 @@ def boot(qemu, elf, printing, tests=False, probe=None, el2=True, layout=False, q
                                 assert 4 <= esr & 0x3F <= 7, "not a translation fault"
                         if probe != "probe_execute_stack":
                             assert syms[probe] <= record[36] < syms[probe] + 32
+                # After inspection, execute the real PSCI call, not host termination.
+                reply = gdb.command("c")
+                assert reply.startswith("W00"), f"guest did not shut down cleanly: {reply}"
+                assert process.wait(timeout=3) == 0
                 output = serial.read_bytes()
                 if probe and probe.startswith("probe_panic"):
                     assert b"Kernel injected panic" in output

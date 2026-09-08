@@ -9,10 +9,10 @@ AArch64 Rust 微内核实验项目。目前提供内核底座与可选 debug 串
 在项目根目录执行：
 
 ```sh
-# 带启动日志，便于首次观察；Ctrl+C 退出 QEMU。
+# 带启动日志，初始化完成后自动关闭 QEMU。
 make run-kernel LOG=info
 
-# 关闭普通日志，正常启动后静默停驻；panic 仍打印。
+# 关闭普通日志，正常启动后静默关机；panic 仍打印。
 make run-kernel LOG=off
 
 # 优化与日志开关彼此独立。
@@ -45,15 +45,14 @@ gdb-multiarch target/kernel/debug-loginfo-test0/aarch64-unknown-none-softfloat/d
 
 ```text
 target remote :1234
-hbreak kernel_idle
+hbreak kernel_shutdown
 continue
-x/gx &BOOT_STATE
 x/gx &BOOT_ENTRY_EL_VALUE
 ```
 
-`BOOT_STATE`：1 为构造页表，2 为 MMU 已启用，3 为 内核就绪，`0xe1` 为异常，`0xe2` 为 panic。`BOOT_ENTRY_EL_VALUE` 记录入口为 EL1 还是 EL2。异常记录 `LAST_FAULT` 包含 kind/source、ESR/FAR、完整通用寄存器、SP_EL0、ELR/SPSR；FAR 仅在对应异常类规定其有效时解释。`kernel_halt` 是致命故障停驻点。
+在 `kernel_shutdown` 断点处检查关机前状态；异常通过 `LAST_FAULT` 核对，panic 通过独立串口诊断核对。`BOOT_ENTRY_EL_VALUE` 记录入口为 EL1 还是 EL2。异常记录 `LAST_FAULT` 包含 kind/source、ESR/FAR、完整通用寄存器、SP_EL0、ELR/SPSR；FAR 仅在对应异常类规定其有效时解释。`kernel_halt` 仅用于不支持的启动条件或固件关机返回后的停驻兜底。
 
-内核正常启动保留所有异常屏蔽位，CPU 进入 WFE 停驻，不是已有抢占调度的 idle 线程。EL3、安全态、多核运行和热启动不在支持范围内。入口要求 MMU/cache 关闭，启动前已有物理 RAM 可用。
+内核完成初始化（启用 kernel-test 时先运行自测）后调用 PSCI SYSTEM_OFF 关机；致命异常及 panic 也在诊断后关机。当前没有调度器或用户程序。固定 QEMU 平台从 EL2 启动时使用 SMC，从 EL1 启动时使用 HVC；未来支持其他固件时需从平台信息获取调用方式。EL3、安全态、多核运行和热启动不在支持范围内。入口要求 MMU/cache 关闭，启动前已有物理 RAM 可用。
 
 `KERNEL_TEST=1` 对应独立 `kernel-test` feature，启用原有分配器自测及调试器调用的故障探针；正式构建没有探针。自测失败会 panic，成功写 `SELF_TEST_PASSED=1`。测试结果不依赖串口或关机系统调用。
 

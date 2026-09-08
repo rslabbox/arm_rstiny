@@ -41,7 +41,6 @@ extern "C" fn fatal_exception(frame: &TrapFrame, kind: u64, source: u64) -> ! {
             far,
             frame: *frame,
         });
-        crate::set_boot_state(0xe1);
     }
     // source 0/1 = current EL; 2/3 = lower EL. User-fault handling is not implemented yet.
     // FAR is meaningful only for exception classes/ISS which define it.
@@ -54,5 +53,5 @@ extern "C" fn fatal_exception(frame: &TrapFrame, kind: u64, source: u64) -> ! {
         frame.elr,
         frame.spsr
     );
-    crate::utils::halt()
+    crate::utils::shutdown()
 }

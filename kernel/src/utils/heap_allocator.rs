@@ -1,13 +1,7 @@
-use core::alloc::Layout;
 use linked_list_allocator::LockedHeap;
 
 #[global_allocator]
 static HEAP_ALLOCATOR: LockedHeap = LockedHeap::empty();
-
-#[alloc_error_handler]
-pub fn handle_alloc_error(layout: Layout) -> ! {
-    panic!("Heap allocation error, layout = {:?}", layout);
-}
 
 unsafe extern "C" {
     unsafe static __heap_start: u8;

@@ -16,13 +16,41 @@ pub extern "C" fn kernel_halt() -> ! {
 }
 pub use kernel_halt as halt;
 
+/// PSCI conduit follows the fixed QEMU virt configuration: virtualization=on
+/// boots at EL2 and uses SMC; virtualization=off boots at EL1 and uses HVC.
+#[inline(never)]
+#[unsafe(no_mangle)]
+pub extern "C" fn kernel_shutdown() -> ! {
+    const PSCI_SYSTEM_OFF: u64 = 0x8400_0008;
+    unsafe {
+        core::arch::asm!("msr daifset, #0xf", options(nomem, nostack));
+        if crate::BOOT_ENTRY_EL.read_volatile() == 2 {
+            core::arch::asm!("smc #0",
+                inlateout("x0") PSCI_SYSTEM_OFF => _,
+                inlateout("x1") 0_u64 => _,
+                inlateout("x2") 0_u64 => _,
+                inlateout("x3") 0_u64 => _,
+            );
+        } else {
+            core::arch::asm!("hvc #0",
+                inlateout("x0") PSCI_SYSTEM_OFF => _,
+                inlateout("x1") 0_u64 => _,
+                inlateout("x2") 0_u64 => _,
+                inlateout("x3") 0_u64 => _,
+            );
+        }
+    }
+    // Firmware should not return. Avoid recursively panicking if it does.
+    halt()
+}
+pub use kernel_shutdown as shutdown;
+
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
     unsafe { core::arch::asm!("msr daifset, #0xf", options(nomem, nostack)) };
-    unsafe { crate::set_boot_state(0xe2) };
     // A recursive panic must not recurse through formatting indefinitely.
     if !PANICKING.swap(true, Ordering::Relaxed) {
         console::panic_print(info);
     }
-    halt()
+    shutdown()
 }
