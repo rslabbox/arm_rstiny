@@ -7,6 +7,7 @@ PHDRS {
 }
 SECTIONS {
     . = 0x44000000;
+    __loader_start = .;
     .text : { KEEP(*(.text.boot)) *(.text .text.*) } :text
     . = ALIGN(4096);
     .rodata : { *(.rodata .rodata.*) } :rodata
@@ -16,6 +17,7 @@ SECTIONS {
         KEEP(*(.boot_archive))
         __archive_end = .;
     } :rodata
+    ASSERT(__archive_end > __archive_start, "missing boot archive: build with make build or set BOOT_ARCHIVE_OBJECT")
     . = ALIGN(4096);
     .data : { *(.data .data.*) *(.got .got.*) } :data
     .bss (NOLOAD) : {

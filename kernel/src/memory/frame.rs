@@ -3,7 +3,7 @@ use super::{Error, PAGE_SIZE};
 use crate::utils::single_core::SingleCore;
 use core::ptr::addr_of;
 const FRAME_COUNT: usize = 2048;
-const BOOT_FRAMES: usize = 512;
+const BOOT_FRAMES: usize = kernel_abi::MAX_USER_PAGES;
 struct Pools {
     primary: [u64; FRAME_COUNT / 64],
     boot: [u64; BOOT_FRAMES / 64],
@@ -21,6 +21,12 @@ static POOL: SingleCore<Pools> = SingleCore::new(Pools {
 unsafe extern "C" {
     static __frames_start: u8;
     static __frames_end: u8;
+}
+
+fn primary_start() -> usize {
+    crate::config::phys_to_virt(crate::config::virt_to_phys(
+        addr_of!(__frames_start) as usize
+    ))
 }
 
 pub fn prepare_boot(start: usize, end: usize) {
@@ -55,7 +61,7 @@ impl Frame {
         let boot_start = pools.boot_start;
         let boot_ready = pools.boot_ready;
         for (start, bits) in [
-            (addr_of!(__frames_start) as usize, &mut pools.primary[..]),
+            (primary_start(), &mut pools.primary[..]),
             (boot_start, &mut pools.boot[..]),
         ] {
             if start == boot_start && !boot_ready {
@@ -110,7 +116,7 @@ impl Drop for Frame {
         let (start, bits) = if pools.boot_start != 0 && self.0 >= pools.boot_start {
             (pools.boot_start, &mut pools.boot[..])
         } else {
-            (addr_of!(__frames_start) as usize, &mut pools.primary[..])
+            (primary_start(), &mut pools.primary[..])
         };
         let index = (self.0 - start) / PAGE_SIZE;
         assert_ne!(bits[index / 64] & (1 << (index % 64)), 0);

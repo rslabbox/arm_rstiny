@@ -72,3 +72,12 @@ pub fn handle() -> bool {
     controller.cpu.eoi1(id);
     id == TIMER_IRQ
 }
+
+/// Single-core idle with IRQ masked: a pending deliverable IRQ wakes WFI.
+/// The caller holds no shared-state borrow and rechecks runnable work on return.
+pub fn wait_and_service() {
+    assert!(masked());
+    barrier::dsb(barrier::SY);
+    aarch64_cpu::asm::wfi();
+    handle();
+}

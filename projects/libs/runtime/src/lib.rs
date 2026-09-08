@@ -37,19 +37,29 @@ impl BootInfo {
 /// Must be invoked exactly once, with the kernel-provided immutable BootInfo
 /// mapping and exclusive, zero-initialized IPC mapping valid for task lifetime.
 #[doc(hidden)]
+#[inline(never)]
+#[unsafe(export_name = "__rstiny_root_start")]
 pub unsafe fn start(pointer: *const (), main: fn(&mut BootInfo) -> !) -> ! {
-    assert_eq!(pointer as usize, abi::BOOTINFO_VA as usize);
+    let address = pointer as u64;
+    assert!(address >= 2 * abi::PAGE_SIZE && address.is_multiple_of(abi::PAGE_SIZE));
+    assert!(
+        address
+            .checked_add(abi::PAGE_SIZE)
+            .is_some_and(|end| end <= abi::USER_ADDRESS_LIMIT)
+    );
+    // SAFETY: The entry contract supplies a pinned, readable BootInfo page.
     let raw = unsafe { &*pointer.cast::<abi::BootInfo>() };
     assert_eq!(raw.magic, abi::BOOTINFO_MAGIC);
     assert_eq!(raw.version, abi::ABI_VERSION);
     assert_eq!(raw.size, core::mem::size_of::<abi::BootInfo>() as u64);
     assert_eq!(raw.page_size, abi::PAGE_SIZE);
-    assert_eq!(raw.ipc_buffer, abi::IPC_BUFFER_VA);
-    assert_eq!(raw.stack_start, abi::STACK_START);
-    assert_eq!(raw.stack_end, abi::STACK_END);
-    assert_eq!(raw.image_start, abi::IMAGE_START);
-    assert!(raw.image_end > raw.image_start && raw.image_end <= abi::IMAGE_END);
-    assert_eq!(raw.extra, abi::EXTRA_BOOTINFO_VA);
+    assert_eq!(raw.ipc_buffer, address - abi::PAGE_SIZE);
+    assert_eq!(raw.extra, address + abi::PAGE_SIZE);
+    assert!(
+        raw.extra
+            .checked_add(raw.extra_size)
+            .is_some_and(|end| end <= abi::USER_ADDRESS_LIMIT)
+    );
     let header_size = core::mem::size_of::<abi::BootInfoHeader>() as u64;
     assert!((header_size + 40..=header_size + abi::MAX_DTB_SIZE).contains(&raw.extra_size));
     // SAFETY: the boot contract supplies a pinned, read-only extra BootInfo mapping.
@@ -74,4 +84,18 @@ pub use rstiny_runtime_macros::entry;
 fn panic(info: &core::panic::PanicInfo<'_>) -> ! {
     rstiny::debug_println!("[user panic] {}", info);
     rstiny::suspend_self()
+}
+
+/// Remove the runtime-owned guard before entering Rust application code.
+/// # Safety
+/// `guard` must identify an exclusively owned, mapped page with no live
+/// references or active stack bytes, reserved by the entry macro.
+#[doc(hidden)]
+pub unsafe fn protect_stack(guard: usize) {
+    unsafe {
+        rstiny::Task::current()
+            .expect("root task")
+            .unmap(guard, abi::PAGE_SIZE as usize)
+    }
+    .expect("root stack guard");
 }

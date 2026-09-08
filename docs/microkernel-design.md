@@ -4,6 +4,8 @@
 
 本文中的“当前项目”和 `src/` 路径记录的是最初设计时的基线；后续结构已迁移为 `kernel/src/`，现状及运行命令以实现记录和根目录 README 为准。
 
+具体的数据结构、capability/Untyped/IPC/fault/IRQ 语义、ABI 变更与分阶段验收标准见 [能力系统与 IPC 演进规划](evolution-plan.md)；本文保留总路线与差距背景。
+
 本文的初始分析基于当时项目源码，以及 `../seL4` 中实际存在的内核和用户程序。初次分析时项目 HEAD 为 `2c8563c`，参考内核 HEAD 为 `28b8f4c40`；参考目录存在本地修改，本文描述的是查阅时的工作区内容，不能仅凭提交号复现全部参考行为。
 
 当前实现进度：内核底座与最小 EL0 fatboot 已完成，现已补齐 [单核用户内存与任务调度](memory-task.md) 和 [Rust bootloader 引导链](boot.md)。当前父子任务句柄不是完整 CSpace；原路线中的能力系统仍待实现。实际 ABI、高地址内核映射和验证见 [fatboot 启动文档](fatboot.md)。下文旧代码分析保留为设计背景，后续章节为路线规划。
@@ -398,7 +400,7 @@ docs/
   microkernel-design.md
 ```
 
-内核和用户程序分别使用链接脚本。Cargo workspace 不能把当前内核全局 `-Tlink.lds` 自动套给全部用户 ELF；按 package/build script 或独立构建目标选择链接参数。`abi` 不依赖内核内部对象；跨边界结构采用 `repr(C)`、固定宽度类型、显式版本和保留字段，不直接暴露 Rust enum、Vec、引用或内部指针。
+内核链接脚本与用户 ELF 链接配置分离。Cargo workspace 不能把内核的 `-Tlink.lds` 套给用户 ELF；用户构建入口统一配置 LLD 默认布局，应用不维护独立脚本。`abi` 不依赖内核内部对象；跨边界结构采用 `repr(C)`、固定宽度类型、显式版本和保留字段，不直接暴露 Rust enum、Vec、引用或内部指针。
 
 syscall 寄存器约定建议统一为 x8 操作号、x0 目标 CapPtr/返回状态、x1…x6 标量参数与结果，其余寄存器默认保存。IPC 具体占用的消息寄存器需在 IPC 与故障 固化；SVC 包装正确声明寄存器和内存影响。该约定是本项目设计，不是 seL4 ABI。
 

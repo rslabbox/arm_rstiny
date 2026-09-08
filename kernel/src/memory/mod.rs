@@ -5,9 +5,9 @@ pub use frame::available as available_frames;
 pub use frame::{finish_boot, prepare_boot};
 pub use space::AddressSpace;
 pub const PAGE_SIZE: usize = 4096;
-pub const USER_START: usize = 0x0040_0000;
-pub const USER_END: usize = 0x0800_0000;
-pub const MAX_PAGES: usize = 1024;
+pub const USER_START: usize = PAGE_SIZE;
+pub const USER_END: usize = kernel_abi::USER_ADDRESS_LIMIT as usize;
+pub const MAX_PAGES: usize = kernel_abi::MAX_USER_PAGES;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u64)]

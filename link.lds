@@ -10,10 +10,10 @@ PHDRS
 
 SECTIONS
 {
-    KERNEL_OFFSET = 0xffff000000000000;
-    . = KERNEL_OFFSET + 0x40200000;
+    KERNEL_LINK_BASE = 0xffff800000000000;
+    . = KERNEL_LINK_BASE;
     skernel = .;
-    .text : AT(ADDR(.text) - KERNEL_OFFSET) {
+    .text : AT(ADDR(.text) - KERNEL_LINK_BASE) {
         stext = .;
         KEEP(*(.text.boot))
         KEEP(*(.text.probe))
@@ -21,37 +21,37 @@ SECTIONS
         . = ALIGN(4096);
         etext = .;
     } :text
-    .rodata : AT(ADDR(.rodata) - KERNEL_OFFSET) {
+    .rodata : AT(ADDR(.rodata) - KERNEL_LINK_BASE) {
         srodata = .;
         *(.rodata .rodata.* .srodata .srodata.*)
         . = ALIGN(4096);
         erodata = .;
     } :rodata
-    .data : AT(ADDR(.data) - KERNEL_OFFSET) {
+    .data : AT(ADDR(.data) - KERNEL_LINK_BASE) {
         sdata = .;
         *(.data .data.* .sdata .sdata.* .got .got.*)
         . = ALIGN(4096);
         edata = .;
     } :data
-    .bss (NOLOAD) : AT(ADDR(.bss) - KERNEL_OFFSET) {
+    .bss (NOLOAD) : AT(ADDR(.bss) - KERNEL_LINK_BASE) {
         sbss = .;
         *(.bss .bss.* .sbss .sbss.*)
         . = ALIGN(4096);
         ebss = .;
     } :data
-    .stack (NOLOAD) : AT(ADDR(.stack) - KERNEL_OFFSET) {
+    .stack (NOLOAD) : AT(ADDR(.stack) - KERNEL_LINK_BASE) {
         stack_guard = .;
         . += 4096;
         boot_stack = .;
         . += 64K;
         boot_stack_top = .;
     } :data
-    .heap (NOLOAD) : AT(ADDR(.heap) - KERNEL_OFFSET) {
+    .heap (NOLOAD) : AT(ADDR(.heap) - KERNEL_LINK_BASE) {
         __heap_start = .;
         . += 16M;
         __heap_end = .;
     } :data
-    .frames (NOLOAD) : AT(ADDR(.frames) - KERNEL_OFFSET) {
+    .frames (NOLOAD) : AT(ADDR(.frames) - KERNEL_LINK_BASE) {
         __frames_start = .;
         . += 8M;
         __frames_end = .;
@@ -60,6 +60,6 @@ SECTIONS
 
     ASSERT((sbss & 4095) == 0, "BSS alignment")
     ASSERT((boot_stack_top & 4095) == 0, "stack alignment")
-    ASSERT((ekernel - KERNEL_OFFSET) <= 0x42000000, "Kernel page tables cover only first 32 MiB of RAM")
+    ASSERT((ekernel - skernel) <= 0x2000000, "Kernel image exceeds its 32 MiB virtual window")
     /DISCARD/ : { *(.eh_frame .eh_frame_hdr .comment) }
 }

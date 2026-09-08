@@ -8,7 +8,6 @@ use core::{
 
 #[repr(C)]
 pub(crate) struct SingleCore<T> {
-    // Preserve the address of debugger-visible state such as SCHEDULER.
     value: UnsafeCell<T>,
     borrowed: Cell<bool>,
 }

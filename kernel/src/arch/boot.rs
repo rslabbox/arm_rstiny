@@ -1,11 +1,11 @@
 //! seL4 elfloader handoff and high-half mappings for single-core QEMU virt.
-//! User roots retain these supervisor mappings and own their user subtrees.
+//! Image mappings use the discovered physical base; the direct map is separate.
 use aarch64_cpu::{asm::barrier, registers::*};
 use core::ptr::{addr_of, addr_of_mut};
 use memory_addr::PhysAddr;
 
 use super::PageTableEntry;
-use crate::config::{MemFlags, PAGE_SIZE, RAM_START, phys_to_virt, virt_to_phys};
+use crate::config::{MemFlags, PAGE_SIZE, RAM_END, RAM_START, virt_to_phys};
 
 // seL4 ARM loader passes x0..x5 and enters an EL1 kernel with MMU/caches on.
 #[derive(Clone, Copy, Debug, Default)]
@@ -17,6 +17,7 @@ pub struct BootInfo {
     pub entry: usize,
     pub dtb: usize,
     pub dtb_size: usize,
+    pub kernel_physical: usize,
 }
 #[unsafe(no_mangle)]
 static mut LOADER_BOOT_INFO: BootInfo = BootInfo {
@@ -26,6 +27,7 @@ static mut LOADER_BOOT_INFO: BootInfo = BootInfo {
     entry: 0,
     dtb: 0,
     dtb_size: 0,
+    kernel_physical: 0,
 };
 pub fn information() -> BootInfo {
     // SAFETY: initialized once before kernel startup, then immutable on this CPU.
@@ -71,6 +73,23 @@ extern "C" fn start_rust(
             cursor = cursor.add(1);
         }
     }
+    // Resolve the kernel image through the loader's live translation regime.
+    // This keeps x0..x5 unchanged and requires no fixed physical load address.
+    let kernel_virtual = addr_of!(skernel) as usize;
+    // SAFETY: EL1 with a live stage-1 mapping; AT only queries translation.
+    unsafe {
+        core::arch::asm!("at s1e1r, {va}", va = in(reg) kernel_virtual, options(nostack));
+    }
+    barrier::isb(barrier::SY);
+    let translation = PAR_EL1.extract();
+    if translation.is_set(PAR_EL1::F) {
+        crate::utils::halt();
+    }
+    let kernel_physical = (translation.read(PAR_EL1::PA) as usize) << 12;
+    let kernel_size = addr_of!(ekernel) as usize - kernel_virtual;
+    let Some(kernel_end) = kernel_physical.checked_add(kernel_size) else {
+        crate::utils::halt()
+    };
     let info = BootInfo {
         image_start,
         image_end,
@@ -78,17 +97,29 @@ extern "C" fn start_rust(
         entry,
         dtb,
         dtb_size,
+        kernel_physical,
     };
+    let Some(user_start) = image_start.checked_sub(phys_virt_offset) else {
+        crate::utils::halt()
+    };
+    let Some(user_end) = image_end.checked_sub(phys_virt_offset) else {
+        crate::utils::halt()
+    };
+    if kernel_abi::InitialTaskLayout::new(user_start as u64..user_end as u64, dtb_size as u64)
+        .is_none()
+        || !(user_start..user_end).contains(&entry)
+    {
+        crate::utils::halt();
+    }
     // Check ranges before using any loader-controlled address in a page table.
-    let kernel_end = crate::config::virt_to_phys(addr_of!(ekernel) as usize);
-    if image_start < kernel_end
+    if kernel_physical < RAM_START
+        || !kernel_physical.is_multiple_of(PAGE_SIZE)
+        || kernel_end > RAM_END
+        || image_start < kernel_end
         || image_start >= image_end
-        || image_end > 0x41ff_f000
+        || image_end > RAM_END - PAGE_SIZE
         || !image_start.is_multiple_of(PAGE_SIZE)
         || !image_end.is_multiple_of(PAGE_SIZE)
-        || image_start.checked_sub(phys_virt_offset) != Some(kernel_abi::IMAGE_START as usize)
-        || image_end.checked_sub(phys_virt_offset) != Some(kernel_abi::STACK_END as usize)
-        || !(kernel_abi::IMAGE_START as usize..kernel_abi::IMAGE_END as usize).contains(&entry)
         || dtb < kernel_end
         || dtb_size < 40
         || dtb_size > kernel_abi::MAX_DTB_SIZE as usize
@@ -116,7 +147,10 @@ static mut ROOT: Table = Table::EMPTY;
 static mut EMPTY_USER_ROOT: Table = Table::EMPTY;
 static mut RAM_L1: Table = Table::EMPTY;
 static mut RAM_L2: Table = Table::EMPTY;
-static mut RAM_L3: [Table; 16] = [Table::EMPTY; 16];
+static mut RAM_L3: [Table; 64] = [Table::EMPTY; 64];
+static mut IMAGE_L1: Table = Table::EMPTY;
+static mut IMAGE_L2: Table = Table::EMPTY;
+static mut IMAGE_L3: [Table; 16] = [Table::EMPTY; 16];
 static mut DEVICE_L2: Table = Table::EMPTY;
 static mut GIC_L3: Table = Table::EMPTY;
 static mut DEVICE_L3: Table = Table::EMPTY;
@@ -150,17 +184,31 @@ unsafe fn init_page_tables() {
     unsafe {
         set(addr_of_mut!(ROOT), 0, table_entry(addr_of!(RAM_L1)));
         set(addr_of_mut!(RAM_L1), 1, table_entry(addr_of!(RAM_L2)));
-        let tables = addr_of_mut!(RAM_L3).cast::<Table>();
+        // Image VA and physical direct-map VA are independent. Both aliases
+        // preserve RO text/rodata; only the image alias permits code execution.
+        let direct_tables = addr_of_mut!(RAM_L3).cast::<Table>();
+        let image_tables = addr_of_mut!(IMAGE_L3).cast::<Table>();
         let start = addr_of!(skernel) as usize;
-        let end = phys_to_virt(information().image_end + PAGE_SIZE);
-        for va in (start..end).step_by(PAGE_SIZE) {
+        let image_end = addr_of!(ekernel) as usize;
+        let info = information();
+        set(
+            addr_of_mut!(ROOT),
+            (start >> 39) & 511,
+            table_entry(addr_of!(IMAGE_L1)),
+        );
+        set(
+            addr_of_mut!(IMAGE_L1),
+            (start >> 30) & 511,
+            table_entry(addr_of!(IMAGE_L2)),
+        );
+        for va in (start..image_end).step_by(PAGE_SIZE) {
             if va == addr_of!(stack_guard) as usize {
                 continue;
             }
-            let l2 = (virt_to_phys(va) - RAM_START) >> 21;
+            let l2 = (va - start) >> 21;
             assert!(l2 < 16);
-            let l3 = tables.add(l2);
-            set(addr_of_mut!(RAM_L2), l2, table_entry(l3));
+            let l3 = image_tables.add(l2);
+            set(addr_of_mut!(IMAGE_L2), (va >> 21) & 511, table_entry(l3));
             let flags = if va < addr_of!(etext) as usize {
                 MemFlags::READ | MemFlags::EXECUTE
             } else if va < addr_of!(erodata) as usize {
@@ -172,6 +220,26 @@ unsafe fn init_page_tables() {
                 l3,
                 (va >> 12) & 511,
                 PageTableEntry::new_page(PhysAddr::from_usize(virt_to_phys(va)), flags, false),
+            );
+        }
+        for pa in (info.kernel_physical..info.image_end + PAGE_SIZE).step_by(PAGE_SIZE) {
+            let image_va = start + (pa - info.kernel_physical);
+            if image_va == addr_of!(stack_guard) as usize {
+                continue;
+            }
+            let l2 = (pa - RAM_START) >> 21;
+            assert!(l2 < 64);
+            let l3 = direct_tables.add(l2);
+            set(addr_of_mut!(RAM_L2), l2, table_entry(l3));
+            let flags = if image_va < addr_of!(erodata) as usize {
+                MemFlags::READ
+            } else {
+                MemFlags::READ | MemFlags::WRITE
+            };
+            set(
+                l3,
+                (pa >> 12) & 511,
+                PageTableEntry::new_page(PhysAddr::from_usize(pa), flags, false),
             );
         }
         {

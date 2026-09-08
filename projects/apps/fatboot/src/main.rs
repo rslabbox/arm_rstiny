@@ -16,7 +16,7 @@ static BOOTINFO_ADDRESS: AtomicU64 = AtomicU64::new(0);
 #[unsafe(no_mangle)]
 static RESULT: AtomicU64 = AtomicU64::new(0);
 
-#[entry]
+#[entry(stack_size = 32 * 1024)]
 fn main(info: &mut BootInfo) -> ! {
     BOOTINFO_ADDRESS.store(info.address() as u64, Ordering::Relaxed);
     debug_println!("[fatboot] loading hello.elf");

@@ -1,7 +1,4 @@
 fn main() {
-    let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("link.lds");
-    println!("cargo:rustc-link-arg-bin=fatboot=-T{}", script.display());
-    println!("cargo:rerun-if-changed={}", script.display());
     println!("cargo:rerun-if-env-changed=HELLO_ELF");
     let mut assembly = String::from(
         ".section .rodata.hello,\"a\"\n.balign 8\n.global __hello_start\n__hello_start:\n",

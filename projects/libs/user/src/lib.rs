@@ -46,7 +46,6 @@ fn call(number: u64, argument: u64) -> Result<(), Error> {
 }
 
 pub mod elf;
-mod elf_image;
 pub mod task;
 pub use task::{Permissions, Task, TaskState};
 

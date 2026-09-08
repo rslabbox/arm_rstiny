@@ -1,9 +1,19 @@
-use super::*;
+use super::scheduler::*;
+use crate::{
+    arch::{TrapFrame, irq, user::UserContext},
+    memory::{self, AddressSpace},
+};
+use kernel_abi::*;
+pub(super) enum Outcome {
+    Complete(Result<Option<u64>, u64>),
+    Waiting,
+    Exited(u64),
+}
 const MAX_COPY: usize = 4096;
 
 impl Scheduler {
-    pub(super) fn syscall(&mut self, caller: usize) {
-        let registers = self.tasks[caller].context.r;
+    pub(super) fn syscall(&mut self, caller: usize) -> Outcome {
+        let registers = self.tasks[caller].frame().r;
         let args = [
             registers[0],
             registers[1],
@@ -11,15 +21,14 @@ impl Scheduler {
             registers[3],
             registers[4],
         ];
+        if registers[8] == SYS_EXIT {
+            return Outcome::Exited(args[0]);
+        }
         let result = self.invoke(caller, registers[8], args);
-        match result {
-            Ok(value) => {
-                self.tasks[caller].context.r[0] = OK;
-                if let Some(value) = value {
-                    self.tasks[caller].context.r[1] = value;
-                }
-            }
-            Err(code) => self.tasks[caller].context.r[0] = code,
+        if result.is_ok() && self.tasks[caller].state == TASK_WAITING {
+            Outcome::Waiting
+        } else {
+            Outcome::Complete(result)
         }
     }
     fn space(&self, slot: usize) -> Result<&AddressSpace, u64> {
@@ -52,10 +61,6 @@ impl Scheduler {
                 self.tasks[caller].state = TASK_SUSPENDED;
                 None
             }
-            SYS_EXIT => {
-                self.finish(caller, false, a[0]);
-                None
-            }
             SYS_SLEEP => {
                 let duration = a[0].checked_mul(irq::frequency()).ok_or(INVALID_ARGUMENT)? / 1000;
                 self.tasks[caller].deadline =
@@ -80,7 +85,8 @@ impl Scheduler {
                 self.space(slot)?
                     .check(stack as usize, 16, 2)
                     .map_err(|e| e as u64)?;
-                self.tasks[slot].context = TrapFrame::user(a[1], a[2], a[3]);
+                self.tasks[slot].context =
+                    Some(UserContext::new(TrapFrame::user(a[1], a[2], a[3])));
                 self.tasks[slot].started = true;
                 self.ready(slot);
                 None

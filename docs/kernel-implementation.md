@@ -1,6 +1,6 @@
 # 内核实现与验证记录
 
-日期：2026-09-08。
+日期：2026-09-09。
 
 本文记录内核底座及其回归验证。独立 EL0 fatboot 和 BootInfo 现已接入，详见 [fatboot 启动与用户态边界](fatboot.md)；GIC/定时器和任务/内存管理已接入，见 [用户内存与单核任务调度](memory-task.md)；完整能力系统仍未实现。
 
@@ -34,7 +34,7 @@
 - 写代码页触发页权限错误；执行栈触发指令权限错误。
 - 读取栈保护页、空地址触发翻译错误。
 - 注入 panic，验证独立 panic 诊断和实际关机。
-- LOG=off 的内核正常启动和普通异常日志保持静默（不包含 bootloader 输出）；panic 在所有等级直接打印。另注入 logger 锁已占用时的 panic，验证输出不被锁阻塞。
+- LOG=off 的内核正常启动和用户故障日志保持静默（不包含 bootloader 输出）；内核致命异常和 panic 在所有等级直接打印。另注入 logger 锁已占用时的 panic，验证输出不被锁阻塞。
 - 全部六个日志级别均构建运行；error/warn 过滤 info，error 仍输出 panic 诊断。
 - 正式 ELF 不包含 `probe_*`；LOG=off 验证内核正常启动静默，不要求 logger 从 ELF 消除。
 
@@ -42,7 +42,7 @@
 
 ## 当前边界与下一步
 
-当前固定平台为 128 MiB QEMU RAM，链接脚本限制整个内核、堆和独立 8 MiB 用户帧池落在最初 32 MiB 页表覆盖区内。root image 原地接管后加入可回收帧管理；设备树在构建时生成平台常量，运行时经扩展 BootInfo 交给 fatboot，尚未发现或分配剩余 RAM；动态 map/unmap/protect 与空间切换现由 memory/task 模块负责。链接脚本预留栈和堆为 NOLOAD，避免把 16 MiB 零字节塞进启动 bin。
+当前固定平台为 128 MiB QEMU RAM，链接脚本限制整个内核、堆和独立 8 MiB 用户帧池落在独立的 32 MiB 虚拟窗口内，物理位置由 loader 从空闲 RAM 动态选择。内核镜像和固定偏移物理直接映射分别建表，详见 [启动文档](boot.md)。root image 原地接管后加入可回收帧管理；设备树在构建时生成平台常量，运行时经扩展 BootInfo 交给 fatboot，尚未发现或分配剩余 RAM；动态 map/unmap/protect 与空间切换现由 memory/task 模块负责。链接脚本预留栈和堆为 NOLOAD，避免把 16 MiB 零字节塞进启动 bin。
 
 异常记录面向仍有有效内核栈的故障。保护页能阻止越界访问，但真正耗尽异常保存栈后的双重故障尚无专用紧急栈恢复能力。
 
@@ -51,3 +51,5 @@
 现已建立独立用户 ELF、用户页表、初始任务上下文、BootInfo 和 SVC 往返。用户 TTBR0 与内核高地址 TTBR1 分离，硬件权限测试验证隔离。下一步是能力与内核对象管理。
 
 内核启动实现不使用独立 boot.S；早期 MMU 初始化由 bootloader/ 中的 Rust 实现完成，必要的系统寄存器操作使用内联汇编。固定 EL1 入口通过 dev/release 集成验证；trap.S 的异常寄存器保存入口保持独立。引导产物、上游来源及兼容范围见 [引导链](boot.md)。
+
+用户执行已采用 [可返回的控制权反转](user-execution.md)：EL0 trap 保存现场并恢复内核调用链，由 task/runtime.rs 的共享栈循环完成调度。旧的重置栈跳转路径已删除。

@@ -9,7 +9,8 @@
 | `kernel/src/memory/frame.rs` | 物理帧唯一所有权、分配清零、释放和余量统计 |
 | `kernel/src/memory/space.rs` | 地址空间、页元数据、私有页表、map/unmap/protect、受控跨页复制 |
 | `kernel/src/task/boot.rs` | 接管 loader 已装载页、初始 BootInfo/IPC buffer |
-| `kernel/src/task/mod.rs` | 任务上下文、状态转换、所有权、选择下一任务、idle |
+| `kernel/src/task/scheduler.rs` | 任务上下文所有权、状态转换、等待关系、选择与回收 |
+| `kernel/src/task/runtime.rs` | 可返回用户执行、事件提交、共享内核栈上的调度循环与 idle |
 | `kernel/src/task/queue.rs` | 有界 FIFO 就绪队列，不在调度路径分配内存 |
 | `kernel/src/task/syscall.rs` | 用户参数/句柄校验与任务、内存系统调用 |
 | `kernel/src/arch/irq.rs` | 通过 arm-gic-driver 配置 GICv3、PPI 30、物理定时器重装与中断完成 |
@@ -19,14 +20,14 @@
 
 ## 用户内存
 
-内核通过 TTBR1 保留高地址 supervisor-only 映射，虚拟地址等于物理地址加 `0xffff000000000000`。每个用户地址空间使用独立 TTBR0，分配独立 L0/L1/L2，按需分配用户 L3。用户地址窗口为 `0x00400000..0x08000000`，因此不能映射内核 RAM、GIC 或 UART。
+内核通过 TTBR1 保留高地址 supervisor-only 映射：内核镜像位于 `0xffff800000000000` 窗口，以启动时发现的 PA 建立映射；物理直接映射仍使用固定偏移 `0xffff000000000000`。帧分配器统一使用直接映射地址，避免将镜像 VA 当成固定偏移别名。每个用户地址空间使用独立 TTBR0，分配独立 L0/L1/L2，按需分配用户 L3。用户地址窗口为 `0x1000..0x08000000`，因此不能映射内核 RAM、GIC 或 UART。
 
 映射粒度为 4 KiB，只接受 R/NX、RW/NX、RX，拒绝 RWX、写而不可读、未知权限位、非对齐范围、溢出和重叠。用户页具有 EL0 AP 和 PXN；EL0 无法访问用于初始化的内核物理页别名。
 
 资源由链接脚本显式预留：
 
 - 内核元数据堆 16 MiB，与用户页分配池分离。
-- 主用户帧池 8 MiB，共 2048 帧；另接管 loader 装载的 2 MiB root image 区间，最多 512 帧。已映射页由 root 持有，空洞在接管完成后可分配；释放后两池均可复用。用户数据和私有页表都计入池配额。
+- 主用户帧池 8 MiB，共 2048 帧；另接管 loader 装载的实际 root image 区间，跨度最多 1024 帧。已映射页由 root 持有，空洞在接管完成后可分配；释放后两池均可复用。用户数据和私有页表都计入池配额。
 - 每个地址空间最多 1024 个用户映射页；页表帧另行计费。
 - 最多 32 个任务，包括 fatboot。耗尽时返回 NoMemory，不以用户输入触发内核 panic。
 - 内核栈为 64 KiB，下方仍有保护页；堆、帧池和栈均为 NOLOAD，不增大磁盘启动镜像。
@@ -66,7 +67,7 @@ Wait 在目标未终止时阻塞，结束后返回退出码或 ESR；通过 Stat
 
 所有任务都只能操作自身或直接子任务。不能用猜出的 ID 操作父任务、兄弟任务或尚未转交的孙任务；根任务也没有绕过该规则的任意目标访问。修改另一个任务的空间要求目标为 Created/Suspended。IPC、句柄转移和能力授权以后另行设计。
 
-没有 Ready 任务时内核重置栈进入 WFI，并保持 IRQ 开启；定时器会唤醒到期任务。用户异常保存到 `LAST_FAULT`，终止该任务并调度其他任务。内核自身异常或 panic 保留原有日志和 PSCI 关机策略。CNTKCTL_EL1 禁止 EL0 修改定时器。FP/SIMD 通过 CPACR_EL1 显式禁止，相关用户指令产生故障；尚无 FP/SIMD 上下文保存。
+没有 Ready 任务时内核在现有调用栈上、IRQ 掩蔽状态执行 WFI；pending timer 唤醒后由 Rust 处理 IRQ，再检查到期任务。用户异常保存到 `LAST_FAULT`，终止该任务并调度其他任务。内核自身异常或 panic 无条件诊断并 PSCI 关机。CNTKCTL_EL1 禁止 EL0 修改定时器。FP/SIMD 通过 CPACR_EL1 显式禁止，相关用户指令产生故障；尚无 FP/SIMD 上下文保存。
 
 EL1 内核执行期间 IRQ 屏蔽、不可抢占，所有系统调用在切换前完成，不保存阻塞的 Rust 内核调用栈。这使共享内核栈和单核调度器独占访问成立。它不是硬实时实现：映射清零、复制和元数据操作会增加中断响应延迟。
 
@@ -123,3 +124,5 @@ map/unmap/protect、写入任意目标地址及 Start 为 unsafe API，因为内
 fatboot 也通过实际 Rust API 检查任务创建/销毁计费和定时器睡眠，保留静默启动结果验证。
 
 当前已实现上述单核内存与任务接口的完整生命周期。未实现 SMP、共享地址空间线程、优先级/实时调度、需求分页、COW/fork、文件映射、swap、POSIX、通用 ELF exec、IPC 和完整 capability 系统；这些需要各自的用户接口及资源语义，不能从本次实现推断已具备。
+
+执行模型见 [用户态执行控制权反转设计](user-execution.md)。当前实现采用可返回的用户执行边界与共享内核栈上的 Rust 调度循环。

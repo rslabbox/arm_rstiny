@@ -1,18 +1,27 @@
 //! Static AArch64 ELF loading into a fresh child address space.
-use crate::{Error, Permissions, Task, elf_image::Elf};
+use crate::{Error, Permissions, Task};
+use rstiny_elf::Elf;
 
 const PAGE: usize = 4096;
-const STACK_END: usize = 0x0800_0000;
 const STACK_SIZE: usize = 16 * 1024;
-const STACK_START: usize = STACK_END - STACK_SIZE;
 
 /// Load and start a static ELF with a private 16 KiB stack and x0=0.
 /// The executable uses the ordinary `#[entry] fn() -> !` runtime contract.
 /// Failed loads destroy the child and release every allocated page.
 pub fn spawn(image: &[u8]) -> Result<Task, Error> {
     let elf = Elf::parse(image).map_err(|_| Error::InvalidArgument)?;
+    if elf.segments().any(|s| !matches!(s.flags, 4..=6)) {
+        return Err(Error::InvalidArgument);
+    }
     let pages: usize = elf.segments().map(|s| (s.end - s.va) / PAGE).sum();
-    if elf.start < 0x0040_0000 || elf.end > STACK_START - PAGE || pages > 1020 {
+    let stack_bottom = elf.end().checked_add(PAGE).ok_or(Error::InvalidArgument)?;
+    let stack_top = stack_bottom
+        .checked_add(STACK_SIZE)
+        .ok_or(Error::InvalidArgument)?;
+    if elf.start() < PAGE
+        || stack_top > kernel_abi::USER_ADDRESS_LIMIT as usize
+        || pages + STACK_SIZE / PAGE > kernel_abi::MAX_USER_PAGES
+    {
         return Err(Error::InvalidArgument);
     }
     let child = Task::create()?;
@@ -43,8 +52,8 @@ pub fn spawn(image: &[u8]) -> Result<Task, Error> {
             }
         }
         unsafe {
-            child.map(STACK_START, STACK_SIZE, Permissions::ReadWrite)?;
-            child.start(elf.entry, STACK_END, 0)?;
+            child.map(stack_bottom, STACK_SIZE, Permissions::ReadWrite)?;
+            child.start(elf.entry(), stack_top, 0)?;
         }
         Ok(child)
     })();

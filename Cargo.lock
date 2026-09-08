@@ -36,6 +36,11 @@ checksum = "b588b76d00fde79687d7646a9b5bdf3cc0f655e0bbd080335a95d7e96f3587da"
 name = "bootloader"
 version = "0.1.0"
 dependencies = [
+ "aarch64-cpu",
+ "bitflags",
+ "kernel-abi",
+ "memory_addr",
+ "rstiny-elf",
  "tock-registers",
 ]
 
@@ -138,7 +143,12 @@ name = "rstiny"
 version = "0.1.0"
 dependencies = [
  "kernel-abi",
+ "rstiny-elf",
 ]
+
+[[package]]
+name = "rstiny-elf"
+version = "0.1.0"
 
 [[package]]
 name = "rstiny-runtime"

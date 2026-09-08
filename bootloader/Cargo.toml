@@ -3,12 +3,28 @@ name = "bootloader"
 version = "0.1.0"
 edition = "2024"
 publish = false
+# Explicit host test harness excludes the AArch64 boot entry.
+autotests = false
+
+[features]
+default = ["image"]
+image = []
 
 [dependencies]
+memory_addr = "0.4"
+kernel-abi = { path = "../projects/libs/abi" }
+aarch64-cpu = "11.2.0"
+bitflags = "2.9.1"
+rstiny-elf = { path = "../projects/libs/elf" }
 tock-registers = "0.10.1"
 
 [[bin]]
 name = "bootloader"
 path = "src/main.rs"
+required-features = ["image"]
 test = false
 bench = false
+
+[[test]]
+name = "images"
+path = "tests/images.rs"

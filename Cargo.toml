@@ -5,6 +5,7 @@ members = [
     "projects/apps/fatboot",
     "projects/apps/hello",
     "projects/libs/abi",
+    "projects/libs/elf",
     "projects/libs/user",
     "projects/libs/runtime",
     "projects/libs/runtime-macros",

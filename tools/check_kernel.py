@@ -30,6 +30,33 @@ def kernel_output(output):
     return output.split(boundary, 1)[1]
 
 
+def translate(gdb, va):
+    """Walk TTBR1 independently of current EL, supporting loader block entries."""
+    mask = (1 << 40) - 4096
+    table = gdb.reg('ttbr1_el1') & mask
+    assert gdb.command('Qqemu.PhyMemMode:1') == 'OK'
+    try:
+        for level in range(4):
+            shift = 39 - 9 * level
+            entry = gdb.word(table + ((va >> shift) & 511) * 8)
+            assert entry & 1, f'unmapped kernel VA {va:#x}'
+            if level == 3 or not entry & 2:
+                return (entry & mask & ~((1 << shift) - 1)) | (va & ((1 << shift) - 1))
+            table = entry & mask
+        raise AssertionError('invalid translation')
+    finally:
+        assert gdb.command('Qqemu.PhyMemMode:0') == 'OK'
+
+
+def kernel_word(gdb, va):
+    pa = translate(gdb, va)
+    assert gdb.command('Qqemu.PhyMemMode:1') == 'OK'
+    try:
+        return gdb.word(pa)
+    finally:
+        assert gdb.command('Qqemu.PhyMemMode:0') == 'OK'
+
+
 def check_handoff(gdb, kernel):
     directory = boot_image(kernel).parent
     root_bytes = (directory / 'rootserver').read_bytes()
@@ -37,15 +64,30 @@ def check_handoff(gdb, kernel):
     kernel_info = parse_elf((directory / 'kernel.elf').read_bytes())
     dtb = (directory / 'kernel.dtb').read_bytes()
     dtb_size = int.from_bytes(dtb[4:8], 'big')
-    start, end = validate_pair(kernel_info, root_info, dtb_size)
+    kernel_physical = translate(gdb, kernel_info['start'])
+    start, end = validate_pair(kernel_info, root_info, dtb_size, kernel_physical)
     expected = (start, end, start - root_info['start'], root_info['entry'],
-                kernel_info['end'] - KERNEL_OFFSET, dtb_size)
+                kernel_physical + kernel_info['end'] - kernel_info['start'], dtb_size)
     assert tuple(gdb.reg(f'x{i}') for i in range(6)) == expected, 'seL4 handoff arguments differ'
     assert gdb.reg('cpsr') & 15 == 5, 'elfloader did not enter EL1h'
     required = 1 | (1 << 2) | (1 << 12)
     assert gdb.reg('sctlr_el1') & required == required, 'loader MMU/cache contract'
     assert gdb.command('Qqemu.PhyMemMode:1') == 'OK'
     try:
+        # The kernel ELF itself must be copied to the selected PA, including
+        # initialized data. Probe both ends of each zero-filled tail before entry.
+        kernel_bytes = (directory / 'kernel.elf').read_bytes()
+        for segment in kernel_info['segments']:
+            address = kernel_physical + segment['va'] - kernel_info['start']
+            for offset in range(0, segment['filesz'], 1024):
+                count = min(1024, segment['filesz'] - offset)
+                source = segment['offset'] + offset
+                assert gdb.memory(address + offset, count) == kernel_bytes[source:source + count]
+            tail = segment['memsz'] - segment['filesz']
+            if tail:
+                count = min(tail, 64)
+                assert gdb.memory(address + segment['filesz'], count) == bytes(count)
+                assert gdb.memory(address + segment['memsz'] - count, count) == bytes(count)
         for segment in root_info['segments']:
             address = start + segment['va'] - root_info['start']
             length = segment['filesz']
@@ -202,7 +244,6 @@ def mappings(gdb):
             if level < 3:
                 visit(entry & physical_mask, level + 1, va)
             else:
-                assert entry & physical_mask == va - KERNEL_OFFSET, "unexpected physical alias"
                 found[va] = entry
     assert gdb.command('Qqemu.PhyMemMode:1') == 'OK'
     try:
@@ -225,8 +266,11 @@ def check_layout(gdb, syms):
     assert gdb.reg("sp") % 16 == 0
     pages = mappings(gdb)
     image_end = gdb.word(syms['LOADER_BOOT_INFO'] + 8)
-    expected = set(range(syms["skernel"], KERNEL_OFFSET + image_end + 4096, 4096))
-    expected.remove(syms["stack_guard"])
+    kernel_physical = gdb.word(syms['LOADER_BOOT_INFO'] + 48)
+    expected = set(range(syms['skernel'], syms['ekernel'], 4096))
+    expected.update(range(KERNEL_OFFSET + kernel_physical, KERNEL_OFFSET + image_end + 4096, 4096))
+    expected.remove(syms['stack_guard'])
+    expected.remove(KERNEL_OFFSET + kernel_physical + syms['stack_guard'] - syms['skernel'])
     devices = set(range(0x08000000, 0x08010000, 4096))
     devices.update(range(0x080a0000, 0x080c0000, 4096))
     devices.add(0x09000000)
@@ -241,8 +285,12 @@ def check_layout(gdb, syms):
             assert entry & (1 << 53) and not entry & (1 << 7)
         else:
             assert (entry >> 2) & 7 == 4, "RAM must use elfloader's normal memory index"
-            writable = va >= syms["erodata"]
-            executable = va < syms["etext"]
+            is_image = syms['skernel'] <= va < syms['ekernel']
+            physical = kernel_physical + va - syms['skernel'] if is_image else va - KERNEL_OFFSET
+            assert entry & ((1 << 40) - 4096) == physical, 'wrong physical mapping'
+            image_va = syms['skernel'] + physical - kernel_physical
+            writable = image_va >= syms['erodata']
+            executable = is_image and va < syms['etext']
             assert bool(entry & (1 << 7)) == (not writable)
             assert bool(entry & (1 << 53)) == (not executable)
 
@@ -311,6 +359,9 @@ def boot(qemu, elf, printing, tests=False, probe=None, layout=False, quiet_boot=
                     assert b"kernel panic:" in output
                     if not printing or quiet_boot:
                         assert b"Kernel ready" not in output
+                elif probe and not printing:
+                    assert b"kernel panic:" in output and b"fatal exception" in output
+                    assert b"Kernel ready" not in output
                 elif not printing:
                     assert output == b"", f"silent kernel wrote UART: {output!r}"
                 elif not quiet_boot:
@@ -344,9 +395,13 @@ def boot(qemu, elf, printing, tests=False, probe=None, layout=False, quiet_boot=
                     process.wait()
 
 
-def build(mode, level, tests):
-    subprocess.run(["make", "build", f"MODE={mode}",
-                    f"KERNEL_TEST={int(tests)}", f"LOG={level}"], cwd=ROOT, check=True)
+def build(mode, level, tests, load_min=None, root_base=None):
+    args = ["make", "build", f"MODE={mode}", f"KERNEL_TEST={int(tests)}", f"LOG={level}"]
+    if root_base is not None:
+        args.append(f"ROOT_IMAGE_BASE={root_base:#x}")
+    if load_min is not None:
+        args.append(f"KERNEL_LOAD_MIN={load_min:#x}")
+    subprocess.run(args, cwd=ROOT, check=True)
     return ROOT / f"target/kernel/{mode}-log{level}-test{int(tests)}/{TARGET}/{mode}/kernel"
 
 

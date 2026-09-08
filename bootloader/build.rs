@@ -1,69 +1,28 @@
-use std::{env, fs, path::PathBuf};
+use std::{env, path::PathBuf};
 
 fn main() {
-    for key in ["BOOT_ARCHIVE", "PLATFORM_DIR", "QEMU"] {
-        println!("cargo:rerun-if-env-changed={key}");
+    println!("cargo:rerun-if-env-changed=KERNEL_LOAD_MIN");
+    let minimum = env::var("KERNEL_LOAD_MIN").unwrap_or_else(|_| "0".into());
+    println!("cargo:rustc-env=KERNEL_LOAD_MIN={minimum}");
+    println!("cargo:rerun-if-env-changed=BOOT_ARCHIVE_OBJECT");
+    if env::var("TARGET").unwrap() == env::var("HOST").unwrap() {
+        return; // Host parser/planner tests neither embed an archive nor boot.
     }
-    let archive = env::var_os("BOOT_ARCHIVE").map(|path| {
+    let archive = env::var_os("BOOT_ARCHIVE_OBJECT").map(|path| {
         PathBuf::from(path)
             .canonicalize()
-            .expect("read boot archive")
+            .expect("read boot archive object")
     });
-    let out = PathBuf::from(env::var_os("OUT_DIR").unwrap());
-    let root = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap());
-    let root = root.parent().unwrap();
-    let generator = root.join("tools/build_platform.py");
-    println!("cargo:rerun-if-changed={}", generator.display());
-    let platform = if let Some(path) = env::var_os("PLATFORM_DIR") {
-        PathBuf::from(path)
-    } else {
-        let directory = out.join("platform");
-        let status = std::process::Command::new("python3")
-            .arg(generator)
-            .arg(&directory)
-            .arg("--qemu")
-            .arg(env::var("QEMU").unwrap_or_else(|_| "qemu-system-aarch64".into()))
-            .status()
-            .expect("run platform generator");
-        assert!(status.success(), "platform generation failed");
-        directory
-    }
-    .join("platform.rs");
     if let Some(archive) = &archive {
         println!("cargo:rerun-if-changed={}", archive.display());
     }
-    println!("cargo:rerun-if-changed={}", platform.display());
     println!("cargo:rerun-if-changed=linker.ld");
-    fs::copy(platform, out.join("platform.rs")).expect("copy platform configuration");
-    // The archive is a linker section, not a Rust byte array. The source file
-    // contains only the assembly directive needed to include an external file.
-    let asm = if let Some(archive) = archive {
-        let path = archive.to_str().expect("UTF-8 archive path");
-        assert!(
-            !path.contains(['\n', '\r', '"', '\\']),
-            "unsupported archive path"
-        );
-        // Include payload identity in Rust input: incremental compilation cannot
-        // otherwise see a changed file referenced only by an assembler incbin.
-        use std::hash::{Hash, Hasher};
-        let mut hash = std::collections::hash_map::DefaultHasher::new();
-        fs::read(&archive)
-            .expect("read archive contents")
-            .hash(&mut hash);
-        format!(
-            "// payload {}\n.section .boot_archive,\"a\"\n.balign 4\n.incbin \"{path}\"\n",
-            hash.finish()
-        )
-    } else {
-        // Workspace check/clippy need no image. An empty archive fails closed
-        // at runtime; only the image builder supplies the bootable payload.
-        ".section .boot_archive,\"a\"\n".to_owned()
-    };
-    fs::write(
-        out.join("archive.rs"),
-        format!("core::arch::global_asm!({asm:?});\n"),
-    )
-    .unwrap();
+    // The image builder supplies an ordinary AArch64 relocatable object.
+    // Cargo tracks its contents via rerun-if-changed and relinks when it changes.
+    // Check/clippy need no object; the linker rejects an absent payload on build.
+    if let Some(archive) = archive {
+        println!("cargo:rustc-link-arg-bin=bootloader={}", archive.display());
+    }
     let linker = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap()).join("linker.ld");
     println!("cargo:rustc-link-arg=-T{}", linker.display());
     println!("cargo:rustc-link-arg=--build-id=none");

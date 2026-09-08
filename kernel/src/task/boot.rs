@@ -10,6 +10,11 @@ use kernel_abi::*;
 #[unsafe(no_mangle)]
 pub extern "C" fn start_root() -> ! {
     let loaded = boot::information();
+    let image =
+        loaded.image_start - loaded.phys_virt_offset..loaded.image_end - loaded.phys_virt_offset;
+    let layout =
+        InitialTaskLayout::new(image.start as u64..image.end as u64, loaded.dtb_size as u64)
+            .expect("validated root layout");
     memory::prepare_boot(loaded.image_start, loaded.image_end);
     let mut space = AddressSpace::new().expect("root page tables");
     // seL4 elfloader keeps {u32 phnum, u32 phsize, program headers} in the
@@ -42,7 +47,7 @@ pub extern "C" fn start_root() -> ! {
             continue;
         }
         let end = va.checked_add(memory_size).expect("user image overflow");
-        assert!(va >= IMAGE_START as usize && end <= STACK_END as usize);
+        assert!(va >= image.start && end <= image.end);
         assert!(va.is_multiple_of(PAGE_SIZE as usize) && file_size <= memory_size);
         let rights = match flags {
             4 => 1,
@@ -67,27 +72,20 @@ pub extern "C" fn start_root() -> ! {
         valid_entry,
         "root entry outside initialized executable segment"
     );
-    space
-        .check((STACK_END - 16) as usize, 16, 2)
-        .expect("root runtime stack");
     memory::finish_boot();
-    // Match seL4 placement: IPC at the loaded virtual end, BootInfo one page later.
-    assert_eq!(
-        loaded.image_end - loaded.phys_virt_offset,
-        IPC_BUFFER_VA as usize
-    );
+    // Match seL4: metadata follows the actual page-rounded ELF image end.
     space
-        .map(IPC_BUFFER_VA as usize, PAGE_SIZE as usize, 3, true)
+        .map(layout.ipc_buffer as usize, PAGE_SIZE as usize, 3, true)
         .expect("root IPC buffer");
     space
-        .map(BOOTINFO_VA as usize, PAGE_SIZE as usize, 1, true)
+        .map(layout.boot_info as usize, PAGE_SIZE as usize, 1, true)
         .expect("root BootInfo");
     // Forward the opaque DTB as extended BootInfo, without parsing its contents.
     let header_size = core::mem::size_of::<BootInfoHeader>();
     let extra_size = header_size + loaded.dtb_size;
     space
         .map(
-            EXTRA_BOOTINFO_VA as usize,
+            layout.extra as usize,
             extra_size.next_multiple_of(PAGE_SIZE as usize),
             1,
             true,
@@ -105,10 +103,10 @@ pub extern "C" fn start_root() -> ! {
         core::slice::from_raw_parts(phys_to_virt(loaded.dtb) as *const u8, loaded.dtb_size)
     };
     space
-        .initialize(EXTRA_BOOTINFO_VA as usize, header_bytes)
+        .initialize(layout.extra as usize, header_bytes)
         .expect("extra BootInfo header");
     space
-        .initialize(EXTRA_BOOTINFO_VA as usize + header_size, dtb)
+        .initialize(layout.extra as usize + header_size, dtb)
         .expect("extra BootInfo DTB");
     let info = BootInfo {
         magic: BOOTINFO_MAGIC,
@@ -120,12 +118,8 @@ pub extern "C" fn start_root() -> ! {
         } else {
             0
         },
-        ipc_buffer: IPC_BUFFER_VA,
-        image_start: IMAGE_START,
-        image_end: STACK_END,
-        stack_start: STACK_START,
-        stack_end: STACK_END,
-        extra: EXTRA_BOOTINFO_VA,
+        ipc_buffer: layout.ipc_buffer,
+        extra: layout.extra,
         extra_size: extra_size as u64,
     };
     // SAFETY: BootInfo contains only initialized u64 fields, with no padding.
@@ -136,12 +130,12 @@ pub extern "C" fn start_root() -> ! {
         )
     };
     space
-        .initialize(BOOTINFO_VA as usize, bytes)
+        .initialize(layout.boot_info as usize, bytes)
         .expect("BootInfo initialization");
     log::info!(
         "Starting fatboot: entry={:#x}, BootInfo={:#x}, EL0",
         loaded.entry,
-        BOOTINFO_VA
+        layout.boot_info
     );
-    super::start(space, loaded.entry as u64)
+    super::start(space, loaded.entry as u64, layout.boot_info)
 }

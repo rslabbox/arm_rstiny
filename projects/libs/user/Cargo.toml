@@ -8,4 +8,5 @@ test = false
 bench = false
 
 [dependencies]
+rstiny-elf = { path = "../elf" }
 kernel-abi = { path = "../abi" }

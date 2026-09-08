@@ -8,7 +8,7 @@ import tempfile
 from check_kernel import Gdb, build, boot_image
 from check_fatboot import write
 
-ENTRY, BUFFER = 0x400000, 0x600000
+from elf_image import parse_elf, root_layout
 CODE, DATA, STACK = 0x1000000, 0x1100000, 0x1200000
 PAGE = 4096
 
@@ -23,6 +23,10 @@ def mov(register, value):
 
 
 def run(qemu, kernel):
+    directory = boot_image(kernel).parent
+    root_image = parse_elf((directory / 'rootserver').read_bytes())
+    layout = root_layout(root_image, (directory / 'kernel.dtb').stat().st_size)
+    entry, buffer = root_image['entry'], layout['ipc']
     with tempfile.TemporaryDirectory(prefix='rstiny-tasks-') as temp:
         temp = Path(temp)
         serial = temp / 'serial'
@@ -36,7 +40,7 @@ def run(qemu, kernel):
             gdb = None
             try:
                 gdb = Gdb(temp / 'gdb', proc)
-                gdb.run_to(ENTRY)
+                gdb.run_to(entry)
                 assert gdb.reg('cpsr') & 0x8f == 0, 'EL0 IRQs must be enabled'
                 # Verify the actual GICv3 hardware state before exercising scheduling.
                 assert gdb.command('Qqemu.PhyMemMode:1') == 'OK'
@@ -49,14 +53,14 @@ def run(qemu, kernel):
                 assert mmio32(0x080b0100) == 1 << 30, 'only the timer PPI should be enabled'
                 assert mmio32(0x080b0c04) & (3 << 28) == 0, 'timer must be level-triggered'
                 assert gdb.command('Qqemu.PhyMemMode:0') == 'OK'
-                write(gdb, ENTRY, struct.pack('<I', 0xd4000001))
+                write(gdb, entry, struct.pack('<I', 0xd4000001))
 
                 def call(number, *args, status=0):
                     for i in range(5):
                         gdb.write_reg(f'x{i}', args[i] if i < len(args) else 0)
                     gdb.write_reg('x8', number)
-                    gdb.write_reg('pc', ENTRY)
-                    gdb.run_to(ENTRY + 4)
+                    gdb.write_reg('pc', entry)
+                    gdb.run_to(entry + 4)
                     actual = gdb.reg('x0')
                     assert actual == status, (number, args, actual, status)
                     assert gdb.reg('cpsr') & 15 == 0
@@ -64,8 +68,8 @@ def run(qemu, kernel):
 
                 root = call(3)
                 # Extra BootInfo remains immutable for the runtime's DTB slice.
-                call(13, root, 0x602000, PAGE, status=6)
-                call(14, root, 0x602000, PAGE, 3, status=6)
+                call(13, root, layout['extra'], PAGE, status=6)
+                call(14, root, layout['extra'], PAGE, 3, status=6)
                 baseline = call(17)
                 child = call(4)
                 assert call(17) == baseline - 3
@@ -79,25 +83,25 @@ def run(qemu, kernel):
                 call(12, child, DATA, PAGE, 3, status=5)
                 assert call(17) == after_map
                 payload = bytes(range(32))
-                write(gdb, BUFFER, payload)
-                call(15, child, DATA + PAGE - 16, BUFFER, len(payload))
-                call(16, child, DATA + PAGE - 16, BUFFER + 128, len(payload))
-                assert gdb.memory(BUFFER + 128, len(payload)) == payload
+                write(gdb, buffer, payload)
+                call(15, child, DATA + PAGE - 16, buffer, len(payload))
+                call(16, child, DATA + PAGE - 16, buffer + 128, len(payload))
+                assert gdb.memory(buffer + 128, len(payload)) == payload
                 call(14, child, DATA + PAGE, PAGE, 1)
-                write(gdb, BUFFER, bytes([255]) * 32)
-                call(15, child, DATA + PAGE - 16, BUFFER, 32, status=6)
-                call(16, child, DATA + PAGE - 16, BUFFER + 128, 32)
-                assert gdb.memory(BUFFER + 128, 32) == payload, 'partial failed write'
+                write(gdb, buffer, bytes([255]) * 32)
+                call(15, child, DATA + PAGE - 16, buffer, 32, status=6)
+                call(16, child, DATA + PAGE - 16, buffer + 128, 32)
+                assert gdb.memory(buffer + 128, 32) == payload, 'partial failed write'
                 call(15, child, DATA, 0x40000000, 8, status=2) # invalid source pointer
                 call(16, child, DATA, 0x40000000, 8, status=2) # invalid destination
-                call(15, child, DATA, BUFFER, 4097, status=2)
+                call(15, child, DATA, buffer, 4097, status=2)
                 call(13, child, DATA, 3 * PAGE, status=4)
-                call(13, root, 0x601000, PAGE, status=6) # lifetime-pinned BootInfo
-                call(14, root, 0x601000, PAGE, 3, status=6)
+                call(13, root, layout['boot_info'], PAGE, status=6) # lifetime-pinned BootInfo
+                call(14, root, layout['boot_info'], PAGE, 3, status=6)
                 call(13, child, DATA, 2 * PAGE)
                 call(12, child, DATA, PAGE, 3)
-                call(16, child, DATA, BUFFER, 64)
-                assert gdb.memory(BUFFER, 64) == bytes(64), 'recycled frame leaked data'
+                call(16, child, DATA, buffer, 64)
+                assert gdb.memory(buffer, 64) == bytes(64), 'recycled frame leaked data'
                 call(8, child)
                 assert call(17) == baseline, 'destroy leaked page tables or frames'
                 call(9, child, status=7)
@@ -111,7 +115,7 @@ def run(qemu, kernel):
                 before_failure = call(17)
                 call(12, other, CODE, 1024 * PAGE, 3, status=3)
                 assert call(17) == before_failure, 'failed mapping leaked frames'
-                call(16, other, CODE, BUFFER, 8, status=4)
+                call(16, other, CODE, buffer, 8, status=4)
                 call(12, other, CODE, 1025 * PAGE, 3, status=3)
                 call(8, large)
                 call(8, other)
@@ -132,8 +136,8 @@ def run(qemu, kernel):
                     call(12, handle, DATA, PAGE, 3)
                     call(12, handle, STACK, PAGE, 3)
                     code = struct.pack('<' + 'I' * len(instructions), *instructions)
-                    write(gdb, BUFFER, code)
-                    call(15, handle, CODE, BUFFER, len(code))
+                    write(gdb, buffer, code)
+                    call(15, handle, CODE, buffer, len(code))
                     call(14, handle, CODE, PAGE, 5)
                     return handle
 
@@ -149,23 +153,23 @@ def run(qemu, kernel):
                 call(11, 30)
                 call(6, a)
                 call(6, b)
-                call(16, a, DATA, BUFFER, 8)
-                count_a = gdb.word(BUFFER)
-                call(16, b, DATA, BUFFER, 8)
-                count_b = gdb.word(BUFFER)
+                call(16, a, DATA, buffer, 8)
+                count_a = gdb.word(buffer)
+                call(16, b, DATA, buffer, 8)
+                count_b = gdb.word(buffer)
                 assert count_a > 0 and count_b > 0, 'timer preemption did not run both tasks'
-                write(gdb, BUFFER, struct.pack('<Q', 0xfeed))
-                call(15, a, DATA, BUFFER, 8)
-                call(16, b, DATA, BUFFER, 8)
-                assert gdb.word(BUFFER) == count_b, 'address spaces alias'
+                write(gdb, buffer, struct.pack('<Q', 0xfeed))
+                call(15, a, DATA, buffer, 8)
+                call(16, b, DATA, buffer, 8)
+                assert gdb.word(buffer) == count_b, 'address spaces alias'
                 before = call(18)
                 call(11, 25) # all other tasks suspended: timer must wake an idle CPU
                 assert call(18) - before >= 25
                 call(7, a)
                 call(11, 20)
                 call(6, a)
-                call(16, a, DATA, BUFFER, 8)
-                assert gdb.word(BUFFER) not in (0, 0xfeed), 'resumed context did not continue'
+                call(16, a, DATA, buffer, 8)
+                assert gdb.word(buffer) not in (0, 0xfeed), 'resumed context did not continue'
                 call(8, a)
                 call(7, b)
                 call(8, b) # remove a ready task from the queue before freeing its space
@@ -203,8 +207,8 @@ def run(qemu, kernel):
                     call(11, 10)
                 assert call(9, waiter) == 7
                 call(6, waiter)
-                call(16, waiter, DATA, BUFFER, 8)
-                adopted = gdb.word(BUFFER)
+                call(16, waiter, DATA, buffer, 8)
+                adopted = gdb.word(buffer)
                 call(9, adopted, status=6)
                 call(7, waiter)
                 assert call(9, waiter) == 7

@@ -4,10 +4,10 @@ fatboot 是负责加载 hello.elf 的 root task。参考 `../seL4/projects/sel4t
 
 ## 构建与启动
 
-1. kernel 和 fatboot 分别链接成静态 ELF。fatboot 链接脚本将 16 KiB 栈放进 RW 的 NOLOAD PT_LOAD；`#[entry]` 生成设置 SP 的裸入口及 Rust 启动代码。
+1. kernel 和 fatboot 分别链接成静态 ELF。用户应用使用 LLD 默认布局，无独立链接脚本；入口宏在 BSS 中声明栈和保护页，fatboot 通过 `stack_size = 32 * 1024` 选择栈大小；`#[entry]` 生成设置 SP 的裸入口及 Rust 启动代码。
 2. `tools/elf_image.py` 校验 ELF 架构、段、权限、入口和平台装载范围；`tools/build_image.py` 将 `kernel.elf`、`kernel.dtb`、`rootserver` 按顺序打包为 newc CPIO，链接进 Rust bootloader。详见 [引导链](boot.md)。
 3. bootloader 装载两个 ELF、清零 BSS/栈，保留用户程序头，开启 MMU 并通过 x0..x5 向 EL1 内核交接。内核接管已装载的物理页，根据保留的程序头建立用户 W^X 映射，不再复制用户段。
-4. 内核在用户镜像结束处创建 IPC buffer，下一页创建 BootInfo，后续页存放含 DTB 的扩展 BootInfo。首次恢复进入 EL0t，x0 为 BootInfo，其余 GPR 和 SP 为零；IRQ 开启。运行库入口设置 SP 为 `__user_stack_top`，再校验 BootInfo 并调用 Rust main。
+4. 内核在用户镜像结束处创建 IPC buffer，下一页创建 BootInfo，后续页存放含 DTB 的扩展 BootInfo。首次恢复进入 EL0t，x0 为 BootInfo，其余 GPR 和 SP 为零；IRQ 开启。运行库入口设置 SP 为 `__user_stack_top`，撤销栈下保护页映射，再校验 BootInfo 并调用 Rust main。
 5. fatboot 通过 `rstiny::elf::spawn` 装载其只读链接资源 `hello.elf`，创建子任务并启动；等待 hello 正常退出，回收子任务后暂停自身。设备树不参与这个过程。
 
 执行 `make run LOG=info` 可看到：
@@ -22,16 +22,18 @@ fatboot 是负责加载 hello.elf 的 root task。参考 `../seL4/projects/sel4t
 
 ## 地址空间
 
+镜像边界从 ELF 的 PT_LOAD 段推导并按页取整，不在 ABI 中约定应用地址。令 `end` 为镜像末尾、`page` 为页大小：
+
 | 用户虚拟范围 | 用途与权限 |
 | --- | --- |
-| `0x400000..0x500000` | ELF 装载窗口；实际仅映射装载段，text RX、rodata R/NX、data/BSS RW/NX |
-| `0x601000..0x602000` | BootInfo，用户只读、不可执行 |
-| `0x602000` 起，长度按页取整 | 扩展 BootInfo：记录头和 DTB，只读、不可执行，末页余量清零 |
-| `0x600000..0x601000` | 专用 IPC buffer，清零、RW/NX；暂未实现 IPC |
-| `0x5fb000..0x5fc000` | 栈下保护页，不映射 |
-| `0x5fc000..0x600000` | 16 KiB 用户栈，RW/NX |
+| ELF 的 PT_LOAD 段 | text RX、rodata R/NX、data/BSS RW/NX；仅映射实际段 |
+| `end..end + page` | IPC buffer，清零、RW/NX；暂未实现 IPC |
+| `end + page..end + 2 * page` | BootInfo，只读、不可执行 |
+| `end + 2 * page` 起 | 扩展 BootInfo：记录头和 DTB，只读、不可执行，按页取整 |
+| 链接符号 `__user_stack_guard` 对应页 | 栈下保护页，用户运行时在进入应用前撤销映射 |
+| `__user_stack_bottom..__user_stack_top` | 运行时宏声明的 32 KiB BSS 栈，RW/NX |
 
-用户空间采用独立 TTBR0 根，内核与设备映射位于 TTBR1 高地址区，禁止 EL0 访问；用户低地址空间不保留内核恒等映射。BootInfo 的 image_end 为包含 ELF 栈段的 `0x600000`。
+用户空间采用独立 TTBR0 根，内核与设备映射位于 TTBR1 高地址区，禁止 EL0 访问。BootInfo 不再包含镜像或栈边界；用户运行库通过自己的链接符号安装栈。`make run ROOT_IMAGE_BASE=0x800000` 可验证更换 root 链接地址，内核无需修改或重新链接。
 
 用户页均禁止 EL1 执行；内核通过仅 EL1 可访问的物理帧池别名初始化它们。该别名不会映射给 EL0。现在支持私有动态页表、map/unmap/protect、页面回收和多任务轮转；仍未实现完整 capability 或 ASID 管理。具体边界见 [用户内存与单核任务调度](memory-task.md)。
 
@@ -70,7 +72,7 @@ fatboot 中保留应用启动检查和结果符号，供静默启动验证使用
 
 ## ABI
 
-共享定义位于 `projects/libs/abi/src/lib.rs`。BootInfo 使用 `repr(C)` 的固定宽度字段：magic、version、size、page_size、features、ipc_buffer、image_start、image_end、stack_start、stack_end、extra、extra_size。当前版本为 2，大小为 96 字节；features 的 bit 0 表示临时 debug 字符接口可用。不发布尚未实现的 capability 槽。
+共享定义位于 `projects/libs/abi/src/lib.rs`。BootInfo 使用 `repr(C)` 的固定宽度字段：magic、version、size、page_size、features、ipc_buffer、extra、extra_size。当前版本为 3，大小为 64 字节；features 的 bit 0 表示临时 debug 字符接口可用。不发布尚未实现的 capability 槽。
 
 扩展区的 FDT 记录包含 u64 id=6 和 u64 len，随后为完整 DTB；len 包含 16 字节记录头。映射被固定以保证运行库只读切片有效，应用通过 `info.device_tree()` 获取 DTB。内核和 fatboot 均不解析设备节点，保留 DTB 只读传递接口。
 
@@ -104,6 +106,16 @@ DebugPutChar 通过内核串口输出，不接受用户指针，也不是串口�
 
 `make fatboot` 先编译 `projects/apps/hello`，strip 为 `target/apps/<MODE>/hello.elf`，再通过 `HELLO_ELF` 链接到 fatboot 的只读段。直接 Cargo check/clippy 无需该资源；生成可运行镜像请使用 Make。
 
-用户库 `rstiny::elf::spawn` 验证静态 AArch64 ELF64 的段边界、权限、入口和重叠后创建子任务，映射零页、复制文件内容并设置最终 R/RX/RW 权限。失败会销毁子任务并释放已分配页面。hello 从 `0x1000000` 链接，加载库分配独立 16 KiB 栈 `0x7ffc000..0x8000000`，下方一页不映射。无参数 `#[entry]` 使用传入的栈，不要求 BootInfo；root task 的带参数入口保持原协议。
+用户库 `rstiny::elf::spawn` 验证静态 AArch64 ELF64 的段边界、权限、入口和重叠后创建子任务，映射零页、复制文件内容并设置最终 R/RX/RW 权限。失败会销毁子任务并释放已分配页面。hello 使用 LLD 默认链接地址（可与 root 虚拟地址重叠，各任务物理映射独立），加载库在其 ELF 末尾留一页保护间隔，再分配独立 16 KiB 栈。无参数 `#[entry]` 使用传入的栈，不要求 BootInfo；root task 的带参数入口保持原协议。
 
 集成测试验证 hello 的 EL0 入口、独立映射、段字节/BSS、W^X 和栈保护页，以及正常退出回收；破坏嵌入 ELF 时加载失败，破坏 DTB 内容则不影响 hello 启动。
+
+## 应用构建约定
+
+参考 [seL4 Rust root task](https://docs.sel4.systems/projects/rust/tutorial/root-task/hello-world.html) 的 runtime + 入口宏 + [统一链接配置](https://github.com/seL4/rust-sel4/blob/main/support/targets/aarch64-sel4-roottask.json) 分层，普通应用只需要 Cargo 清单和 Rust 源码。`tools/build_app.py <package> --mode debug` 为指定二进制统一传入静态 AArch64 链接参数；Make 的应用构建同样调用这个入口，参数只作用于用户二进制，不影响 kernel、bootloader 或依赖库。fatboot 保留的 build.rs 仅用于嵌入 hello 资源，不再配置应用内存布局。
+
+root 使用 `#[entry(stack_size = 32 * 1024)] fn main(info: &mut BootInfo) -> !`；省略参数时为 16 KiB，大小向上按页取整，零大小编译失败。普通程序使用 `#[entry] fn main() -> !`，栈由用户 ELF loader 提供，禁止设置 root 专用的 stack_size 参数。
+
+宏在 `.bss.root_stack` 中保留一页 guard 和栈空间，入口先设置 SP，随后运行时通过本任务 unmap 撤销 guard；在此之前 guard 尚未受保护，应用代码执行前已生效。内核无需识别栈符号或特殊 ELF 段。默认布局可以让不同应用使用相同虚拟地址，不能再假设 ELF 入口等于镜像起始地址。
+
+我们保留独立 R/RX/RW 段，使用 `-z max-page-size=4096 -z separate-loadable-segments -z norelro`，满足现有 loader 的页对齐和 W^X 检查；没有照搬 seL4 Rust 用于缩小 root 镜像间隙的 `--no-rosegment`。无需放宽 ELF 校验，也未引入 PIE、动态链接或 TLS 支持。
