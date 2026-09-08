@@ -33,6 +33,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b588b76d00fde79687d7646a9b5bdf3cc0f655e0bbd080335a95d7e96f3587da"
 
 [[package]]
+name = "bootloader"
+version = "0.1.0"
+dependencies = [
+ "tock-registers",
+]
+
+[[package]]
 name = "enum_dispatch"
 version = "0.3.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -48,7 +55,14 @@ dependencies = [
 name = "fatboot"
 version = "0.1.0"
 dependencies = [
- "rs_fdtree",
+ "rstiny",
+ "rstiny-runtime",
+]
+
+[[package]]
+name = "hello"
+version = "0.1.0"
+dependencies = [
  "rstiny",
  "rstiny-runtime",
 ]
@@ -118,10 +132,6 @@ checksum = "1fbf4db142a473a8d80c26bbf18454ed458bf8d26c8219c331daecfdbd079001"
 dependencies = [
  "proc-macro2",
 ]
-
-[[package]]
-name = "rs_fdtree"
-version = "0.2.0-rc2"
 
 [[package]]
 name = "rstiny"

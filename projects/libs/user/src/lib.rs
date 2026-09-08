@@ -45,6 +45,8 @@ fn call(number: u64, argument: u64) -> Result<(), Error> {
     invoke(number, [argument, 0, 0, 0, 0]).map(|_| ())
 }
 
+pub mod elf;
+mod elf_image;
 pub mod task;
 pub use task::{Permissions, Task, TaskState};
 

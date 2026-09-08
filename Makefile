@@ -24,7 +24,7 @@ PLATFORM_DIR := $(abspath target/platform/qemu-arm-virt)
 APP_DIR := target/apps/$(MODE)
 FATBOOT_ELF := $(APP_DIR)/$(TARGET)/$(MODE)/fatboot
 IMAGE_DIR := $(BUILD_DIR)/image
-BOOT_IMAGE := $(IMAGE_DIR)/elfloader
+BOOT_IMAGE := $(IMAGE_DIR)/bootloader
 APP_FLAGS := -p fatboot --target $(TARGET) --target-dir $(APP_DIR)
 CARGO_FLAGS := -p kernel --target $(TARGET) --no-default-features
 ifeq ($(MODE),release)
@@ -50,10 +50,12 @@ platform:
 build: fatboot platform
 	PLATFORM_DIR=$(PLATFORM_DIR) cargo build $(CARGO_FLAGS) --target-dir $(BUILD_DIR)
 	rust-objcopy -O binary $(KERNEL_ELF) $(KERNEL_BIN)
-	python3 tools/build_image.py $(KERNEL_ELF) $(FATBOOT_ELF) $(IMAGE_DIR) --platform $(PLATFORM_DIR)
+	python3 tools/build_image.py $(KERNEL_ELF) $(FATBOOT_ELF) $(IMAGE_DIR) --platform $(PLATFORM_DIR) --mode $(MODE)
 
 fatboot:
-	cargo build $(APP_FLAGS)
+	cargo build $(subst -p fatboot,-p hello,$(APP_FLAGS))
+	rust-objcopy --strip-all $(APP_DIR)/$(TARGET)/$(MODE)/hello $(APP_DIR)/hello.elf
+	HELLO_ELF=$(abspath $(APP_DIR)/hello.elf) cargo build $(APP_FLAGS)
 
 run run-kernel run-root: build
 	$(QEMU) $(QEMU_ARGS)
@@ -62,9 +64,9 @@ debug: build
 	$(QEMU) $(QEMU_ARGS) -gdb tcp::$(GDB_PORT) -S
 
 check:
-	cargo test -p rs_fdtree --target $(HOST_TARGET)
 	cargo test -p rstiny-runtime-macros --target $(HOST_TARGET)
 	python3 -m unittest discover -s tools -p 'test_*.py'
+	python3 tools/check_bootloader.py --qemu $(QEMU)
 	python3 tools/check_kernel.py --qemu $(QEMU)
 	python3 tools/check_fatboot.py --qemu $(QEMU)
 	python3 tools/check_tasks.py --qemu $(QEMU)

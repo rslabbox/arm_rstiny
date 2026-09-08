@@ -25,10 +25,6 @@ fn main() {
         "cargo:rerun-if-changed={}",
         root.join("tools/build_platform.py").display()
     );
-    println!(
-        "cargo:rerun-if-changed={}",
-        root.join("kernel/plat/qemu-arm-virt/overlay.dts").display()
-    );
     println!("cargo:rerun-if-env-changed=PLATFORM_DIR");
     println!("cargo:rerun-if-env-changed=QEMU");
     let level = std::env::var("LOG").unwrap_or_else(|_| "info".into());

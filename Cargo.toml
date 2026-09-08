@@ -1,8 +1,9 @@
 [workspace]
 members = [
     "kernel",
-    "drivers/platform/rs-fdtree",
+    "bootloader",
     "projects/apps/fatboot",
+    "projects/apps/hello",
     "projects/libs/abi",
     "projects/libs/user",
     "projects/libs/runtime",

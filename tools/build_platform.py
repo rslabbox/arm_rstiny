@@ -1,13 +1,10 @@
 #!/usr/bin/env python3
-"""Export QEMU's tree, apply the platform overlay and generate build-time inputs."""
+"""Export QEMU's tree and generate build-time inputs for the fixed platform."""
 import argparse
 import hashlib
 import json
 from pathlib import Path
 import subprocess
-
-ROOT = Path(__file__).resolve().parents[1]
-OVERLAY = ROOT / 'kernel/plat/qemu-arm-virt/overlay.dts'
 
 
 def run(args):
@@ -18,10 +15,10 @@ def generate(output, qemu='qemu-system-aarch64'):
     output.mkdir(parents=True, exist_ok=True)
     machine = "virt,gic-version=3,virtualization=off"
     key = hashlib.sha256((run([qemu, '--version']) + run(['dtc', '--version'])
-                          + machine).encode() + OVERLAY.read_bytes()
+                          + machine).encode()
                          + Path(__file__).read_bytes()).hexdigest()
     products = ['qemu-arm-virt.dtb', 'qemu-arm-virt.dts', 'kernel.dts', 'kernel.dtb',
-                'platform.rs', 'platform.json', 'devices_gen.h', 'platform_info.h']
+                'platform.rs', 'platform.json']
     stamp = output / 'platform.sha256'
     if stamp.exists() and stamp.read_text() == key and all((output / p).exists() for p in products):
         return
@@ -31,9 +28,9 @@ def generate(output, qemu='qemu-system-aarch64'):
                    check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     dts = run(['dtc', '-q', '-I', 'dtb', '-O', 'dts', raw])
     (output / 'qemu-arm-virt.dts').write_text(dts)
-    # As in seL4's DTS list, dtc merges the additional root-node definition.
+    # Recompile the exported DTS to remove QEMU's unused DTB padding.
     merged = output / 'kernel.dts'
-    merged.write_text(dts + '\n' + OVERLAY.read_text())
+    merged.write_text(dts)
     dtb = output / 'kernel.dtb'
     subprocess.run(['dtc', '-q', '-I', 'dts', '-O', 'dtb', '-o', str(dtb), str(merged)], check=True)
     merged.write_text(run(['dtc', '-q', '-I', 'dtb', '-O', 'dts', dtb]))
@@ -52,11 +49,9 @@ def generate(output, qemu='qemu-system-aarch64'):
     all_nodes = list(nodes())
     properties = {n: run(['fdtget', '-p', dtb, n]).split() for n in all_nodes}
     compat = {n: get(n, 'compatible', 's') for n in all_nodes if 'compatible' in properties[n]}
-    kernel_devices = get('/chosen', 'seL4,kernel-devices', 's')
-    loader_devices = get('/chosen', 'seL4,elfloader-devices', 's')
 
-    def match(devices, name):
-        found = [n for n in devices if name in compat.get(n, [])]
+    def match(name):
+        found = [n for n in all_nodes if name in compat.get(n, [])]
         if len(found) != 1:
             raise ValueError(f'expected one {name} device, found {found}')
         return found[0]
@@ -71,12 +66,12 @@ def generate(output, qemu='qemu-system-aarch64'):
         return [(raw[i] << 32 | raw[i + 1], raw[i + 2] << 32 | raw[i + 3])
                 for i in range(0, len(raw), 4)]
 
-    uart = match(kernel_devices, 'arm,pl011')
-    gic = match(kernel_devices, 'arm,gic-v3')
-    timer = match(kernel_devices, 'arm,armv8-timer')
-    psci = match(loader_devices, 'arm,psci-1.0')
-    if set(kernel_devices) != {uart, gic, timer} or set(loader_devices) != {uart, timer, psci}:
-        raise ValueError('unsupported platform device selection')
+    uart = match('arm,pl011')
+    gic = match('arm,gic-v3')
+    timer = match('arm,armv8-timer')
+    psci = match('arm,psci-1.0')
+    kernel_devices = [uart, gic, timer]
+    loader_devices = [uart, timer, psci]
     method = get(psci, 'method', 's')[0]
     if method != 'hvc':
         raise ValueError('PSCI method does not match the selected QEMU machine')
@@ -95,57 +90,13 @@ def generate(output, qemu='qemu-system-aarch64'):
         raise ValueError('only one Cortex-A72 CPU is supported')
     constants = dict(UART_BASE=uart_base, GICD_BASE=gicd, GICD_SIZE=gicd_size,
                      GICR_BASE=gicr, GICR_SIZE=0x20000, RAM_START=0x40000000, RAM_END=0x48000000)
-    rust = '// Generated from the merged kernel.dtb; do not edit.\n'
+    rust = '// Generated from QEMU kernel.dtb; do not edit.\n'
     rust += ''.join(f'pub const {name}: usize = {value:#x};\n' for name, value in constants.items())
     rust += f'pub const TIMER_IRQ: u32 = {irq[1] + 16};\npub const PSCI_SMC: bool = {str(method == "smc").lower()};\n'
     (output / 'platform.rs').write_text(rust)
     (output / 'platform.json').write_text(json.dumps(dict(constants, timer_irq=irq[1] + 16,
         psci_method=method, machine=machine, kernel_devices=kernel_devices,
         loader_devices=loader_devices), indent=2) + '\n')
-    entries = []
-    for node in loader_devices:
-        base = regions(node)[0][0] if 'reg' in properties[node] else 0
-        entries.append(f'    {{ .compat = "{compat[node][0]}", .region_bases = {{ (void *){base:#x} }} }},')
-    cpu_method = get(cpus[0], 'enable-method', 's')[0] if 'enable-method' in properties[cpus[0]] else None
-    if cpu_method not in (None, 'psci'):
-        raise ValueError('unsupported CPU enable method')
-    cpu_method_c = json.dumps(cpu_method) if cpu_method else 'NULL'
-    extra = (1 if method == 'smc' else 2) if cpu_method else 0
-    (output / 'devices_gen.h').write_text('''/* Generated from kernel.dtb. */
-#pragma once
-#include <types.h>
-#define MAX_NUM_REGIONS 1
-struct elfloader_driver;
-struct elfloader_device {
-    const char *compat;
-    volatile void *region_bases[MAX_NUM_REGIONS];
-    struct elfloader_driver *drv;
-};
-struct elfloader_cpu {
-    const char *compat;
-    const char *enable_method;
-    word_t cpu_id;
-    word_t extra_data;
-};
-#ifdef DRIVER_COMMON
-struct elfloader_device elfloader_devices[] = {
-''' + '\n'.join(entries) + '''
-};
-struct elfloader_cpu elfloader_cpus[] = {
-''' + f'    {{ .compat = "arm,cortex-a72", .enable_method = {cpu_method_c}, .cpu_id = 0, .extra_data = {extra} }},\n' + '''
-    { .compat = NULL },
-};
-#else
-extern struct elfloader_device elfloader_devices[];
-extern struct elfloader_cpu elfloader_cpus[];
-#endif
-''')
-    (output / 'platform_info.h').write_text('''/* Generated from kernel.dtb. */
-int num_memory_regions = 1;
-struct memory_region { size_t start; size_t end; } memory_region[1] = {
-    { .start = 0x40000000, .end = 0x48000000 },
-};
-''')
     stamp.write_text(key)
 
 

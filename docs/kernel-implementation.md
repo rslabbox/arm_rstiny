@@ -10,7 +10,7 @@
 | --- | --- |
 | 项目结构 | 根 Cargo workspace 接入 kernel、fatboot 和共享 ABI，内核与用户程序分别传递链接脚本 |
 | 构建 | 统一使用 `kernel` 包名与产物名；按优化级别/LOG/test 配置分目录；默认无磁盘无网络 |
-| 启动 | 原版 seL4 elfloader 负责 ELF 装载、EL 切换和启用 MMU；boot.rs 接收 x0..x5、建栈、清零内核 BSS 并安装运行期映射 |
+| 启动 | Rust bootloader 在固定 EL1 入口负责 ELF 装载和启用 MMU；boot.rs 接收 x0..x5、建栈、清零内核 BSS 并安装运行期映射 |
 | 内存 | 4 KiB 对齐的四级页表；替换 loader 临时映射后使用细粒度运行期映射；text RX、rodata R/NX、data/BSS/heap/stack RW/NX |
 | 保护 | 所有内核页禁止 EL0 访问；启用 WXN；栈下留未映射页；TTBR1 提供高地址内核映射，TTBR0 独立管理用户页；设备仅映射 UART/GIC 所需范围 |
 | 分配 | 保留有界 16 MiB 启动堆及原分配器测试；检查范围位于约定 RAM 内；不对外分配未映射 RAM |
@@ -34,7 +34,7 @@
 - 写代码页触发页权限错误；执行栈触发指令权限错误。
 - 读取栈保护页、空地址触发翻译错误。
 - 注入 panic，验证独立 panic 诊断和实际关机。
-- LOG=off 的内核正常启动和普通异常日志保持静默（不包含 elfloader 输出）；panic 在所有等级直接打印。另注入 logger 锁已占用时的 panic，验证输出不被锁阻塞。
+- LOG=off 的内核正常启动和普通异常日志保持静默（不包含 bootloader 输出）；panic 在所有等级直接打印。另注入 logger 锁已占用时的 panic，验证输出不被锁阻塞。
 - 全部六个日志级别均构建运行；error/warn 过滤 info，error 仍输出 panic 诊断。
 - 正式 ELF 不包含 `probe_*`；LOG=off 验证内核正常启动静默，不要求 logger 从 ELF 消除。
 
@@ -50,4 +50,4 @@
 
 现已建立独立用户 ELF、用户页表、初始任务上下文、BootInfo 和 SVC 往返。用户 TTBR0 与内核高地址 TTBR1 分离，硬件权限测试验证隔离。下一步是能力与内核对象管理。
 
-内核启动实现不使用独立 boot.S；早期 MMU 初始化直接使用 vendored seL4 elfloader 的原版 C/汇编。固定 EL1 入口通过 dev/release 集成验证；trap.S 的异常寄存器保存入口保持独立。引导产物、上游来源及兼容范围见 [引导链](boot.md)。
+内核启动实现不使用独立 boot.S；早期 MMU 初始化由 bootloader/ 中的 Rust 实现完成，必要的系统寄存器操作使用内联汇编。固定 EL1 入口通过 dev/release 集成验证；trap.S 的异常寄存器保存入口保持独立。引导产物、上游来源及兼容范围见 [引导链](boot.md)。

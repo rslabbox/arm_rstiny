@@ -54,7 +54,7 @@ def check_layout(gdb, syms, elf, level, dtb):
         if typ == 1:
             for address in range(va, (va + size + 4095) // 4096 * 4096, 4096):
                 expected[address] = flags
-    assert user.keys() == expected.keys()
+    assert user.keys() == expected.keys(), (user.keys() - expected.keys(), expected.keys() - user.keys())
     assert len({pa for pa, _ in user.values()}) == len(user), 'aliased user frames'
     for va, flags in expected.items():
         pa, attr = user[va]
@@ -114,9 +114,37 @@ def run(qemu, kernel, user, level, scenario):
                         return gdb.word(mapping[va & -4096][0] + (va & 4095))
                     finally:
                         assert gdb.command('Qqemu.PhyMemMode:0') == 'OK'
-                if scenario == 'normal':
+                if scenario in ('normal', 'ignored-dtb'):
                     check_layout(gdb, ks, user, level, (boot_image(kernel).parent / 'kernel.dtb').read_bytes())
                     assert user_word(us['RESULT']) == 0
+                    if scenario == 'ignored-dtb':
+                        write(gdb, EXTRA + 16, bytes(4))
+                    hello = user.parents[2] / 'hello.elf'
+                    hello_data = hello.read_bytes()
+                    entry = struct.unpack_from('<Q', hello_data, 24)[0]
+                    gdb.run_to(entry)
+                    assert gdb.reg('cpsr') & 15 == 0
+                    assert gdb.reg('sp') == 0x8000000 and gdb.reg('x0') == 0
+                    child_pages = pages(gdb)
+                    assert BOOTINFO not in child_pages and USER_START not in child_pages
+                    assert 0x7ffb000 not in child_pages, 'missing child stack guard'
+                    phoff = struct.unpack_from('<Q', hello_data, 32)[0]
+                    phnum = struct.unpack_from('<H', hello_data, 56)[0]
+                    expected = set(range(0x7ffc000, 0x8000000, 4096))
+                    for i in range(phnum):
+                        typ, flags, offset, va, _, filesz, memsz, _ = struct.unpack_from('<IIQQQQQQ', hello_data, phoff + i * 56)
+                        if typ != 1 or memsz == 0:
+                            continue
+                        for address in range(va, (va + memsz + 4095) & -4096, 4096):
+                            expected.add(address)
+                            attr = child_pages[address][1]
+                            assert attr & (1 << 6) and attr & (1 << 53)
+                            assert bool(attr & (1 << 7)) == (flags != 6)
+                            assert bool(attr & (1 << 54)) == (flags != 5)
+                        assert gdb.memory(va, filesz) == hello_data[offset:offset + filesz]
+                        assert gdb.memory(va + filesz, memsz - filesz) == bytes(memsz - filesz)
+                    assert child_pages.keys() == expected
+                    assert gdb.memory(0x7ffc000, 16384) == bytes(16384)
                     for _ in range(10):
                         gdb.run_to(ks['root_idle'])
                         if gdb.word(ks['SCHEDULER']) == 2:
@@ -126,20 +154,22 @@ def run(qemu, kernel, user, level, scenario):
                     assert gdb.word(ks['SCHEDULER']) == 2
                     assert user_word(us['RESULT']) == 1
                     assert user_word(us['BOOTINFO_ADDRESS']) == BOOTINFO
-                    assert user_word(IPC) == 0xfacecafe
-                elif scenario in ('invalid-bootinfo', 'invalid-extra', 'invalid-dtb'):
+                    assert user_word(IPC) == 0
+                elif scenario in ('invalid-bootinfo', 'invalid-extra', 'invalid-hello', 'invalid-hello-entry'):
                     # Corrupt the version through the debugger, before the
                     # runtime constructs its safe BootInfo view.
                     if scenario == 'invalid-bootinfo':
                         write(gdb, BOOTINFO + 8, struct.pack('<Q', 999))
                     elif scenario == 'invalid-extra':
                         write(gdb, EXTRA + 8, struct.pack('<Q', 0))
+                    elif scenario == 'invalid-hello':
+                        write(gdb, us['__hello_start'], bytes(4))
                     else:
-                        write(gdb, EXTRA + 16, bytes(4))
+                        write(gdb, us['__hello_start'] + 24, struct.pack('<Q', 0))
                     gdb.run_to(ks['root_idle'])
                     assert gdb.word(ks['SCHEDULER']) == 2
                     assert user_word(us['RESULT']) == 0
-                    assert user_word(us['BOOTINFO_ADDRESS']) == (BOOTINFO if scenario == 'invalid-dtb' else 0)
+                    assert user_word(us['BOOTINFO_ADDRESS']) == (BOOTINFO if scenario.startswith('invalid-hello') else 0)
                     assert proc.poll() is None
                 elif scenario == 'svc-registers':
                     # Patch a scratch instruction at the user entry through the
@@ -188,13 +218,13 @@ def run(qemu, kernel, user, level, scenario):
                 text = kernel_output(output.read_bytes())
                 if level == 'off':
                     assert not text, text
-                elif scenario == 'normal':
-                    assert b'[fatboot] root task started in EL0' in text
-                    assert b'[fatboot] DTB parsed in EL0' in text
-                    assert b'[fatboot] SVC round-trip passed' in text
-                elif scenario in ('invalid-bootinfo', 'invalid-extra', 'invalid-dtb'):
+                elif scenario in ('normal', 'ignored-dtb'):
+                    assert b'[fatboot] loading hello.elf' in text
+                    assert b'[hello] Hello, world!' in text
+                    assert b'[fatboot] hello.elf exited successfully' in text
+                elif scenario in ('invalid-bootinfo', 'invalid-extra', 'invalid-hello', 'invalid-hello-entry'):
                     assert b'[user panic]' in text
-                    assert (b'[fatboot] root task started' in text) == (scenario == 'invalid-dtb')
+                    assert (b'[fatboot] loading hello.elf' in text) == (scenario.startswith('invalid-hello'))
             except Exception:
                 print(errors.read_text(), output.read_text(errors='replace') if output.exists() else '', flush=True)
                 raise
@@ -219,7 +249,7 @@ def main():
             user = ROOT / f'target/apps/{mode}/{TARGET}/{mode}/fatboot'
             print(f'CHECK fatboot {mode} LOG={level}', flush=True)
             run(args.qemu, kernel, user, level, 'normal')
-            for scenario in ('invalid-bootinfo', 'invalid-extra', 'invalid-dtb', 'svc-registers', 'kernel-read', 'uart-read', 'text-write',
+            for scenario in ('ignored-dtb', 'invalid-bootinfo', 'invalid-extra', 'invalid-hello', 'invalid-hello-entry', 'svc-registers', 'kernel-read', 'uart-read', 'text-write',
                              'bootinfo-write', 'dtb-write', 'guard-read', 'null-read', 'stack-execute'):
                 print(f'  {scenario}', flush=True)
                 run(args.qemu, kernel, user, level, scenario)

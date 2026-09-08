@@ -1,23 +1,24 @@
 # fatboot 启动与用户态边界
 
-当前已实现独立 ELF 的最小 root task，对应设计路线中的“首个用户任务”。参考 `../seL4/projects/sel4test/apps/CMakeLists.txt` 中的 `DeclareRootserver(fatboot)` 和 `apps/boot/main.c` 接收 BootInfo 的启动方式；本项目采用 Rust 和自己的 ABI，不兼容 seL4 二进制，也尚未实现其 CSpace、Untyped 和 IPC 语义。
+fatboot 是负责加载 hello.elf 的 root task。参考 `../seL4/projects/sel4test/apps/CMakeLists.txt` 中的 `DeclareRootserver(fatboot)` 和 `apps/boot/main.c` 接收 BootInfo 的启动方式；本项目采用 Rust 和自己的 ABI，不兼容 seL4 二进制，也尚未实现其 CSpace、Untyped 和 IPC 语义。
 
 ## 构建与启动
 
 1. kernel 和 fatboot 分别链接成静态 ELF。fatboot 链接脚本将 16 KiB 栈放进 RW 的 NOLOAD PT_LOAD；`#[entry]` 生成设置 SP 的裸入口及 Rust 启动代码。
-2. `tools/elf_image.py` 校验 ELF 架构、段、权限、入口和平台装载范围；`tools/build_image.py` 将 `kernel.elf`、`kernel.dtb`、`rootserver` 按顺序打包为 newc CPIO，链接进原版 seL4 elfloader。详见 [引导链](boot.md)。
-3. elfloader 装载两个 ELF、清零 BSS/栈，保留用户程序头，开启 MMU 并通过 x0..x5 向 EL1 内核交接。内核接管已装载的物理页，根据保留的程序头建立用户 W^X 映射，不再复制用户段。
+2. `tools/elf_image.py` 校验 ELF 架构、段、权限、入口和平台装载范围；`tools/build_image.py` 将 `kernel.elf`、`kernel.dtb`、`rootserver` 按顺序打包为 newc CPIO，链接进 Rust bootloader。详见 [引导链](boot.md)。
+3. bootloader 装载两个 ELF、清零 BSS/栈，保留用户程序头，开启 MMU 并通过 x0..x5 向 EL1 内核交接。内核接管已装载的物理页，根据保留的程序头建立用户 W^X 映射，不再复制用户段。
 4. 内核在用户镜像结束处创建 IPC buffer，下一页创建 BootInfo，后续页存放含 DTB 的扩展 BootInfo。首次恢复进入 EL0t，x0 为 BootInfo，其余 GPR 和 SP 为零；IRQ 开启。运行库入口设置 SP 为 `__user_stack_top`，再校验 BootInfo 并调用 Rust main。
-5. fatboot 使用 rs-fdtree 解析 DTB，检查 GICv3、UART 和 PSCI，再执行 SVC 往返、检查 IPC buffer 初值并写入结果，然后暂停自身。
+5. fatboot 通过 `rstiny::elf::spawn` 装载其只读链接资源 `hello.elf`，创建子任务并启动；等待 hello 正常退出，回收子任务后暂停自身。设备树不参与这个过程。
 
 执行 `make run LOG=info` 可看到：
 
 ```text
-[fatboot] root task started in EL0; BootInfo accepted
-[fatboot] SVC round-trip passed; suspending
+[fatboot] loading hello.elf
+[hello] Hello, world!
+[fatboot] hello.elf exited successfully
 ```
 
-此后内核等待于 `root_idle`，由 Ctrl+C 退出 QEMU。`LOG=off` 时同样执行用户程序，关闭内核日志及用户 debug 输出；elfloader 仍输出引导信息。
+此后内核等待于 `root_idle`，由 Ctrl+C 退出 QEMU。`LOG=off` 时同样执行用户程序，关闭内核日志及用户 debug 输出；bootloader 仍输出引导信息。
 
 ## 地址空间
 
@@ -71,7 +72,7 @@ fatboot 中保留应用启动检查和结果符号，供静默启动验证使用
 
 共享定义位于 `projects/libs/abi/src/lib.rs`。BootInfo 使用 `repr(C)` 的固定宽度字段：magic、version、size、page_size、features、ipc_buffer、image_start、image_end、stack_start、stack_end、extra、extra_size。当前版本为 2，大小为 96 字节；features 的 bit 0 表示临时 debug 字符接口可用。不发布尚未实现的 capability 槽。
 
-扩展区的 FDT 记录包含 u64 id=6 和 u64 len，随后为完整 DTB；len 包含 16 字节记录头。映射被固定以保证运行库只读切片有效，应用通过 `info.device_tree()` 获取 DTB。内核不解析设备节点，fatboot 依赖 `rs_fdtree` 完成解析。
+扩展区的 FDT 记录包含 u64 id=6 和 u64 len，随后为完整 DTB；len 包含 16 字节记录头。映射被固定以保证运行库只读切片有效，应用通过 `info.device_tree()` 获取 DTB。内核和 fatboot 均不解析设备节点，保留 DTB 只读传递接口。
 
 系统调用执行 `svc #0`，x8 为调用号，x0 为参数和返回值；原有调用保留其他通用寄存器以及用户 SP；新增带返回值的调用用 x1 返回结果。完整调用号及错误码见 [内存与任务 ABI](memory-task.md)。
 
@@ -97,4 +98,12 @@ DebugPutChar 通过内核串口输出，不接受用户指针，也不是串口�
 
 `check_tasks.py` 另行验证动态内存和多任务抢占，详见内存与任务文档。
 
-用户集成覆盖 debug/release × LOG=off/info，固定使用 EL1 固件入口。测试脚本依赖 Python 标准库及 QEMU；构建另需 dtc/fdtget 和交叉工具链，不要求安装 GDB 客户端。现在已经能启动最小 fatboot；读盘、FAT32、加载其他程序需要后续能力系统、线程和 IPC 支持。
+用户集成覆盖 debug/release × LOG=off/info，固定使用 EL1 固件入口。测试脚本依赖 Python 标准库及 QEMU；构建另需 dtc/fdtget 和交叉工具链，不要求安装 GDB 客户端。当前 hello 来自构建时链接的只读 ELF 资源，没有磁盘或 FAT 文件系统；后续读盘仍需用户态驱动和文件系统服务。
+
+## hello 装载
+
+`make fatboot` 先编译 `projects/apps/hello`，strip 为 `target/apps/<MODE>/hello.elf`，再通过 `HELLO_ELF` 链接到 fatboot 的只读段。直接 Cargo check/clippy 无需该资源；生成可运行镜像请使用 Make。
+
+用户库 `rstiny::elf::spawn` 验证静态 AArch64 ELF64 的段边界、权限、入口和重叠后创建子任务，映射零页、复制文件内容并设置最终 R/RX/RW 权限。失败会销毁子任务并释放已分配页面。hello 从 `0x1000000` 链接，加载库分配独立 16 KiB 栈 `0x7ffc000..0x8000000`，下方一页不映射。无参数 `#[entry]` 使用传入的栈，不要求 BootInfo；root task 的带参数入口保持原协议。
+
+集成测试验证 hello 的 EL0 入口、独立映射、段字节/BSS、W^X 和栈保护页，以及正常退出回收；破坏嵌入 ELF 时加载失败，破坏 DTB 内容则不影响 hello 启动。

@@ -21,12 +21,12 @@ KERNEL_OFFSET = 0xffff000000000000
 
 
 def boot_image(kernel):
-    return kernel.parents[2] / 'image' / 'elfloader'
+    return kernel.parents[2] / 'image' / 'bootloader'
 
 
 def kernel_output(output):
     boundary = b'Enabling MMU and jumping to entry point...\r\n\r\n'
-    assert boundary in output, 'seL4 elfloader did not enter the kernel'
+    assert boundary in output, 'bootloader did not enter the kernel'
     return output.split(boundary, 1)[1]
 
 

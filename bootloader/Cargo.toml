@@ -1,0 +1,14 @@
+[package]
+name = "bootloader"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+tock-registers = "0.10.1"
+
+[[bin]]
+name = "bootloader"
+path = "src/main.rs"
+test = false
+bench = false

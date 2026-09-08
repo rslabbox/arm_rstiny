@@ -1,4 +1,4 @@
-"""Host validation of ELF inputs to the unmodified seL4 elfloader."""
+"""Host validation of ELF inputs to the seL4-compatible boot handoff."""
 import struct
 
 PAGE = 4096

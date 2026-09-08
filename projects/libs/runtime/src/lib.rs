@@ -1,5 +1,5 @@
 #![no_std]
-//! Runtime for the initial task: entry, boot contract and default panic policy.
+//! Root and ordinary task entrypoints, boot contract and default panic policy.
 use kernel_abi as abi;
 
 /// Validated boot data and exclusive access to the initial IPC buffer.

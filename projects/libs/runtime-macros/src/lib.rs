@@ -3,7 +3,7 @@ use proc_macro::TokenStream;
 use quote::quote;
 use syn::{ItemFn, ReturnType, Type, parse_macro_input};
 
-/// Mark `fn main(info: &mut rstiny_runtime::BootInfo) -> !` as the task entry.
+/// Mark a root `fn(&mut BootInfo) -> !` or ordinary task `fn() -> !` entry.
 /// Use once per executable; no attribute arguments are accepted.
 #[proc_macro_attribute]
 pub fn entry(args: TokenStream, item: TokenStream) -> TokenStream {
@@ -34,16 +34,33 @@ fn expand(function: ItemFn) -> syn::Result<proc_macro2::TokenStream> {
         || sig.variadic.is_some()
         || !sig.generics.params.is_empty()
         || sig.generics.where_clause.is_some()
-        || sig.inputs.len() != 1
-        || !argument_valid
+        || !(sig.inputs.is_empty() || (sig.inputs.len() == 1 && argument_valid))
         || !returns_never
     {
         return Err(syn::Error::new_spanned(
             sig,
-            "entry must be a safe, non-generic Rust function: fn(&mut BootInfo) -> !",
+            "entry must be a safe, non-generic Rust function: fn() -> ! or fn(&mut BootInfo) -> !",
         ));
     }
     let name = &sig.ident;
+    if sig.inputs.is_empty() {
+        let cfg = function
+            .attrs
+            .iter()
+            .filter(|attr| attr.path().is_ident("cfg"));
+        return Ok(quote! {
+            #function
+            #(#cfg)*
+            const _: () = {
+                #[unsafe(export_name = "_start")]
+                #[unsafe(link_section = ".text.entry")]
+                extern "C" fn entry() -> ! {
+                    let main: fn() -> ! = #name;
+                    main()
+                }
+            };
+        });
+    }
     let cfg = function
         .attrs
         .iter()
@@ -92,11 +109,24 @@ mod tests {
             "const fn main(info: &mut BootInfo) -> ! { loop {} }",
             "extern \"C\" fn main(info: &mut BootInfo) -> ! { loop {} }",
             "fn main<T>(info: &mut BootInfo) -> ! { loop {} }",
-            "fn main() -> ! { loop {} }",
             "fn main(info: &BootInfo) -> ! { loop {} }",
             "fn main(info: &mut BootInfo) {}",
+            "async fn main() -> ! { loop {} }",
+            "fn main() {}",
         ] {
             assert!(expand(syn::parse_str(source).unwrap()).is_err(), "{source}");
         }
+    }
+
+    #[test]
+    fn ordinary_entry_needs_no_bootinfo_or_linker_stack() {
+        let output = expand(syn::parse_quote! {
+            fn main() -> ! { loop {} }
+        })
+        .unwrap();
+        let source = output.to_string();
+        assert!(!source.contains("BootInfo"));
+        assert!(!source.contains("__user_stack_top"));
+        syn::parse2::<syn::File>(output).unwrap();
     }
 }
