@@ -13,9 +13,55 @@ import subprocess
 import tempfile
 import time
 import xml.etree.ElementTree as ET
+from elf_image import parse_elf, validate_pair
 
 ROOT = Path(__file__).resolve().parents[1]
 TARGET = "aarch64-unknown-none-softfloat"
+KERNEL_OFFSET = 0xffff000000000000
+
+
+def boot_image(kernel, el2=True):
+    return kernel.parents[2] / 'image' / ('el2' if el2 else 'el1') / 'elfloader'
+
+
+def kernel_output(output):
+    boundary = b'Enabling MMU and jumping to entry point...\r\n\r\n'
+    assert boundary in output, 'seL4 elfloader did not enter the kernel'
+    return output.split(boundary, 1)[1]
+
+
+def check_handoff(gdb, kernel, el2):
+    directory = boot_image(kernel, el2).parent
+    root_bytes = (directory / 'rootserver').read_bytes()
+    root_info = parse_elf(root_bytes)
+    kernel_info = parse_elf((directory / 'kernel.elf').read_bytes())
+    dtb = (directory / 'kernel.dtb').read_bytes()
+    dtb_size = int.from_bytes(dtb[4:8], 'big')
+    start, end = validate_pair(kernel_info, root_info, dtb_size)
+    expected = (start, end, start - root_info['start'], root_info['entry'],
+                kernel_info['end'] - KERNEL_OFFSET, dtb_size)
+    assert tuple(gdb.reg(f'x{i}') for i in range(6)) == expected, 'seL4 handoff arguments differ'
+    assert gdb.reg('cpsr') & 15 == 5, 'elfloader did not enter EL1h'
+    required = 1 | (1 << 2) | (1 << 12)
+    assert gdb.reg('sctlr_el1') & required == required, 'loader MMU/cache contract'
+    assert gdb.command('Qqemu.PhyMemMode:1') == 'OK'
+    try:
+        for segment in root_info['segments']:
+            address = start + segment['va'] - root_info['start']
+            length = segment['filesz']
+            for offset in range(0, length, 1024):
+                count = min(1024, length - offset)
+                original = segment['offset'] + offset
+                assert gdb.memory(address + offset, count) == root_bytes[original:original + count]
+            for offset in range(length, segment['memsz'], 1024):
+                count = min(1024, segment['memsz'] - offset)
+                assert gdb.memory(address + offset, count) == bytes(count), 'loader did not zero BSS/stack'
+        count = int.from_bytes(root_bytes[56:58], 'little')
+        phoff = int.from_bytes(root_bytes[32:40], 'little')
+        assert gdb.memory(end, 8) == struct.pack('<II', count, 56)
+        assert gdb.memory(end + 8, count * 56) == root_bytes[phoff:phoff + count * 56]
+    finally:
+        assert gdb.command('Qqemu.PhyMemMode:0') == 'OK'
 
 
 class Gdb:
@@ -141,7 +187,7 @@ def symbols(elf):
 
 def mappings(gdb):
     physical_mask = (1 << 40) - 4096
-    root = gdb.reg("ttbr0_el1") & physical_mask
+    root = gdb.reg("ttbr1_el1") & physical_mask
     assert root % 4096 == 0
     found = {}
 
@@ -156,9 +202,13 @@ def mappings(gdb):
             if level < 3:
                 visit(entry & physical_mask, level + 1, va)
             else:
-                assert entry & physical_mask == va, "unexpected physical alias"
+                assert entry & physical_mask == va - KERNEL_OFFSET, "unexpected physical alias"
                 found[va] = entry
-    visit(root, 0, 0)
+    assert gdb.command('Qqemu.PhyMemMode:1') == 'OK'
+    try:
+        visit(root, 0, KERNEL_OFFSET)
+    finally:
+        assert gdb.command('Qqemu.PhyMemMode:0') == 'OK'
     return found
 
 
@@ -167,26 +217,30 @@ def check_layout(gdb, syms):
     assert gdb.reg("cpsr") & 0x3C0 == 0x3C0, "interrupts unexpectedly enabled"
     required = 1 | (1 << 2) | (1 << 12) | (1 << 19)
     assert gdb.reg("sctlr_el1") & required == required
-    assert gdb.reg("tcr_el1") & (1 << 23), "TTBR1 alias still enabled"
-    assert gdb.reg("ttbr1_el1") == 0
+    assert not gdb.reg("tcr_el1") & (1 << 23), "TTBR1 walks disabled"
+    assert gdb.reg("ttbr1_el1") != 0
     assert gdb.reg("vbar_el1") == syms["exception_vector_base"]
     assert syms["exception_vector_base"] % 2048 == 0
     assert syms["boot_stack"] <= gdb.reg("sp") <= syms["boot_stack_top"]
     assert gdb.reg("sp") % 16 == 0
     pages = mappings(gdb)
-    expected = set(range(syms["skernel"], syms["ekernel"], 4096))
+    image_end = gdb.word(syms['LOADER_BOOT_INFO'] + 8)
+    expected = set(range(syms["skernel"], KERNEL_OFFSET + image_end + 4096, 4096))
     expected.remove(syms["stack_guard"])
-    expected.add(0x09000000) # Panic console is always mapped.
+    devices = set(range(0x08000000, 0x08010000, 4096))
+    devices.update(range(0x080a0000, 0x080c0000, 4096))
+    devices.add(0x09000000)
+    expected.update(KERNEL_OFFSET + address for address in devices)
     assert pages.keys() == expected, "unexpected mapped/missing pages"
     for va, entry in pages.items():
         assert not entry & (1 << 6), f"EL0-accessible kernel page {va:#x}"
         assert entry & (1 << 54), "UXN missing"
         assert entry & (1 << 10), "access flag missing"
-        if va == 0x09000000:
-            assert (entry >> 2) & 7 == 0, "UART must use Device memory"
+        if va - KERNEL_OFFSET in devices:
+            assert (entry >> 2) & 7 == 0, "MMIO must use Device memory"
             assert entry & (1 << 53) and not entry & (1 << 7)
         else:
-            assert (entry >> 2) & 7 == 1, "RAM must use normal memory"
+            assert (entry >> 2) & 7 == 4, "RAM must use elfloader's normal memory index"
             writable = va >= syms["erodata"]
             executable = va < syms["etext"]
             assert bool(entry & (1 << 7)) == (not writable)
@@ -201,17 +255,20 @@ def boot(qemu, elf, printing, tests=False, probe=None, el2=True, layout=False, q
         error = directory / "qemu.log"
         with error.open("wb") as stderr:
             process = subprocess.Popen([
-                qemu, "-machine", f"virt,gic-version=2,virtualization={'on' if el2 else 'off'}",
+                qemu, "-machine", f"virt,gic-version=3,virtualization={'on' if el2 else 'off'}",
                 "-cpu", "cortex-a72", "-smp", "1", "-m", "128M", "-display", "none",
                 "-monitor", "none", "-serial", f"file:{serial}", "-nic", "none",
-                "-kernel", str(elf) + ".bin", "-S", "-gdb",
+                "-kernel", str(boot_image(elf, el2)), "-S", "-gdb",
                 f"unix:{directory / 'gdb.sock'},server=on,wait=off",
             ], stdout=subprocess.DEVNULL, stderr=stderr)
             gdb = None
             try:
                 gdb = Gdb(directory / "gdb.sock", process)
+                if layout:
+                    gdb.run_to(syms['_start'])
+                    check_handoff(gdb, elf, el2)
                 gdb.run_to(syms["start_root"])
-                assert gdb.word(syms["BOOT_ENTRY_EL_VALUE"]) == (2 if el2 else 1)
+                assert gdb.word(syms["BOOT_ENTRY_EL_VALUE"]) == 1
                 if tests:
                     assert gdb.word(syms["SELF_TEST_PASSED"]) == 1
                 if layout:
@@ -248,7 +305,7 @@ def boot(qemu, elf, printing, tests=False, probe=None, el2=True, layout=False, q
                 reply = gdb.command("c")
                 assert reply.startswith("W00"), f"guest did not shut down cleanly: {reply}"
                 assert process.wait(timeout=3) == 0
-                output = serial.read_bytes()
+                output = kernel_output(serial.read_bytes())
                 if probe and probe.startswith("probe_panic"):
                     assert b"Kernel injected panic" in output
                     assert b"kernel panic:" in output

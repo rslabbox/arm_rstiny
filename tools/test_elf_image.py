@@ -1,8 +1,8 @@
-"""Exercise the boot module parser with deliberately malformed ELF inputs."""
+"""Exercise the ELF input validator with deliberately malformed ELF inputs."""
 import struct
 import unittest
 
-from pack_root import MAGIC, pack
+from elf_image import KERNEL_OFFSET, parse_elf as pack, validate_pair
 
 
 def elf(segments=None, entry=0x400000):
@@ -18,13 +18,34 @@ def elf(segments=None, entry=0x400000):
     return data
 
 
-class PackRootTests(unittest.TestCase):
-    def test_payload_and_zero_fill_description(self):
+class ElfImageTests(unittest.TestCase):
+    def test_loader_placement(self):
+        kernel = pack(elf([(1, 5, 4096, KERNEL_OFFSET + 0x40200000,
+                            0x40200000, 4, 4096, 4096)],
+                          entry=KERNEL_OFFSET + 0x40200000))
+        root = pack(elf([(1, 5, 4096, 0x400000, 0, 4, 4096, 4096),
+                         (1, 6, 8192, 0x5fc000, 0, 0, 0x4000, 4096)]))
+        self.assertEqual(validate_pair(kernel, root, 41), (0x40202000, 0x40402000))
+        for size in (0, 39, 1024 * 1024 + 1):
+            with self.subTest(size=size), self.assertRaises(ValueError):
+                validate_pair(kernel, root, size)
+        with self.assertRaisesRegex(ValueError, 'runtime stack'):
+            validate_pair(kernel, pack(elf()), 40)
+        root['segments'][-1]['flags'] = 4
+        with self.assertRaisesRegex(ValueError, 'writable root stack'):
+            validate_pair(kernel, root, 40)
+        root['segments'][-1]['flags'] = 6
+        kernel['end'] = KERNEL_OFFSET + 0x41e00000
+        with self.assertRaisesRegex(ValueError, 'boot window'):
+            validate_pair(kernel, root, 40)
+        kernel['segments'][0]['pa'] += 4096
+        with self.assertRaisesRegex(ValueError, 'physical offset'):
+            validate_pair(kernel, root, 40)
+
+    def test_valid_load_metadata(self):
         result = pack(elf())
-        self.assertEqual(struct.unpack_from('<8sQQ', result), (MAGIC, 0x400000, 1))
-        self.assertEqual(struct.unpack_from('<QQQQQ', result, 24),
-                         (0x400000, 4096, 4, 64, 5))
-        self.assertEqual(result[64:], b'code')
+        self.assertEqual((result['entry'], result['start'], result['end']), (0x400000, 0x400000, 0x401000))
+        self.assertEqual(result['segments'][0]['filesz'], 4)
 
     def test_rejects_truncation(self):
         for size in (0, 63, 100, 4098):
@@ -34,8 +55,8 @@ class PackRootTests(unittest.TestCase):
     def test_rejects_invalid_segments(self):
         original = (1, 5, 4096, 0x400000, 0, 4, 4096, 4096)
         for field, value in ((0, 2), (0, 3), (0, 7), (1, 7),
-                             (2, 4097), (3, 0), (3, 0x500000),
-                             (5, 4097), (6, 0x100001), (7, 8191)):
+                             (2, 4097), (3, 2**64 - 4096),
+                             (5, 4097), (6, 0x2000001), (7, 8191)):
             segment = list(original)
             segment[field] = value
             with self.subTest(field=field, value=value), self.assertRaises(ValueError):

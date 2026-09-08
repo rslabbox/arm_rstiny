@@ -5,7 +5,8 @@ extern crate alloc;
 
 mod arch;
 mod config;
-mod root_task;
+mod memory;
+mod task;
 #[cfg(feature = "kernel-test")]
 mod test;
 mod utils;
@@ -22,5 +23,5 @@ pub fn rust_main() -> ! {
     #[cfg(feature = "kernel-test")]
     test::run();
     log::info!("Kernel ready: launching fatboot");
-    root_task::start_root()
+    task::start_root()
 }

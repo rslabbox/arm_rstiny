@@ -18,3 +18,17 @@ const _: () = {
     assert!(core::mem::offset_of!(TrapFrame, elr) == 256);
     assert!(core::mem::offset_of!(TrapFrame, spsr) == 264);
 };
+
+impl TrapFrame {
+    /// Construct an AArch64 EL0t context with IRQ enabled and all other GPRs zero.
+    pub fn user(entry: u64, stack: u64, argument: u64) -> Self {
+        let mut frame = Self {
+            usp: stack,
+            elr: entry,
+            spsr: 0x340,
+            ..Self::default()
+        };
+        frame.r[0] = argument;
+        frame
+    }
+}

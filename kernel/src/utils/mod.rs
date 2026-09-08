@@ -16,15 +16,15 @@ pub extern "C" fn kernel_halt() -> ! {
 }
 pub use kernel_halt as halt;
 
-/// PSCI conduit follows the fixed QEMU virt configuration: virtualization=on
-/// boots at EL2 and uses SMC; virtualization=off boots at EL1 and uses HVC.
+/// Select the PSCI conduit from the DTB supplied by elfloader.
+/// Kernel entry is EL1 for both firmware configurations.
 #[inline(never)]
 #[unsafe(no_mangle)]
 pub extern "C" fn kernel_shutdown() -> ! {
     const PSCI_SYSTEM_OFF: u64 = 0x8400_0008;
     unsafe {
         core::arch::asm!("msr daifset, #0xf", options(nomem, nostack));
-        if crate::BOOT_ENTRY_EL.read_volatile() == 2 {
+        if crate::arch::boot::psci_smc() {
             core::arch::asm!("smc #0",
                 inlateout("x0") PSCI_SYSTEM_OFF => _,
                 inlateout("x1") 0_u64 => _,

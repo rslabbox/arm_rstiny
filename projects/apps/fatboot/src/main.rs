@@ -18,6 +18,14 @@ fn main(info: &mut BootInfo) -> ! {
     let buffer = info.ipc_buffer();
     assert_eq!(buffer[0], 0);
     buffer[0] = 0xface_cafe;
+    let frames = rstiny::available_frames().expect("frame accounting");
+    let child = rstiny::Task::create().expect("create child");
+    assert_eq!(child.status().unwrap(), rstiny::TaskState::Created);
+    child.destroy().expect("destroy child");
+    assert_eq!(rstiny::available_frames().unwrap(), frames);
+    let before = rstiny::clock_milliseconds().unwrap();
+    rstiny::sleep(20).expect("timer wakeup");
+    assert!(rstiny::clock_milliseconds().unwrap() - before >= 20);
     RESULT.store(1, Ordering::Relaxed);
     debug_println!("[fatboot] SVC round-trip passed; suspending");
     suspend_self()

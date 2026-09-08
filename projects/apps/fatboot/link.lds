@@ -4,6 +4,7 @@ PHDRS {
     text PT_LOAD FLAGS(5);
     rodata PT_LOAD FLAGS(4);
     data PT_LOAD FLAGS(6);
+    stack PT_LOAD FLAGS(6);
 }
 SECTIONS {
     . = 0x00400000;
@@ -12,5 +13,7 @@ SECTIONS {
     .data : { *(.data .data.* .got .got.*) . = ALIGN(4096); } :data
     .bss (NOLOAD) : { *(.bss .bss.*) . = ALIGN(4096); } :data
     ASSERT(. <= 0x00500000, "fatboot image exceeds boot ABI image window")
+    . = 0x005fc000;
+    .stack (NOLOAD) : { . += 16K; __user_stack_top = .; } :stack
     /DISCARD/ : { *(.eh_frame .eh_frame_hdr .comment) }
 }

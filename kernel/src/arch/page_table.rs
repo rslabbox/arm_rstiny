@@ -56,7 +56,7 @@ bitflags::bitflags! {
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 enum MemType {
     Device = 0,
-    Normal = 1,
+    Normal = 4,
 }
 
 impl DescriptorAttr {
@@ -74,7 +74,7 @@ impl DescriptorAttr {
         let idx = (self.bits() & Self::ATTR_INDEX_MASK) >> 2;
         match idx {
             0 => MemType::Device,
-            1 => MemType::Normal,
+            4 => MemType::Normal,
             _ => panic!("Invalid memory attribute index"),
         }
     }

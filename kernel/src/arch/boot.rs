@@ -1,99 +1,115 @@
-//! Fixed, single-core QEMU virt boot with page-granular identity mappings.
-//! The low identity layout is temporary; Userspace support must introduce a user TTBR0 layout.
-use aarch64_cpu::{asm, asm::barrier, registers::*};
+//! seL4 elfloader handoff and high-half mappings for single-core QEMU virt.
+//! User roots retain these supervisor mappings and own their user subtrees.
+use aarch64_cpu::{asm::barrier, registers::*};
 use core::ptr::{addr_of, addr_of_mut};
 use memory_addr::PhysAddr;
 
 use super::PageTableEntry;
-use crate::config::{MemFlags, PAGE_SIZE, RAM_START};
+use crate::config::{MemFlags, PAGE_SIZE, RAM_START, phys_to_virt, virt_to_phys};
 
-// Cortex-A72 reset baseline: retain the architecturally required RES1 bits.
-const SCTLR_RESET: u64 = 0x30d0_0800;
+// seL4 ARM loader passes x0..x5 and enters an EL1 kernel with MMU/caches on.
+#[derive(Clone, Copy, Debug, Default)]
+#[repr(C)]
+pub struct BootInfo {
+    pub image_start: usize,
+    pub image_end: usize,
+    pub phys_virt_offset: usize,
+    pub entry: usize,
+    pub dtb: usize,
+    pub dtb_size: usize,
+}
+#[unsafe(no_mangle)]
+static mut LOADER_BOOT_INFO: BootInfo = BootInfo {
+    image_start: 0,
+    image_end: 0,
+    phys_virt_offset: 0,
+    entry: 0,
+    dtb: 0,
+    dtb_size: 0,
+};
+pub fn information() -> BootInfo {
+    // SAFETY: initialized once before kernel startup, then immutable on this CPU.
+    unsafe { core::ptr::addr_of!(LOADER_BOOT_INFO).read() }
+}
 
-/// Only stackless entry work remains in assembly. A Rust prologue must not
-/// run until secondary CPUs are parked and the boot stack is established.
+pub fn psci_smc() -> bool {
+    let info = information();
+    // SAFETY: boot checked the DTB extent and mapped it into the kernel window.
+    let data =
+        unsafe { core::slice::from_raw_parts(phys_to_virt(info.dtb) as *const u8, info.dtb_size) };
+    super::dtb::psci_smc(data).expect("unsupported PSCI DTB method")
+}
+
 #[unsafe(naked)]
 #[unsafe(no_mangle)]
 #[unsafe(link_section = ".text.boot")]
 unsafe extern "C" fn _start() -> ! {
     core::arch::naked_asm!(
         "msr daifset, #0xf",
-        "mrs x0, mpidr_el1",
-        "ldr x1, =0xff00ffffff", // Aff3/Aff2/Aff1/Aff0, ignoring other MPIDR bits
-        "tst x0, x1",
-        "b.ne 2f",
-        "msr spsel, #1",
-        "ldr x0, =boot_stack_top",
-        "mov sp, x0",
-        "b {start}",
-        "2:",
-        "wfe",
-        "b 2b",
-        start = sym start_rust,
+        "mrs x9, mpidr_el1", "ldr x10, =0xff00ffffff",
+        "tst x9, x10", "b.ne 2f",
+        "msr spsel, #1", "ldr x9, =boot_stack_top", "mov sp, x9",
+        "b {start}", "2:", "wfe", "b 2b", start = sym start_rust,
     );
 }
 
-extern "C" fn start_rust() -> ! {
-    match CurrentEL.read(CurrentEL::EL) {
-        1 => init_el1(1),
-        2 => switch_to_el1(),
-        // Secure/EL3 entry is outside the QEMU platform contract.
-        _ => crate::utils::halt(),
-    }
-}
-
-fn switch_to_el1() -> ! {
-    HCR_EL2.write(HCR_EL2::RW::EL1IsAarch64);
-    CNTHCTL_EL2.write(CNTHCTL_EL2::EL1PCEN::SET + CNTHCTL_EL2::EL1PCTEN::SET);
-    CNTVOFF_EL2.set(0);
-    CPTR_EL2.set(0);
-    SCTLR_EL1.set(SCTLR_RESET);
-    SPSR_EL2.write(
-        SPSR_EL2::M::EL1h
-            + SPSR_EL2::D::Masked
-            + SPSR_EL2::A::Masked
-            + SPSR_EL2::I::Masked
-            + SPSR_EL2::F::Masked,
-    );
-    SP_EL1.set(addr_of!(boot_stack_top) as u64);
-    ELR_EL2.set(el1_entry as *const () as u64);
-    asm::eret()
-}
-
-/// Discard the EL2 Rust frames rather than returning through them at EL1.
-/// Resetting SP inside an ordinary Rust function would invalidate its frame.
-#[unsafe(naked)]
-unsafe extern "C" fn el1_entry() -> ! {
-    core::arch::naked_asm!(
-        "ldr x1, =boot_stack_top",
-        "mov sp, x1",
-        "mov x0, #2",
-        "b {init}",
-        init = sym init_el1,
-    );
-}
-
-extern "C" fn init_el1(entry_el: u64) -> ! {
-    VBAR_EL1.set(exception_vector_base as *const () as u64);
-    barrier::isb(barrier::SY);
-    // The cold-boot contract requires MMU and caches off.
-    if SCTLR_EL1.is_set(SCTLR_EL1::M)
-        || SCTLR_EL1.is_set(SCTLR_EL1::C)
-        || SCTLR_EL1.is_set(SCTLR_EL1::I)
+extern "C" fn start_rust(
+    image_start: usize,
+    image_end: usize,
+    phys_virt_offset: usize,
+    entry: usize,
+    dtb: usize,
+    dtb_size: usize,
+) -> ! {
+    if CurrentEL.read(CurrentEL::EL) != 1
+        || !SCTLR_EL1.is_set(SCTLR_EL1::M)
+        || !SCTLR_EL1.is_set(SCTLR_EL1::C)
+        || !SCTLR_EL1.is_set(SCTLR_EL1::I)
     {
         crate::utils::halt();
     }
-    // Linker guarantees 8-byte-aligned BSS, excluding the active boot stack.
-    // Do not touch global Rust state until this clear is complete.
+    VBAR_EL1.set(exception_vector_base as *const () as u64);
+    barrier::isb(barrier::SY);
     let mut cursor = addr_of_mut!(sbss).cast::<u64>();
     let end = addr_of_mut!(ebss).cast::<u64>();
     while cursor < end {
+        // SAFETY: linker bounds exclude the active high-address kernel stack.
         unsafe {
             cursor.write_volatile(0);
             cursor = cursor.add(1);
         }
     }
-    boot_main(entry_el)
+    let info = BootInfo {
+        image_start,
+        image_end,
+        phys_virt_offset,
+        entry,
+        dtb,
+        dtb_size,
+    };
+    // Check ranges before using any loader-controlled address in a page table.
+    let kernel_end = crate::config::virt_to_phys(addr_of!(ekernel) as usize);
+    if image_start < kernel_end
+        || image_start >= image_end
+        || image_end > 0x41ff_f000
+        || !image_start.is_multiple_of(PAGE_SIZE)
+        || !image_end.is_multiple_of(PAGE_SIZE)
+        || image_start.checked_sub(phys_virt_offset) != Some(kernel_abi::IMAGE_START as usize)
+        || image_end.checked_sub(phys_virt_offset) != Some(kernel_abi::STACK_END as usize)
+        || !(kernel_abi::IMAGE_START as usize..kernel_abi::IMAGE_END as usize).contains(&entry)
+        || dtb < kernel_end
+        || dtb_size < 40
+        || dtb
+            .checked_add(dtb_size)
+            .is_none_or(|end| end > image_start)
+    {
+        crate::utils::halt();
+    }
+    // SAFETY: IRQs remain masked and no other CPU executes kernel code.
+    unsafe {
+        addr_of_mut!(LOADER_BOOT_INFO).write(info);
+    }
+    boot_main(1)
 }
 
 #[derive(Clone, Copy)]
@@ -104,15 +120,16 @@ impl Table {
 }
 
 static mut ROOT: Table = Table::EMPTY;
+static mut EMPTY_USER_ROOT: Table = Table::EMPTY;
 static mut RAM_L1: Table = Table::EMPTY;
 static mut RAM_L2: Table = Table::EMPTY;
 static mut RAM_L3: [Table; 16] = [Table::EMPTY; 16];
 static mut DEVICE_L2: Table = Table::EMPTY;
+static mut GIC_L3: Table = Table::EMPTY;
 static mut DEVICE_L3: Table = Table::EMPTY;
 
 unsafe extern "C" {
     fn exception_vector_base();
-    static boot_stack_top: u8;
     static mut sbss: u8;
     static mut ebss: u8;
     static skernel: u8;
@@ -122,7 +139,7 @@ unsafe extern "C" {
     static stack_guard: u8;
 }
 
-// These functions run with the MMU off and interrupts masked. All tables have
+// These functions run under loader mappings with interrupts masked. Tables have
 // exclusive boot-time ownership; use raw pointers instead of static-mut refs.
 unsafe fn set(table: *mut Table, index: usize, entry: PageTableEntry) {
     unsafe {
@@ -133,7 +150,7 @@ unsafe fn set(table: *mut Table, index: usize, entry: PageTableEntry) {
     };
 }
 fn table_entry(table: *const Table) -> PageTableEntry {
-    PageTableEntry::new_table(PhysAddr::from_usize(table as usize))
+    PageTableEntry::new_table(PhysAddr::from_usize(virt_to_phys(table as usize)))
 }
 
 unsafe fn init_page_tables() {
@@ -142,12 +159,12 @@ unsafe fn init_page_tables() {
         set(addr_of_mut!(RAM_L1), 1, table_entry(addr_of!(RAM_L2)));
         let tables = addr_of_mut!(RAM_L3).cast::<Table>();
         let start = addr_of!(skernel) as usize;
-        let end = addr_of!(ekernel) as usize;
+        let end = phys_to_virt(information().image_end + PAGE_SIZE);
         for va in (start..end).step_by(PAGE_SIZE) {
             if va == addr_of!(stack_guard) as usize {
                 continue;
             }
-            let l2 = (va - RAM_START) >> 21;
+            let l2 = (virt_to_phys(va) - RAM_START) >> 21;
             assert!(l2 < 16);
             let l3 = tables.add(l2);
             set(addr_of_mut!(RAM_L2), l2, table_entry(l3));
@@ -161,12 +178,34 @@ unsafe fn init_page_tables() {
             set(
                 l3,
                 (va >> 12) & 511,
-                PageTableEntry::new_page(PhysAddr::from_usize(va), flags, false),
+                PageTableEntry::new_page(PhysAddr::from_usize(virt_to_phys(va)), flags, false),
             );
         }
         {
+            set(
+                addr_of_mut!(DEVICE_L2),
+                0x0800_0000 >> 21,
+                table_entry(addr_of!(GIC_L3)),
+            );
+            use crate::config::{GICD_BASE, GICD_SIZE, GICR_BASE, GICR_SIZE, PAGE_SIZE};
+            for va in (GICD_BASE..GICD_BASE + GICD_SIZE)
+                .step_by(PAGE_SIZE)
+                .chain((GICR_BASE..GICR_BASE + GICR_SIZE).step_by(PAGE_SIZE))
+            {
+                set(
+                    addr_of_mut!(GIC_L3),
+                    (va >> 12) & 511,
+                    PageTableEntry::new_page(
+                        PhysAddr::from_usize(va),
+                        MemFlags::READ | MemFlags::WRITE | MemFlags::DEVICE,
+                        false,
+                    ),
+                );
+            }
+        }
+        {
             // Keep UART mapped even with LOG=off for the panic console.
-            let va = crate::config::PL011_UART_BASE;
+            let va = virt_to_phys(crate::config::PL011_UART_BASE);
             set(addr_of_mut!(RAM_L1), 0, table_entry(addr_of!(DEVICE_L2)));
             set(
                 addr_of_mut!(DEVICE_L2),
@@ -187,39 +226,16 @@ unsafe fn init_page_tables() {
 }
 
 unsafe fn enable_mmu() {
-    MAIR_EL1.write(
-        MAIR_EL1::Attr0_Device::nonGathering_nonReordering_EarlyWriteAck
-            + MAIR_EL1::Attr1_Normal_Inner::WriteBack_NonTransient_ReadWriteAlloc
-            + MAIR_EL1::Attr1_Normal_Outer::WriteBack_NonTransient_ReadWriteAlloc,
-    );
-    // 48-bit VA, 4 KiB granule, inner-shareable WB/WA, 40-bit PA.
-    // Disable TTBR1 walks, avoiding the old high-address identity alias.
-    TCR_EL1.set(
-        (TCR_EL1::T0SZ.val(16)
-            + TCR_EL1::TG0::KiB_4
-            + TCR_EL1::SH0::Inner
-            + TCR_EL1::IRGN0::WriteBack_ReadAlloc_WriteAlloc_Cacheable
-            + TCR_EL1::ORGN0::WriteBack_ReadAlloc_WriteAlloc_Cacheable
-            + TCR_EL1::T1SZ.val(16)
-            + TCR_EL1::TG1::KiB_4
-            + TCR_EL1::EPD1::DisableTTBR1Walks
-            + TCR_EL1::IPS::Bits_40)
-            .value,
-    );
-    TTBR0_EL1.set(addr_of!(ROOT) as u64);
-    TTBR1_EL1.set(0);
+    // Keep elfloader's MAIR indices while replacing its live high mapping:
+    // Attr0=Device-nGnRnE, Attr4=normal WB. Changing them first is unsafe.
     barrier::dsb(barrier::SY);
+    TTBR1_EL1.set(virt_to_phys(addr_of!(ROOT) as usize) as u64);
+    TTBR0_EL1.set(virt_to_phys(addr_of!(EMPTY_USER_ROOT) as usize) as u64);
+    barrier::isb(barrier::SY);
     super::instructions::flush_tlb_all();
-    // Known platform reset baseline + MMU, D/I caches, stack alignment and WXN.
-    SCTLR_EL1.set(SCTLR_RESET);
-    SCTLR_EL1.modify(
-        SCTLR_EL1::M::Enable
-            + SCTLR_EL1::C::Cacheable
-            + SCTLR_EL1::I::Cacheable
-            + SCTLR_EL1::SA::Enable
-            + SCTLR_EL1::SA0::Enable
-            + SCTLR_EL1::WXN::Enable,
-    );
+    TCR_EL1.modify(TCR_EL1::SH0::Inner + TCR_EL1::SH1::Inner);
+    barrier::isb(barrier::SY);
+    SCTLR_EL1.modify(SCTLR_EL1::SA::Enable + SCTLR_EL1::SA0::Enable + SCTLR_EL1::WXN::Enable);
     barrier::isb(barrier::SY);
 }
 
@@ -233,21 +249,14 @@ extern "C" fn boot_main(entry_el: u64) -> ! {
     crate::rust_main()
 }
 
-/// Construct a private TTBR0 root while retaining immutable, EL1-only kernel
-/// mappings. The user image occupies [4 MiB, 6 MiB), separate from MMIO/RAM.
-/// Caller owns all destination tables and has not made them active yet.
-pub(super) unsafe fn prepare_user_tables(
-    root: *mut Table,
-    l1: *mut Table,
-    l2: *mut Table,
-    l3: *mut Table,
-) {
+/// Install an empty, private TTBR0 hierarchy. Supervisor mappings live in TTBR1.
+/// SAFETY: destinations are distinct writable 4 KiB frames, not active tables.
+pub(crate) unsafe fn prepare_user_tables(root: usize, l1: usize, l2: usize) {
     unsafe {
-        core::ptr::copy_nonoverlapping(addr_of!(ROOT), root, 1);
-        core::ptr::copy_nonoverlapping(addr_of!(RAM_L1), l1, 1);
-        core::ptr::copy_nonoverlapping(addr_of!(DEVICE_L2), l2, 1);
-        set(root, 0, table_entry(l1));
-        set(l1, 0, table_entry(l2));
-        set(l2, 2, table_entry(l3));
+        set(root as *mut Table, 0, table_entry(l1 as *const Table));
+        set(l1 as *mut Table, 0, table_entry(l2 as *const Table));
     }
+}
+pub(crate) fn kernel_root() -> usize {
+    virt_to_phys(addr_of!(EMPTY_USER_ROOT) as usize)
 }

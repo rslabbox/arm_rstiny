@@ -98,9 +98,7 @@ vector_1_0:
 vector_1_1:
     SAVE_REGS
     mov x0, sp
-    mov x1, #1
-    mov x2, #1
-    bl fatal_exception
+    bl handle_irq
     b .
 vector_1_2:
     SAVE_REGS
@@ -120,13 +118,11 @@ vector_2_0:
     SAVE_REGS
     mov x0, sp
     bl handle_user_sync
-    b restore_user
+    b .
 vector_2_1:
     SAVE_REGS
     mov x0, sp
-    mov x1, #1
-    mov x2, #2
-    bl fatal_exception
+    bl handle_irq
     b .
 vector_2_2:
     SAVE_REGS
@@ -170,27 +166,3 @@ vector_3_3:
     mov x2, #3
     bl fatal_exception
     b .
-
-restore_user:
-    ldp x10, x11, [sp, #256]
-    ldp x30, x9, [sp, #240]
-    msr sp_el0, x9
-    msr elr_el1, x10
-    msr spsr_el1, x11
-    ldp x28, x29, [sp, #224]
-    ldp x26, x27, [sp, #208]
-    ldp x24, x25, [sp, #192]
-    ldp x22, x23, [sp, #176]
-    ldp x20, x21, [sp, #160]
-    ldp x18, x19, [sp, #144]
-    ldp x16, x17, [sp, #128]
-    ldp x14, x15, [sp, #112]
-    ldp x12, x13, [sp, #96]
-    ldp x10, x11, [sp, #80]
-    ldp x8, x9, [sp, #64]
-    ldp x6, x7, [sp, #48]
-    ldp x4, x5, [sp, #32]
-    ldp x2, x3, [sp, #16]
-    ldp x0, x1, [sp, #0]
-    add sp, sp, #272
-    eret

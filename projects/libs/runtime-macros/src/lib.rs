@@ -53,9 +53,15 @@ fn expand(function: ItemFn) -> syn::Result<proc_macro2::TokenStream> {
 
         #(#cfg)*
         const _: () = {
+            unsafe extern "C" { static __user_stack_top: u8; }
+            #[unsafe(naked)]
             #[unsafe(export_name = "_start")]
             #[unsafe(link_section = ".text.entry")]
             unsafe extern "C" fn entry(pointer: *const ()) -> ! {
+                core::arch::naked_asm!("ldr x9, ={stack}", "mov sp, x9", "b {main}",
+                    stack = sym __user_stack_top, main = sym trampoline);
+            }
+            unsafe extern "C" fn trampoline(pointer: *const ()) -> ! {
                 // Type checking here also accepts aliases for BootInfo, while
                 // rejecting unrelated mutable references and static borrows.
                 let main: fn(&mut ::rstiny_runtime::BootInfo) -> ! = #name;

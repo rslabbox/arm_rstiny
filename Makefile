@@ -22,7 +22,8 @@ KERNEL_ELF := $(BUILD_DIR)/$(TARGET)/$(MODE)/kernel
 KERNEL_BIN := $(KERNEL_ELF).bin
 APP_DIR := target/apps/$(MODE)
 FATBOOT_ELF := $(APP_DIR)/$(TARGET)/$(MODE)/fatboot
-ROOT_IMAGE := $(abspath $(APP_DIR)/fatboot.boot)
+IMAGE_DIR := $(BUILD_DIR)/image
+BOOT_IMAGE := $(IMAGE_DIR)/el2/elfloader
 APP_FLAGS := -p fatboot --target $(TARGET) --target-dir $(APP_DIR)
 CARGO_FLAGS := -p kernel --target $(TARGET) --target-dir $(BUILD_DIR) --no-default-features
 ifeq ($(MODE),release)
@@ -34,10 +35,10 @@ CARGO_FLAGS += --features kernel-test
 endif
 
 # Fixed platform contract; no disks or network backends.
-QEMU_ARGS := -machine virt,gic-version=2,virtualization=on -cpu cortex-a72 \
+QEMU_ARGS := -machine virt,gic-version=3,virtualization=on -cpu cortex-a72 \
 	-smp 1 -m 128M -display none -monitor none -serial stdio -nic none \
-	-kernel $(KERNEL_BIN)
-export LOG ROOT_IMAGE
+	-kernel $(BOOT_IMAGE)
+export LOG
 
 .PHONY: all build fatboot run run-kernel run-root debug check fmt clean
 all: build
@@ -45,10 +46,10 @@ all: build
 build: fatboot
 	cargo build $(CARGO_FLAGS)
 	rust-objcopy -O binary $(KERNEL_ELF) $(KERNEL_BIN)
+	python3 tools/build_image.py $(KERNEL_ELF) $(FATBOOT_ELF) $(IMAGE_DIR) --qemu $(QEMU)
 
 fatboot:
 	cargo build $(APP_FLAGS)
-	python3 tools/pack_root.py $(FATBOOT_ELF) $(ROOT_IMAGE)
 
 run run-kernel run-root: build
 	$(QEMU) $(QEMU_ARGS)
@@ -61,6 +62,7 @@ check:
 	python3 -m unittest discover -s tools -p 'test_*.py'
 	python3 tools/check_kernel.py --qemu $(QEMU)
 	python3 tools/check_fatboot.py --qemu $(QEMU)
+	python3 tools/check_tasks.py --qemu $(QEMU)
 
 fmt:
 	cargo fmt --all --check

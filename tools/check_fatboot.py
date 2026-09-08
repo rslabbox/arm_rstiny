@@ -5,11 +5,11 @@ from pathlib import Path
 import struct
 import subprocess
 import tempfile
-from check_kernel import Gdb, ROOT, TARGET, build, symbols
+from check_kernel import Gdb, ROOT, TARGET, KERNEL_OFFSET, build, symbols, boot_image, kernel_output
 
 USER_START = 0x400000
-BOOTINFO = 0x5f8000
-IPC = 0x5f9000
+BOOTINFO = 0x601000
+IPC = 0x600000
 STACK_START, STACK_END = 0x5fc000, 0x600000
 
 
@@ -54,12 +54,18 @@ def check_layout(gdb, syms, elf, level):
     assert len({pa for pa, _ in user.values()}) == len(user), 'aliased user frames'
     for va, flags in expected.items():
         pa, attr = user[va]
-        assert syms['__heap_start'] <= pa < syms['__heap_end']
+        if va in (BOOTINFO, IPC):
+            assert syms['__frames_start'] - KERNEL_OFFSET <= pa < syms['__frames_end'] - KERNEL_OFFSET
+        else:
+            assert gdb.command('Qqemu.PhyMemMode:1') == 'OK'
+            offset = gdb.word(syms['LOADER_BOOT_INFO'] - KERNEL_OFFSET + 16)
+            assert gdb.command('Qqemu.PhyMemMode:0') == 'OK'
+            assert pa == va + offset, 'loader image was copied instead of adopted'
         assert attr & (1 << 53), 'user pages must be PXN'
         assert bool(attr & (1 << 7)) == (flags != 6)
         assert bool(attr & (1 << 54)) == (flags != 5)
     for va in (syms['_start'], syms['boot_stack'], 0x09000000):
-        assert not mapping[va][1] & (1 << 6), 'kernel/MMIO exposed to EL0'
+        assert va not in mapping, 'kernel/MMIO present in user TTBR0'
     assert STACK_START - 4096 not in mapping
     bi = struct.unpack('<10Q', gdb.memory(BOOTINFO, 80))
     assert bi[:6] == (0x525354494e594249, 1, 80, 4096, int(level != 'off'), IPC)
@@ -74,37 +80,54 @@ def run(qemu, kernel, user, level, scenario, el2=True):
         output, errors = temp / 'serial.log', temp / 'qemu.log'
         with errors.open('wb') as err:
             proc = subprocess.Popen([
-                qemu, '-machine', f"virt,gic-version=2,virtualization={'on' if el2 else 'off'}",
+                qemu, '-machine', f"virt,gic-version=3,virtualization={'on' if el2 else 'off'}",
                 '-cpu', 'cortex-a72', '-smp', '1', '-m', '128M', '-display', 'none',
                 '-monitor', 'none', '-serial', f'file:{output}', '-nic', 'none',
-                '-kernel', str(kernel) + '.bin', '-S', '-gdb', f'unix:{temp / "gdb"},server=on,wait=off',
+                '-kernel', str(boot_image(kernel, el2)), '-S', '-gdb', f'unix:{temp / "gdb"},server=on,wait=off',
             ], stderr=err, stdout=subprocess.DEVNULL)
             gdb = None
             try:
                 gdb = Gdb(temp / 'gdb', proc)
                 gdb.run_to(us['_start'])
                 assert gdb.reg('cpsr') & 15 == 0, 'not EL0t'
-                assert gdb.reg('sp') == STACK_END and gdb.reg('x0') == BOOTINFO
+                assert gdb.reg('sp') == 0 and gdb.reg('x0') == BOOTINFO
                 assert all(gdb.reg(f'x{i}') == 0 for i in range(1, 31)), 'stale initial GPR'
                 assert gdb.command('Qqemu.PhyMemMode:1') == 'OK'
-                assert gdb.word(ks['ROOT_TASK']) == 1
+                assert gdb.word(ks['SCHEDULER'] - KERNEL_OFFSET) == 1
                 assert gdb.command('Qqemu.PhyMemMode:0') == 'OK'
+                # The user runtime, rather than the kernel, installs its ELF-owned stack.
+                assert gdb.command('s').startswith(('T05', 'S05'))
+                assert gdb.command('s').startswith(('T05', 'S05'))
+                assert gdb.reg('sp') == STACK_END
+                gdb.write_reg('pc', us['_start'])
+                mapping = pages(gdb)
+                def user_word(va):
+                    assert gdb.command('Qqemu.PhyMemMode:1') == 'OK'
+                    try:
+                        return gdb.word(mapping[va & -4096][0] + (va & 4095))
+                    finally:
+                        assert gdb.command('Qqemu.PhyMemMode:0') == 'OK'
                 if scenario == 'normal':
                     check_layout(gdb, ks, user, level)
-                    assert gdb.word(us['RESULT']) == 0
-                    gdb.run_to(ks['root_idle'])
-                    assert gdb.word(ks['ROOT_TASK']) == 2
-                    assert gdb.word(us['RESULT']) == 1
-                    assert gdb.word(us['BOOTINFO_ADDRESS']) == BOOTINFO
-                    assert gdb.word(IPC) == 0xfacecafe
+                    assert user_word(us['RESULT']) == 0
+                    for _ in range(10):
+                        gdb.run_to(ks['root_idle'])
+                        if gdb.word(ks['SCHEDULER']) == 2:
+                            break
+                        assert gdb.word(ks['SCHEDULER']) == 5, 'unexpected root stop'
+                        assert gdb.command('s').startswith(('T05', 'S05'))
+                    assert gdb.word(ks['SCHEDULER']) == 2
+                    assert user_word(us['RESULT']) == 1
+                    assert user_word(us['BOOTINFO_ADDRESS']) == BOOTINFO
+                    assert user_word(IPC) == 0xfacecafe
                 elif scenario == 'invalid-bootinfo':
                     # Corrupt the version through the debugger, before the
                     # runtime constructs its safe BootInfo view.
                     write(gdb, BOOTINFO + 8, struct.pack('<Q', 999))
                     gdb.run_to(ks['root_idle'])
-                    assert gdb.word(ks['ROOT_TASK']) == 2
-                    assert gdb.word(us['RESULT']) == 0
-                    assert gdb.word(us['BOOTINFO_ADDRESS']) == 0, 'application entered with invalid ABI'
+                    assert gdb.word(ks['SCHEDULER']) == 2
+                    assert user_word(us['RESULT']) == 0
+                    assert user_word(us['BOOTINFO_ADDRESS']) == 0, 'application entered with invalid ABI'
                     assert proc.poll() is None
                 elif scenario == 'svc-registers':
                     # Patch a scratch instruction at the user entry through the
@@ -132,7 +155,7 @@ def run(qemu, kernel, user, level, scenario, el2=True):
                     # host debugger. Access checks are executed by the EL0 CPU.
                     target, instruction, ec, permission = {
                         'kernel-read': (ks['_start'], 0xf9400001, 0x24, True),
-                        'uart-read': (0x09000000, 0xf9400001, 0x24, True),
+                        'uart-read': (0x09000000, 0xf9400001, 0x24, False),
                         'text-write': (us['_start'], 0xf9000001, 0x24, True),
                         'bootinfo-write': (BOOTINFO, 0xf9000001, 0x24, True),
                         'guard-read': (STACK_START - 4096, 0xf9400001, 0x24, False),
@@ -142,14 +165,14 @@ def run(qemu, kernel, user, level, scenario, el2=True):
                     write(gdb, us['_start'], struct.pack('<I', instruction))
                     gdb.write_reg('x0', target)
                     gdb.run_to(ks['root_idle'])
-                    assert gdb.word(ks['ROOT_TASK']) == 3, 'faulting root task not stopped'
+                    assert gdb.word(ks['SCHEDULER']) == 3, 'faulting root task not stopped'
                     record = struct.unpack('<38Q', gdb.memory(ks['LAST_FAULT'], 304))
                     assert record[:2] == (0, 2), 'not a lower-EL synchronous fault'
                     assert record[2] >> 26 == ec and record[3] == target
                     assert record[2] & 63 == 15 if permission else 4 <= record[2] & 63 <= 7
                     assert record[37] & 15 == 0
                     assert proc.poll() is None, 'user fault shut down the kernel'
-                text = output.read_bytes()
+                text = kernel_output(output.read_bytes())
                 if level == 'off':
                     assert not text, text
                 elif scenario == 'normal':

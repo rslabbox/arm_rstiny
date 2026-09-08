@@ -1,5 +1,12 @@
 [workspace]
-members = ["kernel", "projects/apps/fatboot", "projects/libs/abi", "projects/libs/user", "projects/libs/runtime", "projects/libs/runtime-macros"]
+members = [
+    "kernel",
+    "projects/apps/fatboot",
+    "projects/libs/abi",
+    "projects/libs/user",
+    "projects/libs/runtime",
+    "projects/libs/runtime-macros",
+]
 default-members = ["kernel"]
 resolver = "3"
 

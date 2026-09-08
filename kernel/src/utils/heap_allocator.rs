@@ -14,8 +14,8 @@ pub fn init_heap() {
         let heap_end = &__heap_end as *const u8 as usize;
         let heap_size = heap_end - heap_start;
 
-        assert!(heap_start >= crate::config::RAM_START);
-        assert!(heap_end <= crate::config::RAM_END);
+        assert!(crate::config::virt_to_phys(heap_start) >= crate::config::RAM_START);
+        assert!(crate::config::virt_to_phys(heap_end) <= crate::config::RAM_END);
         HEAP_ALLOCATOR.lock().init(heap_start as *mut u8, heap_size);
     }
 }

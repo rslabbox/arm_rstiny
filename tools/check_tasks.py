@@ -1,0 +1,263 @@
+#!/usr/bin/env python3
+"""Exercise task/memory syscalls on real EL0 CPUs, including timer-only workers."""
+import argparse
+from pathlib import Path
+import struct
+import subprocess
+import tempfile
+from check_kernel import Gdb, build, boot_image
+from check_fatboot import write
+
+ENTRY, BUFFER = 0x400000, 0x600000
+CODE, DATA, STACK = 0x1000000, 0x1100000, 0x1200000
+PAGE = 4096
+
+
+def mov(register, value):
+    instructions = [0xd2800000 | ((value & 65535) << 5) | register]
+    for shift in range(1, 4):
+        part = (value >> (16 * shift)) & 65535
+        if part:
+            instructions.append(0xf2800000 | (shift << 21) | (part << 5) | register)
+    return instructions
+
+
+def run(qemu, kernel, el2):
+    with tempfile.TemporaryDirectory(prefix='rstiny-tasks-') as temp:
+        temp = Path(temp)
+        serial = temp / 'serial'
+        with (temp / 'errors').open('wb') as errors:
+            proc = subprocess.Popen([
+                qemu, '-machine', f"virt,gic-version=3,virtualization={'on' if el2 else 'off'}",
+                '-cpu', 'cortex-a72', '-smp', '1', '-m', '128M', '-display', 'none',
+                '-monitor', 'none', '-serial', f'file:{serial}', '-nic', 'none',
+                '-kernel', str(boot_image(kernel, el2)), '-S', '-gdb', f'unix:{temp / "gdb"},server=on,wait=off',
+            ], stderr=errors, stdout=subprocess.DEVNULL)
+            gdb = None
+            try:
+                gdb = Gdb(temp / 'gdb', proc)
+                gdb.run_to(ENTRY)
+                assert gdb.reg('cpsr') & 0x8f == 0, 'EL0 IRQs must be enabled'
+                # Verify the actual GICv3 hardware state before exercising scheduling.
+                assert gdb.command('Qqemu.PhyMemMode:1') == 'OK'
+                def mmio32(address):
+                    return int.from_bytes(gdb.memory(address, 4), 'little')
+                assert (mmio32(0x0800ffe8) >> 4) & 15 == 3, 'expected GICv3'
+                assert mmio32(0x08000000) & 0x12 == 0x12, 'Group 1/affinity routing disabled'
+                assert mmio32(0x080a0014) & 6 == 0, 'redistributor asleep'
+                assert mmio32(0x080b0080) & (1 << 30), 'timer must use Group 1'
+                assert mmio32(0x080b0100) == 1 << 30, 'only the timer PPI should be enabled'
+                assert mmio32(0x080b0c04) & (3 << 28) == 0, 'timer must be level-triggered'
+                assert gdb.command('Qqemu.PhyMemMode:0') == 'OK'
+                write(gdb, ENTRY, struct.pack('<I', 0xd4000001))
+
+                def call(number, *args, status=0):
+                    for i in range(5):
+                        gdb.write_reg(f'x{i}', args[i] if i < len(args) else 0)
+                    gdb.write_reg('x8', number)
+                    gdb.write_reg('pc', ENTRY)
+                    gdb.run_to(ENTRY + 4)
+                    actual = gdb.reg('x0')
+                    assert actual == status, (number, args, actual, status)
+                    assert gdb.reg('cpsr') & 15 == 0
+                    return gdb.reg('x1')
+
+                root = call(3)
+                baseline = call(17)
+                child = call(4)
+                assert call(17) == baseline - 3
+                call(12, root + 32, DATA, PAGE, 3, status=7) # stale/forged handle
+                for address, length, rights in [(0, PAGE, 3), (DATA + 1, PAGE, 3),
+                                                (DATA, 0, 3), (DATA, PAGE, 7),
+                                                (0x8000000, PAGE, 3), (2**64-4096, PAGE, 3)]:
+                    call(12, child, address, length, rights, status=2)
+                call(12, child, DATA, 2 * PAGE, 3)
+                after_map = call(17)
+                call(12, child, DATA, PAGE, 3, status=5)
+                assert call(17) == after_map
+                payload = bytes(range(32))
+                write(gdb, BUFFER, payload)
+                call(15, child, DATA + PAGE - 16, BUFFER, len(payload))
+                call(16, child, DATA + PAGE - 16, BUFFER + 128, len(payload))
+                assert gdb.memory(BUFFER + 128, len(payload)) == payload
+                call(14, child, DATA + PAGE, PAGE, 1)
+                write(gdb, BUFFER, bytes([255]) * 32)
+                call(15, child, DATA + PAGE - 16, BUFFER, 32, status=6)
+                call(16, child, DATA + PAGE - 16, BUFFER + 128, 32)
+                assert gdb.memory(BUFFER + 128, 32) == payload, 'partial failed write'
+                call(15, child, DATA, 0x40000000, 8, status=2) # invalid source pointer
+                call(16, child, DATA, 0x40000000, 8, status=2) # invalid destination
+                call(15, child, DATA, BUFFER, 4097, status=2)
+                call(13, child, DATA, 3 * PAGE, status=4)
+                call(13, root, 0x601000, PAGE, status=6) # lifetime-pinned BootInfo
+                call(14, root, 0x601000, PAGE, 3, status=6)
+                call(13, child, DATA, 2 * PAGE)
+                call(12, child, DATA, PAGE, 3)
+                call(16, child, DATA, BUFFER, 64)
+                assert gdb.memory(BUFFER, 64) == bytes(64), 'recycled frame leaked data'
+                call(8, child)
+                assert call(17) == baseline, 'destroy leaked page tables or frames'
+                call(9, child, status=7)
+
+                # Allocation failure must release all staging frames and tables.
+                large = call(4)
+                other = call(4)
+                filler = call(4)
+                call(12, large, CODE, 1024 * PAGE, 3)
+                call(12, filler, CODE, 512 * PAGE, 3)
+                before_failure = call(17)
+                call(12, other, CODE, 1024 * PAGE, 3, status=3)
+                assert call(17) == before_failure, 'failed mapping leaked frames'
+                call(16, other, CODE, BUFFER, 8, status=4)
+                call(12, other, CODE, 1025 * PAGE, 3, status=3)
+                call(8, large)
+                call(8, other)
+                call(8, filler)
+                assert call(17) == baseline
+
+                handles = [call(4) for _ in range(31)]
+                before_failure = call(17)
+                call(4, status=3)
+                assert call(17) == before_failure, 'task limit leaked root tables'
+                for handle in handles:
+                    call(8, handle)
+                assert call(17) == baseline
+
+                def task(instructions):
+                    handle = call(4)
+                    call(12, handle, CODE, PAGE, 3)
+                    call(12, handle, DATA, PAGE, 3)
+                    call(12, handle, STACK, PAGE, 3)
+                    code = struct.pack('<' + 'I' * len(instructions), *instructions)
+                    write(gdb, BUFFER, code)
+                    call(15, handle, CODE, BUFFER, len(code))
+                    call(14, handle, CODE, PAGE, 5)
+                    return handle
+
+                # No SVC/yield in either worker: only timer IRQs can regain root.
+                spin = mov(9, DATA) + [0xf940012a, 0x9100054a, 0xf900012a, 0x17fffffd]
+                a, b = task(spin), task(spin)
+                call(5, a, DATA, STACK + PAGE, 0, status=6) # NX entry rejected
+                call(5, a, CODE, STACK + PAGE - 1, 0, status=2)
+                call(7, a, status=8)
+                call(5, a, CODE, STACK + PAGE, 0)
+                call(5, b, CODE, STACK + PAGE, 0)
+                call(12, a, DATA + PAGE, PAGE, 3, status=9) # cannot edit runnable child
+                call(11, 30)
+                call(6, a)
+                call(6, b)
+                call(16, a, DATA, BUFFER, 8)
+                count_a = gdb.word(BUFFER)
+                call(16, b, DATA, BUFFER, 8)
+                count_b = gdb.word(BUFFER)
+                assert count_a > 0 and count_b > 0, 'timer preemption did not run both tasks'
+                write(gdb, BUFFER, struct.pack('<Q', 0xfeed))
+                call(15, a, DATA, BUFFER, 8)
+                call(16, b, DATA, BUFFER, 8)
+                assert gdb.word(BUFFER) == count_b, 'address spaces alias'
+                before = call(18)
+                call(11, 25) # all other tasks suspended: timer must wake an idle CPU
+                assert call(18) - before >= 25
+                call(7, a)
+                call(11, 20)
+                call(6, a)
+                call(16, a, DATA, BUFFER, 8)
+                assert gdb.word(BUFFER) not in (0, 0xfeed), 'resumed context did not continue'
+                call(8, a)
+                call(7, b)
+                call(8, b) # remove a ready task from the queue before freeing its space
+                assert call(17) == baseline
+
+                # Blocking wait, exit/reap, parent ownership and user fault isolation.
+                sleeper = task(mov(0, 25) + mov(8, 11) + [0xd4000001] +
+                               mov(0, 42) + mov(8, 10) + [0xd4000001, 0x14000000])
+                call(5, sleeper, CODE, STACK + PAGE, 0)
+                assert call(19, sleeper) == 42
+                assert call(9, sleeper) == 6
+                assert call(17) == baseline, 'exit must release address space before reap'
+                call(8, sleeper)
+                # A paused sleeper must retain its deadline across resume.
+                sleeper = task(mov(0, 100) + mov(8, 11) + [0xd4000001] +
+                               mov(0, 43) + mov(8, 10) + [0xd4000001])
+                before = call(18)
+                call(5, sleeper, CODE, STACK + PAGE, 0)
+                call(6, sleeper)
+                assert call(9, sleeper) == 2
+                call(7, sleeper)
+                assert call(19, sleeper) == 43
+                assert call(18) - before >= 100
+                call(8, sleeper)
+
+                # A suspended waiter must resume waiting rather than return a
+                # fabricated result. Its unstarted child is adopted on destroy.
+                waiter_code = mov(8, 4) + [0xd4000001] + mov(9, DATA) + [0xf9000121, 0xaa0103e0]
+                waiter_code += mov(8, 19) + [0xd4000001, 0xaa0103e0] + mov(8, 10) + [0xd4000001]
+                waiter = task(waiter_code)
+                call(5, waiter, CODE, STACK + PAGE, 0)
+                for _ in range(10):
+                    if call(9, waiter) == 7:
+                        break
+                    call(11, 10)
+                assert call(9, waiter) == 7
+                call(6, waiter)
+                call(16, waiter, DATA, BUFFER, 8)
+                adopted = gdb.word(BUFFER)
+                call(9, adopted, status=6)
+                call(7, waiter)
+                assert call(9, waiter) == 7
+                call(8, waiter)
+                assert call(9, adopted) == 0
+                call(8, adopted)
+                unauthorized = task(mov(0, root) + mov(8, 9) + [0xd4000001] + mov(8, 10) + [0xd4000001])
+                call(5, unauthorized, CODE, STACK + PAGE, 0)
+                assert call(19, unauthorized) == 6, 'child gained parent authority'
+                call(8, unauthorized)
+                fault = task(mov(9, 0) + [0xf9400120])
+                call(5, fault, CODE, STACK + PAGE, 0)
+                assert call(19, fault) >> 26 == 0x24
+                assert call(9, fault) == 3
+                assert call(17) == baseline, 'faulted task retained user memory'
+                call(8, fault)
+                for instruction, ec in [(0xd51be220, 0x18), (0x9e670000, 0x07)]:
+                    # MSR CNTP_CTL_EL0 and FMOV d0,x0 must trap, not defeat
+                    # preemption or use an unsaved FP register bank.
+                    denied = task([instruction, 0x14000000])
+                    call(5, denied, CODE, STACK + PAGE, 0)
+                    assert call(19, denied) >> 26 == ec
+                    assert call(9, denied) == 3
+                    call(8, denied)
+                replacement = call(4)
+                assert replacement != fault
+                call(9, fault, status=7)
+                call(8, replacement)
+                assert call(17) == baseline
+                assert proc.poll() is None
+            except Exception:
+                print(serial.read_text(errors='replace') if serial.exists() else '', flush=True)
+                raise
+            finally:
+                if gdb:
+                    gdb.sock.close()
+                proc.terminate()
+                try:
+                    proc.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait()
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--qemu', default='qemu-system-aarch64')
+    args = parser.parse_args()
+    for mode in ('debug', 'release'):
+        for level in ('off', 'info'):
+            kernel = build(mode, level, False)
+            for el2 in (True, False):
+                print(f'CHECK memory/tasks {mode} LOG={level} EL{2 if el2 else 1}', flush=True)
+                run(args.qemu, kernel, el2)
+    print('PASS: memory transactions/recycling; task ownership/lifecycle; timer preemption; idle wakeup; wait/fault isolation.', flush=True)
+
+
+if __name__ == '__main__':
+    main()

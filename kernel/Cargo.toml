@@ -17,6 +17,7 @@ kernel-test = []
 log = "0.4"
 bitflags = "2.9.1"
 aarch64-cpu = "11.2.0"
+arm-gic-driver = "0.17.13"
 memory_addr = "0.4"
 linked_list_allocator = "0.10"
 tock-registers = "0.10.1"
