@@ -5,7 +5,6 @@ mod timer;
 mod console;
 use core::arch::asm;
 use core::panic::PanicInfo;
-pub use timer::current_ticks;
 
 const PSCI_SYSTEM_OFF: u32 = 0x8400_0008;
 

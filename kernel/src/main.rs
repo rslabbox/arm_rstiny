@@ -13,7 +13,6 @@ use utils::logging;
 
 mod arch;
 mod config;
-mod drivers;
 mod test;
 mod user;
 mod utils;
