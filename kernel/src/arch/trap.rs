@@ -1,60 +1,58 @@
-use core::arch::global_asm;
-
-use aarch64_cpu::registers::{ESR_EL1, VBAR_EL1};
-use aarch64_cpu::registers::{Readable, Writeable};
+use aarch64_cpu::registers::{ESR_EL1, FAR_EL1, Readable};
+use core::{arch::global_asm, ptr::addr_of_mut};
 
 use super::TrapFrame;
 
 global_asm!(include_str!("trap.S"));
-unsafe extern "C" {
-    unsafe fn exception_vector_base();
-}
-pub fn init() {
-    VBAR_EL1.set(exception_vector_base as *const () as usize as _);
+
+#[repr(C)]
+struct FaultRecord {
+    kind: u64,
+    source: u64,
+    esr: u64,
+    far: u64,
+    frame: TrapFrame,
 }
 
-#[repr(u8)]
-#[derive(Debug)]
-#[allow(dead_code)]
-enum TrapKind {
-    Synchronous = 0,
-    Irq = 1,
-    Fiq = 2,
-    SError = 3,
-}
-
-#[repr(u8)]
-#[derive(Debug)]
-#[allow(dead_code)]
-enum TrapSource {
-    CurrentSpEl0 = 0,
-    CurrentSpElx = 1,
-    LowerAArch64 = 2,
-    LowerAArch32 = 3,
-}
+// Written before formatting, so silent and failed-UART builds remain debuggable.
+#[unsafe(no_mangle)]
+static mut LAST_FAULT: FaultRecord = FaultRecord {
+    kind: 0,
+    source: 0,
+    esr: 0,
+    far: 0,
+    frame: TrapFrame {
+        r: [0; 31],
+        usp: 0,
+        elr: 0,
+        spsr: 0,
+    },
+};
 
 #[unsafe(no_mangle)]
-fn invalid_exception(tf: &mut TrapFrame, kind: TrapKind, source: TrapSource) {
-    panic!(
-        "Invalid exception {:?} from {:?}:\n{:#x?}",
-        kind, source, tf
+extern "C" fn fatal_exception(frame: &TrapFrame, kind: u64, source: u64) -> ! {
+    let esr = ESR_EL1.get();
+    let far = FAR_EL1.get();
+    unsafe {
+        addr_of_mut!(LAST_FAULT).write_volatile(FaultRecord {
+            kind,
+            source,
+            esr,
+            far,
+            frame: *frame,
+        });
+        crate::set_boot_state(0xe1);
+    }
+    // source 0/1 = current EL; 2/3 = lower EL. User-fault handling is not implemented yet.
+    // FAR is meaningful only for exception classes/ISS which define it.
+    log::error!(
+        "fatal exception: kind={} source={} ESR={:#x} FAR={:#x} PC={:#x} SPSR={:#x}",
+        kind,
+        source,
+        esr,
+        far,
+        frame.elr,
+        frame.spsr
     );
-}
-
-#[unsafe(no_mangle)]
-fn handle_sync_exception(tf: &mut TrapFrame) {
-    let esr = ESR_EL1.extract();
-    trace!(
-        "Trap @ {:#x}: ESR = {:#x} (EC {:#08b}, ISS {:#x})\n{:#x?}",
-        tf.elr,
-        esr.get(),
-        esr.read(ESR_EL1::EC),
-        esr.read(ESR_EL1::ISS),
-        tf
-    );
-}
-
-#[unsafe(no_mangle)]
-fn handle_irq_exception(_tf: &mut TrapFrame) {
-    trace!("IRQ");
+    crate::utils::halt()
 }

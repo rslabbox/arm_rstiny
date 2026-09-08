@@ -1,143 +1,125 @@
-use aarch64_cpu::{asm, asm::barrier, registers::*};
+//! Fixed, single-core QEMU virt boot with page-granular identity mappings.
+//! The low identity layout is temporary; Userspace support must introduce a user TTBR0 layout.
+use aarch64_cpu::{asm::barrier, registers::*};
+use core::arch::global_asm;
+use core::ptr::{addr_of, addr_of_mut};
 use memory_addr::PhysAddr;
-use aarch64_cpu::registers::{ReadWriteable, Readable, Writeable};
 
-use crate::arch::PageTableEntry;
-use crate::arch::instructions;
-use crate::config::BOOT_KERNEL_STACK_SIZE;
-use crate::utils::heap_allocator::MemFlags;
+use super::PageTableEntry;
+use crate::config::{MemFlags, PAGE_SIZE, RAM_START};
 
-#[unsafe(link_section = ".bss.stack")]
-static mut BOOT_STACK: [u8; BOOT_KERNEL_STACK_SIZE] = [0; BOOT_KERNEL_STACK_SIZE];
+global_asm!(include_str!("boot.S"));
 
-#[unsafe(link_section = ".data.boot_page_table")]
-static mut BOOT_PT_L0: [PageTableEntry; 512] = [PageTableEntry::empty(); 512];
+#[derive(Clone, Copy)]
+#[repr(C, align(4096))]
+struct Table([PageTableEntry; 512]);
+impl Table {
+    const EMPTY: Self = Self([PageTableEntry::empty(); 512]);
+}
 
-#[unsafe(link_section = ".data.boot_page_table")]
-static mut BOOT_PT_L1: [PageTableEntry; 512] = [PageTableEntry::empty(); 512];
+static mut ROOT: Table = Table::EMPTY;
+static mut RAM_L1: Table = Table::EMPTY;
+static mut RAM_L2: Table = Table::EMPTY;
+static mut RAM_L3: [Table; 16] = [Table::EMPTY; 16];
+static mut DEVICE_L2: Table = Table::EMPTY;
+static mut DEVICE_L3: Table = Table::EMPTY;
 
-unsafe fn switch_to_el1() {
-    SPSel.write(SPSel::SP::ELx);
-    let current_el = CurrentEL.read(CurrentEL::EL);
-    if current_el >= 2 {
-        if current_el == 3 {
-            // Set EL2 to 64bit and enable the HVC instruction.
-            SCR_EL3.write(
-                SCR_EL3::NS::NonSecure + SCR_EL3::HCE::HvcEnabled + SCR_EL3::RW::NextELIsAarch64,
+unsafe extern "C" {
+    static skernel: u8;
+    static etext: u8;
+    static erodata: u8;
+    static ekernel: u8;
+    static stack_guard: u8;
+}
+
+// These functions run with the MMU off and interrupts masked. All tables have
+// exclusive boot-time ownership; use raw pointers instead of static-mut refs.
+unsafe fn set(table: *mut Table, index: usize, entry: PageTableEntry) {
+    unsafe {
+        addr_of_mut!((*table).0)
+            .cast::<PageTableEntry>()
+            .add(index)
+            .write(entry)
+    };
+}
+fn table_entry(table: *const Table) -> PageTableEntry {
+    PageTableEntry::new_table(PhysAddr::from_usize(table as usize))
+}
+
+unsafe fn init_page_tables() {
+    unsafe {
+        set(addr_of_mut!(ROOT), 0, table_entry(addr_of!(RAM_L1)));
+        set(addr_of_mut!(RAM_L1), 1, table_entry(addr_of!(RAM_L2)));
+        let tables = addr_of_mut!(RAM_L3).cast::<Table>();
+        let start = addr_of!(skernel) as usize;
+        let end = addr_of!(ekernel) as usize;
+        for va in (start..end).step_by(PAGE_SIZE) {
+            if va == addr_of!(stack_guard) as usize {
+                continue;
+            }
+            let l2 = (va - RAM_START) >> 21;
+            assert!(l2 < 16);
+            let l3 = tables.add(l2);
+            set(addr_of_mut!(RAM_L2), l2, table_entry(l3));
+            let flags = if va < addr_of!(etext) as usize {
+                MemFlags::READ | MemFlags::EXECUTE
+            } else if va < addr_of!(erodata) as usize {
+                MemFlags::READ
+            } else {
+                MemFlags::READ | MemFlags::WRITE
+            };
+            set(
+                l3,
+                (va >> 12) & 511,
+                PageTableEntry::new_page(PhysAddr::from_usize(va), flags, false),
             );
-            // Set the return address and exception level.
-            SPSR_EL3.write(
-                SPSR_EL3::M::EL1h
-                    + SPSR_EL3::D::Masked
-                    + SPSR_EL3::A::Masked
-                    + SPSR_EL3::I::Masked
-                    + SPSR_EL3::F::Masked,
-            );
-            ELR_EL3.set(LR.get());
         }
-        // Disable EL1 timer traps and the timer offset.
-        CNTHCTL_EL2.modify(CNTHCTL_EL2::EL1PCEN::SET + CNTHCTL_EL2::EL1PCTEN::SET);
-        CNTVOFF_EL2.set(0);
-        // Set EL1 to 64bit.
-        HCR_EL2.write(HCR_EL2::RW::EL1IsAarch64);
-        // Set the return address and exception level.
-        SPSR_EL2.write(
-            SPSR_EL2::M::EL1h
-                + SPSR_EL2::D::Masked
-                + SPSR_EL2::A::Masked
-                + SPSR_EL2::I::Masked
-                + SPSR_EL2::F::Masked,
-        );
-        #[allow(static_mut_refs)]
-        SP_EL1.set(unsafe { BOOT_STACK.as_ptr_range().end } as u64);
-        ELR_EL2.set(LR.get());
-        asm::eret();
+        {
+            // Keep UART mapped even with LOG=off for the panic console.
+            let va = crate::config::PL011_UART_BASE;
+            set(addr_of_mut!(RAM_L1), 0, table_entry(addr_of!(DEVICE_L2)));
+            set(
+                addr_of_mut!(DEVICE_L2),
+                (va >> 21) & 511,
+                table_entry(addr_of!(DEVICE_L3)),
+            );
+            set(
+                addr_of_mut!(DEVICE_L3),
+                (va >> 12) & 511,
+                PageTableEntry::new_page(
+                    PhysAddr::from_usize(va),
+                    MemFlags::READ | MemFlags::WRITE | MemFlags::DEVICE,
+                    false,
+                ),
+            );
+        }
     }
 }
 
-unsafe fn init_mmu() {
-    // Device-nGnRE memory
-    let attr0 = MAIR_EL1::Attr0_Device::nonGathering_nonReordering_EarlyWriteAck;
-    // Normal memory
-    let attr1 = MAIR_EL1::Attr1_Normal_Inner::WriteBack_NonTransient_ReadWriteAlloc
-        + MAIR_EL1::Attr1_Normal_Outer::WriteBack_NonTransient_ReadWriteAlloc;
-    MAIR_EL1.write(attr0 + attr1); // 0xff_04
-
-    // Enable TTBR0 and TTBR1 walks, page size = 4K, vaddr size = 48 bits, paddr size = 40 bits.
-    let tcr_flags0 = TCR_EL1::EPD0::EnableTTBR0Walks
-        + TCR_EL1::TG0::KiB_4
-        + TCR_EL1::SH0::Inner
-        + TCR_EL1::ORGN0::WriteBack_ReadAlloc_WriteAlloc_Cacheable
-        + TCR_EL1::IRGN0::WriteBack_ReadAlloc_WriteAlloc_Cacheable
-        + TCR_EL1::T0SZ.val(16);
-    let tcr_flags1 = TCR_EL1::EPD1::EnableTTBR1Walks
-        + TCR_EL1::TG1::KiB_4
-        + TCR_EL1::SH1::Inner
-        + TCR_EL1::ORGN1::WriteBack_ReadAlloc_WriteAlloc_Cacheable
-        + TCR_EL1::IRGN1::WriteBack_ReadAlloc_WriteAlloc_Cacheable
-        + TCR_EL1::T1SZ.val(16);
-    TCR_EL1.write(TCR_EL1::IPS::Bits_40 + tcr_flags0 + tcr_flags1);
-    barrier::isb(barrier::SY);
-
-    // Set both TTBR0 and TTBR1
-    #[allow(static_mut_refs)]
-    let root_paddr = PhysAddr::from_usize(unsafe { BOOT_PT_L0.as_ptr() } as _).as_usize() as _;
-    TTBR0_EL1.set(root_paddr);
-    TTBR1_EL1.set(root_paddr);
-
-    // Flush TLB
-    instructions::flush_tlb_all();
-
-    // Enable the MMU and turn on I-cache and D-cache
-    SCTLR_EL1.modify(SCTLR_EL1::M::Enable + SCTLR_EL1::C::Cacheable + SCTLR_EL1::I::Cacheable);
+unsafe fn enable_mmu() {
+    MAIR_EL1.set(0xff04); // Attr0 Device-nGnRE; Attr1 normal WB/WA.
+    // 48-bit VA, 4 KiB granule, inner-shareable WB/WA, 40-bit PA.
+    // Disable TTBR1 walks, avoiding the old high-address identity alias.
+    TCR_EL1.set(
+        16 | (1 << 8) | (1 << 10) | (3 << 12) | (16 << 16) | (1 << 23) | (2 << 30) | (2 << 32),
+    );
+    TTBR0_EL1.set(addr_of!(ROOT) as u64);
+    TTBR1_EL1.set(0);
+    barrier::dsb(barrier::SY);
+    super::instructions::flush_tlb_all();
+    // Known platform reset baseline + MMU, D/I caches, stack alignment and WXN.
+    SCTLR_EL1.set(0x30d0_0800 | 1 | (1 << 2) | (1 << 3) | (1 << 4) | (1 << 12) | (1 << 19));
     barrier::isb(barrier::SY);
 }
 
-#[allow(static_mut_refs)]
-unsafe fn init_boot_page_table() {
-    // 0x0000_0000_0000 ~ 0x0080_0000_0000, table
-    unsafe {
-        BOOT_PT_L0[0] =
-            PageTableEntry::new_table(PhysAddr::from_usize(BOOT_PT_L1.as_ptr() as usize));
-    }
-    // 0x0000_0000_0000..0x0000_4000_0000, 1G block, device memory
-    unsafe {
-        BOOT_PT_L1[0] = PageTableEntry::new_page(
-            PhysAddr::from_usize(0),
-            MemFlags::READ | MemFlags::WRITE | MemFlags::DEVICE,
-            true,
-        );
-    }
-    // 0x0000_4000_0000..0x0000_8000_0000, 1G block, normal memory
-    unsafe {
-        BOOT_PT_L1[1] = PageTableEntry::new_page(
-            PhysAddr::from_usize(0x4000_0000),
-            MemFlags::READ | MemFlags::WRITE | MemFlags::EXECUTE,
-            true,
-        );
-    }
-}
-
-#[unsafe(naked)]
 #[unsafe(no_mangle)]
-#[unsafe(link_section = ".text.boot")]
-unsafe extern "C" fn _start() -> ! {
-    // PC = 0x4008_0000
-    core::arch::naked_asm!("
-        adrp    x8, boot_stack_top
-        mov     sp, x8
-        bl      {switch_to_el1}
-        bl      {init_boot_page_table}
-        bl      {init_mmu}
-
-        ldr     x8, =boot_stack_top
-        mov     sp, x8
-        ldr     x8, ={rust_main}
-        blr     x8
-        b      .",
-        switch_to_el1 = sym switch_to_el1,
-        init_boot_page_table = sym init_boot_page_table,
-        init_mmu = sym init_mmu,
-        rust_main = sym crate::rust_main,
-    )
+extern "C" fn boot_main(entry_el: u64) -> ! {
+    unsafe {
+        crate::BOOT_ENTRY_EL.write_volatile(entry_el);
+        crate::set_boot_state(1);
+        init_page_tables();
+        enable_mmu();
+        crate::set_boot_state(2);
+    }
+    crate::rust_main()
 }

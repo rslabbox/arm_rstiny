@@ -1,0 +1,11 @@
+[workspace]
+members = ["kernel"]
+default-members = ["kernel"]
+resolver = "3"
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+debug = 2

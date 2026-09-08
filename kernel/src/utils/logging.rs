@@ -1,48 +1,22 @@
-use core::fmt::Write;
-use core::fmt::{self, Display};
+//! Standard log facade, configured by LOG at build time (default: info).
+use core::{
+    fmt::{self, Display, Write},
+    sync::atomic::{AtomicBool, Ordering},
+};
 use log::{Level, LevelFilter, Log, Metadata, Record};
 
+static WRITING: AtomicBool = AtomicBool::new(false);
+static READY: AtomicBool = AtomicBool::new(false);
 
-pub struct SimpleLogger;
-
-impl Write for SimpleLogger {
-    fn write_str(&mut self, s: &str) -> fmt::Result {
-        for c in s.chars() {
-            super::console::console_putchar(c as usize);
-        }
-        Ok(())
-    }
-}
-
-// 实现 print! 和 println! 宏
-#[macro_export]
-macro_rules! print {
-    ($($arg:tt)*) => {
-        $crate::logging::_print(format_args!($($arg)*))
-    };
-}
-
-#[macro_export]
-macro_rules! println {
-    () => ($crate::print!("\n"));
-    ($($arg:tt)*) => ($crate::print!("{}\n", format_args!($($arg)*)));
-}
-
-pub fn _print(args: fmt::Arguments) {
-    SimpleLogger.write_fmt(args).unwrap();
-}
-
-pub fn log_init() {
-    static LOGGER: SimpleLogger = SimpleLogger;
-    log::set_logger(&LOGGER).unwrap();
-    log::set_max_level(match option_env!("LOG") {
-        Some("error") => LevelFilter::Error,
-        Some("warn") => LevelFilter::Warn,
-        Some("info") => LevelFilter::Info,
-        Some("debug") => LevelFilter::Debug,
-        Some("trace") => LevelFilter::Trace,
+fn level() -> LevelFilter {
+    match option_env!("LOG").unwrap_or("info") {
+        "error" => LevelFilter::Error,
+        "warn" => LevelFilter::Warn,
+        "info" => LevelFilter::Info,
+        "debug" => LevelFilter::Debug,
+        "trace" => LevelFilter::Trace,
         _ => LevelFilter::Off,
-    });
+    }
 }
 
 #[repr(u8)]
@@ -65,23 +39,22 @@ impl Display for ColorCode {
     }
 }
 
-impl Log for SimpleLogger {
-    fn enabled(&self, _metadata: &Metadata) -> bool {
-        true
+struct Logger;
+impl Log for Logger {
+    fn enabled(&self, metadata: &Metadata<'_>) -> bool {
+        metadata.level() <= log::max_level()
     }
 
-    fn log(&self, record: &Record) {
-        if !self.enabled(record.metadata()) {
+    fn log(&self, record: &Record<'_>) {
+        if !self.enabled(record.metadata())
+            || !READY.load(Ordering::Relaxed)
+            || WRITING
+                .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+                .is_err()
+        {
             return;
         }
-
         let level = record.level();
-        let file = record.file().unwrap_or("none");
-        let line = record.line().unwrap_or(0);
-        let args = record.args();
-        let color_reset = "\u{1B}[0m";
-
-        // 获取对应级别的颜色
         let (level_color, args_color) = match level {
             Level::Error => (ColorCode::BrightRed, ColorCode::Red),
             Level::Warn => (ColorCode::BrightYellow, ColorCode::Yellow),
@@ -89,12 +62,27 @@ impl Log for SimpleLogger {
             Level::Debug => (ColorCode::BrightCyan, ColorCode::Cyan),
             Level::Trace => (ColorCode::BrightBlack, ColorCode::BrightBlack),
         };
-
-        // 彩色输出格式：[级别 文件:行号] 消息
-        println!(
-            "[{level_color}{level}{color_reset} {file}:{line}] {args_color}{args}{color_reset}",
-        );
+        let reset = "\x1b[0m";
+        // Preserve the original colored level and message, without allocation.
+        let _ = super::console::Writer.write_fmt(format_args!(
+            "[{level_color}{level}{reset} {}:{}] {args_color}{}{reset}\n",
+            record.file().unwrap_or("?"),
+            record.line().unwrap_or(0),
+            record.args()
+        ));
+        WRITING.store(false, Ordering::Release);
     }
-
     fn flush(&self) {}
+}
+
+pub fn init() {
+    let _ = log::set_logger(&Logger);
+    READY.store(super::console::init(), Ordering::Relaxed);
+    log::set_max_level(level());
+}
+
+#[cfg(feature = "kernel-test")]
+pub fn panic_with_lock_held() -> ! {
+    WRITING.store(true, Ordering::Relaxed);
+    panic!("Kernel injected panic while logger locked");
 }

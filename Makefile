@@ -1,70 +1,56 @@
-# ARM RSTiny - Rust Bare Metal OS Makefile
+MODE ?= debug
+KERNEL_TEST ?= 0
+LOG ?= info
+TARGET := aarch64-unknown-none-softfloat
+QEMU ?= qemu-system-aarch64
+GDB_PORT ?= 1234
 
-# 项目配置
-PROJECT_NAME = arm_rstiny
-MODE := debug
-TARGET = aarch64-unknown-none-softfloat
-LOG := info
-DISK_IMG := test.img
-
-kernel_elf = target/$(TARGET)/$(MODE)/$(PROJECT_NAME)
-kernel_bin = $(kernel_elf).bin
-kernel_asm = $(kernel_elf)_asm.txt
-
-ifeq ($(MODE), release)
-	MODE_ARG := --release
+ifeq ($(filter $(MODE),debug release),)
+$(error MODE must be debug or release)
+endif
+ifeq ($(filter $(LOG),off error warn info debug trace),)
+$(error LOG must be off, error, warn, info, debug or trace)
+endif
+ifeq ($(filter $(KERNEL_TEST),0 1),)
+$(error KERNEL_TEST must be 0 or 1)
 endif
 
-# QEMU 配置
-QEMU = qemu-system-aarch64
-QEMU_ARGS = -M virt -cpu cortex-a72 -m 4G \
-			-nographic  -kernel $(kernel_bin) \
-			-device virtio-blk-device,drive=test \
-			-drive file=$(DISK_IMG),if=none,id=test,format=raw,cache=none \
-			-device virtio-net-device,netdev=net0 \
-			-netdev user,id=net0
+# Separate log levels and test configurations to avoid reusing stale images.
+BUILD_DIR := target/kernel/$(MODE)-log$(LOG)-test$(KERNEL_TEST)
+KERNEL_ELF := $(BUILD_DIR)/$(TARGET)/$(MODE)/kernel
+KERNEL_BIN := $(KERNEL_ELF).bin
+CARGO_FLAGS := -p kernel --target $(TARGET) --target-dir $(BUILD_DIR) --no-default-features
+ifeq ($(MODE),release)
+CARGO_FLAGS += --release
+endif
+ifeq ($(KERNEL_TEST),1)
+CARGO_FLAGS += --features kernel-test
+endif
 
-# 编译选项
-CARGO_FLAGS = $(MODE_ARG) --target $(TARGET)
-
+# Fixed platform contract; no disks or network backends.
+QEMU_ARGS := -machine virt,gic-version=2,virtualization=on -cpu cortex-a72 \
+	-smp 1 -m 128M -display none -monitor none -serial stdio -nic none \
+	-kernel $(KERNEL_BIN)
 export LOG
 
-.PHONY: all build run clean
-
-# 默认目标
+.PHONY: all build run run-kernel debug check fmt clean
 all: build
 
-# 编译项目
-build: 
-	@echo "Building $(PROJECT_NAME)..."
+build:
 	cargo build $(CARGO_FLAGS)
-	@echo "Build completed: $(kernel_elf)"
-	
-	@echo "Generating $(kernel_bin)..."
-	@rust-objcopy -O binary $(kernel_elf) $(kernel_bin)
+	rust-objcopy -O binary $(KERNEL_ELF) $(KERNEL_BIN)
 
-	@echo "Dump $(kernel_asm)"
-	@rust-objdump -d --print-imm-hex $(kernel_elf) > $(kernel_asm)
-
-# 运行项目
-run: build
-	@echo "Starting $(PROJECT_NAME) in QEMU..."
-	@echo "Press Ctrl+A then X to exit QEMU"
+run run-kernel: build
 	$(QEMU) $(QEMU_ARGS)
 
-# 调试模式运行
 debug: build
-	@echo "Starting $(PROJECT_NAME) in QEMU with GDB support..."
-	@echo "Connect with: gdb-multiarch -ex 'target remote :1234' $(kernel_elf)"
-	@echo "Press Ctrl+A then X to exit QEMU"
-	$(QEMU) $(QEMU_ARGS) -s -S
+	$(QEMU) $(QEMU_ARGS) -gdb tcp::$(GDB_PORT) -S
 
-# 清理编译产物
+check:
+	python3 tools/check_kernel.py --qemu $(QEMU)
+
+fmt:
+	cargo fmt --all --check
+
 clean:
-	@echo "Cleaning build artifacts..."
 	cargo clean
-
-disk_img:
-	@printf "    $(GREEN_C)Creating$(END_C) FAT32 disk image \"$(DISK_IMG)\" ...\n"
-	@dd if=/dev/zero of=$(DISK_IMG) bs=1M count=64
-	@mkfs.fat -F 32 $(DISK_IMG)

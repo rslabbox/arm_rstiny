@@ -1,6 +1,8 @@
 # ARM RSTiny：seL4 风格微内核设计与实施路线
 
-日期：2026-09-08。状态：设计提案，尚未实施。
+日期：2026-09-08。状态：构建基线和内核底座已实施，其余阶段为设计提案。参见 [内核实现与验证记录](kernel-implementation.md)。
+
+本文中的“当前项目”和 `src/` 路径记录的是最初设计时的基线；后续结构已迁移为 `kernel/src/`，现状及运行命令以实现记录和根目录 README 为准。
 
 本文基于当前项目源码，以及 `../seL4` 中实际存在的内核和用户程序。当前项目 HEAD 为 `2c8563c`，参考内核 HEAD 为 `28b8f4c40`；参考目录存在本地修改，本文描述的是查阅时的工作区内容，不能仅凭提交号复现全部参考行为。
 
@@ -12,9 +14,7 @@
 2. **第二步：启动第一个真正运行于 EL0 的 root task。** 参考项目里的名字实际是 `fatboot`，不是 `fastboot`。此时先做最小 fatboot：接收 BootInfo、执行用户代码、通过 SVC 进入内核并返回；不要求马上读取 FAT32。
 3. **后续再把 fatboot 做完整。** 它要创建串口服务、读取磁盘、加载 ELF、创建应用，必须先具备能力管理、地址空间管理、线程调度和 IPC。
 
-内核日志只在显式打开 `kernel-debug` 时工作，是本项目建议采用的规则。这里的 debug 是内核功能开关，不等同于 Cargo 的 dev/release 优化配置。关闭它之后，内核不初始化、不映射、不访问调试 UART；用户态串口服务仍可正常工作。
-
-这比简单执行 `LOG=off` 更严格：普通打印、panic 输出、启动横幅和调试系统调用都必须受同一编译期开关约束。
+内核日志统一由构建时的 `LOG` 控制，默认 `info`，支持 `off/error/warn/info/debug/trace`。`log` 为普通依赖，优先使用标准日志宏；`LOG=off` 时普通日志静默；panic 无条件绕过 LOG 过滤直接打印，UART 映射始终保留。日志等级与 Cargo dev/release 优化配置独立。
 
 ## 2. 复刻范围与首个最终目标
 
@@ -60,7 +60,7 @@ SMP、MCS、虚拟化、动态链接、POSIX、网络栈、磁盘写入与形式
 | `src/arch/trap.S`、`context.rs` | 异常入口与通用寄存器保存恢复 | 用作用户态入口、syscall 和线程切换基础 |
 | `src/arch/trap.rs` | 同步异常及 IRQ 主要打印日志 | 按异常来源与 ESR 分类处理，增加调度和故障路径 |
 | `src/utils/console.rs` | 内核直接访问 PL011 | 缩为编译期可选 debug 输出后端 |
-| `src/utils/logging.rs` | `LOG` 选择日志级别，普通打印绕过级别 | 统一内核 debug 编译期开关 |
+| `src/utils/logging.rs` | `LOG` 选择日志级别，普通打印绕过级别 | 普通输出统一走 LOG，panic 使用独立应急输出 |
 | `src/utils/heap_allocator.rs` | 固定 16 MiB 内核堆，初始化时直接打印 | 早期可保留；后续对象内存改由 Untyped 授权管理 |
 | `src/user.rs` | 在 EL1 调用分配器和文件系统测试 | 更名为内核自测入口；真正用户程序另建 ELF |
 | `src/drivers/`、`src/test/fatfs_perf.rs` | 内核内 VirtIO/FAT 测试路径 | 迁至用户态，内核默认构建去除这些依赖 |
@@ -75,7 +75,7 @@ SMP、MCS、虚拟化、动态链接、POSIX、网络栈、磁盘写入与形式
 - 页表数组必须明确保证 4 KiB 对齐；当前类型本身未表达该约束。启动栈顶部的形成、`adrp` 的对齐假设、BSS 清零范围也应通过链接映射验证。
 - 当前同 EL 与低 EL 同步异常走同一个处理函数，且处理后直接返回。未修复的数据/指令异常可能不断重新触发；必须区分内核致命故障和用户故障。
 - 当前 `current_ticks()` 只读计数器，不代表已经实现定时器中断和抢占。
-- `Cargo.toml` 包名为 `arm-rstiny`，Makefile 查找 `arm_rstiny`；应按实际 Cargo target 明确产物名，不能依赖旧文件。
+- 最初构建脚本存在包名与产物名称不一致的问题；现在 package 与 binary 统一为 `kernel`，构建脚本按该名称生成镜像。
 
 这些是源码审查结果和实施前检查项；本文没有运行当前内核来验证其运行时行为。
 
@@ -105,24 +105,24 @@ SMP、MCS、虚拟化、动态链接、POSIX、网络栈、磁盘写入与形式
 
 内核不需要通用 `open/read/write/fork/exec`；第一版用对象调用和 IPC 组合这些服务。微内核的关键是权限与隔离边界，不能仅通过删除几个驱动文件来达成。
 
-## 5. 总体里程碑
+## 5. 功能依赖与实施顺序
 
 | 阶段 | 可见成果 | 依赖 | 此时不要求 |
 | --- | --- | --- | --- |
-| M0 基线 | 构建、无盘启动、源码边界可复现 | 当前代码 | 新内核功能 |
-| M1 内核底座 | 仅内核启动，debug 可完全关闭，异常可定位 | M0 | 用户程序、文件系统 |
-| M2 首个用户任务 | 最小 fatboot 在 EL0 运行，SVC 往返，访问隔离 | M1 | 从磁盘装载程序 |
-| M3 能力与对象 | fatboot 用 Untyped/CSpace 创建对象及地址空间 | M2 | 通用 IPC 服务 |
-| M4 多线程与抢占 | 多个用户线程/地址空间可独立运行 | M3 | 设备服务 |
-| M5 IPC 与故障 | Call/Recv/Reply、通知、故障监管 | M4 | 磁盘 |
-| M6 用户态串口 | serial_server 输出，内核关闭 debug 仍可用 | M5 | UART 接收中断 |
-| M7 完整 fatboot | 用户态读 FAT32，装载磁盘 ELF 并运行 hello | M6 | 驱动逐个独立进程 |
-| M8 设备中断与拆分 | IRQ 通知，块设备/文件系统可独立服务 | M7 | SMP、网络 |
-| M9 完善与优化 | 生命周期、稳定性、基准、可选后续能力 | M8 | seL4 证明/二进制兼容承诺 |
+| 构建基线 | 构建、无盘启动、源码边界可复现 | 当前代码 | 新内核功能 |
+| 内核底座 | 仅内核启动，debug 可完全关闭，异常可定位 | 构建基线 | 用户程序、文件系统 |
+| 首个用户任务 | 最小 fatboot 在 EL0 运行，SVC 往返，访问隔离 | 内核底座 | 从磁盘装载程序 |
+| 能力与对象 | fatboot 用 Untyped/CSpace 创建对象及地址空间 | 首个用户任务 | 通用 IPC 服务 |
+| 多线程与抢占 | 多个用户线程/地址空间可独立运行 | 能力与对象 | 设备服务 |
+| IPC 与故障 | Call/Recv/Reply、通知、故障监管 | 多线程与抢占 | 磁盘 |
+| 用户态串口 | serial_server 输出，内核设置 LOG=off 仍可用 | IPC 与故障 | UART 接收中断 |
+| 完整 fatboot | 用户态读 FAT32，装载磁盘 ELF 并运行 hello | 用户态串口 | 驱动逐个独立进程 |
+| 设备中断与服务拆分 | IRQ 通知，块设备/文件系统可独立服务 | 完整 fatboot | SMP、网络 |
+| 完善与优化 | 生命周期、稳定性、基准、可选后续能力 | 设备中断与服务拆分 | seL4 证明/二进制兼容承诺 |
 
-M2、M3 是教学式增量，不等于这时已经具备完整 seL4 语义；所有尚未支持的操作应明确返回错误，不能静默绕过权限检查。
+首个用户任务与能力系统应逐步实现，不等于这时已经具备完整 seL4 语义；所有尚未支持的操作应明确返回错误，不能静默绕过权限检查。
 
-## 6. M0：固定可复现基线
+## 6. 固定可复现构建基线
 
 目标：后续每阶段有可比较的构建和运行入口。
 
@@ -134,11 +134,11 @@ M2、M3 是教学式增量，不等于这时已经具备完整 seL4 语义；所
 4. 增加“无磁盘、无网卡”的最小启动目标；内核初始化不触发设备扫描。
 5. 将平台常量、内存属性类型和分配器解耦，避免页表模块依赖堆分配器定义 `MemFlags`。
 
-建议将来提供 `make run-kernel`、`make run-root`、`make run-system` 和 `make check`。这些是待实现的目标，目前不能当作已有命令使用。
+已提供 `make run-kernel` 与 `make check`；`make run-root`、`make run-system` 留待对应功能实现。
 
 验收：从干净构建产物启动成功，构建不读取旧 ELF；无磁盘时不进入 FAT 测试。记录 QEMU 命令、工具链版本、入口 EL 与 RAM 范围。
 
-## 7. M1：只有内核底座与可选 debug 串口
+## 7. 内核底座与可选 debug 串口
 
 ### 7.1 最小启动流程
 
@@ -149,11 +149,11 @@ _start
   → 建立临时映射、设置 MAIR/TCR、启用 MMU
   → 安装异常向量和内核运行期映射
   → 建立受控物理内存区间与启动分配器
-  → 若启用 kernel-debug：初始化调试 UART
+  → 初始化串口，供日志和 panic 输出使用
   → 进入内核 idle/测试入口
 ```
 
-入口 EL 的转换必须分别实现合法路径；首版只声明支持实际验证过的 QEMU 入口。GIC/定时器可以在 M1 建立骨架，在 M4 完成抢占闭环，不能让空 IRQ handler 配合未清中断源的硬件运行。
+入口 EL 的转换必须分别实现合法路径；首版只声明支持实际验证过的 QEMU 入口。GIC/定时器可以在 内核底座 建立骨架，在 多线程与抢占 完成抢占闭环，不能让空 IRQ handler 配合未清中断源的硬件运行。
 
 ### 7.2 必须形成的约束
 
@@ -165,22 +165,21 @@ _start
 
 ### 7.3 日志配置
 
-建议引入 Cargo feature `kernel-debug`，默认关闭。`LOG` 只用于该功能开启后的级别过滤。
+使用构建环境变量 `LOG`，不再增加独立的内核 debug/printing feature。构建脚本校验等级，未设置时默认 info，并在 LOG 改变时触发重新构建。
 
-| 配置 | 内核串口日志 | 内核 DebugPutChar | 用户串口服务 |
-| --- | --- | --- | --- |
-| dev + kernel-debug | 有 | 可用 | 后续可用 |
-| release + kernel-debug | 有 | 可用 | 后续可用 |
-| dev，无 kernel-debug | 无 | 返回 Unsupported | 后续可用 |
-| release，无 kernel-debug | 无 | 返回 Unsupported | 后续可用 |
+| 配置 | 内核串口日志 | 后续用户串口服务 |
+| --- | --- | --- |
+| dev/release + LOG=info | info 及更严重的日志 | 可独立运行 |
+| dev/release + LOG=error | 普通日志仅 error；panic 独立打印 | 可独立运行 |
+| dev/release + LOG=off | 普通日志无；panic 仍打印 | 可独立运行 |
 
-所有 `print!/println!`、`log` 包装、heap 初始化输出、panic 输出统一封装。关闭 feature 时连参数求值和格式化路径一起移除；仅设置最大日志级别不能满足此要求。内核逻辑不能依赖日志表达式中的副作用。
+启动、heap 初始化、自测和异常日志使用标准 `log` 宏，panic 使用独立串口应急输出，不提供绕过过滤的普通打印旁路。LOG=off 时标准日志宏不求值消息参数；不要求日志实现从二进制消失。内核逻辑不能依赖日志表达式中的副作用。
 
-无 debug 的 panic 策略为屏蔽中断并停机，保留可供调试器定位的状态。测试专用的退出/结果报告机制另外受 `kernel-test` 控制，不与串口日志混为一谈。
+所有配置发生致命故障后均记录状态、屏蔽中断并停机；LOG=off 时 panic 仍打印，其他状态可由调试器读取。`kernel-test` 独立控制自测与故障探针，不改变日志配置。未来 DebugPutChar 若实现，也必须服从日志关闭策略。
 
-验收：四种配置均构建；无 debug 的 UART 写入路径和调试映射不存在，QEMU 无内核字符输出。注入一次同步异常，通过 debug 或 GDB 验证异常位置；不能把“没有输出”单独作为启动成功证据。
+验收：dev/release × LOG=off/info 均能启动；关闭日志时正常启动无输出，panic 仍有诊断；其他等级正确过滤。注入异常核对状态和诊断，不能仅凭静默认定启动成功。
 
-## 8. M2：首个 EL0 程序——最小 fatboot
+## 8. 首个用户任务：首个 EL0 程序——最小 fatboot
 
 ### 8.1 首个程序从哪里来
 
@@ -200,9 +199,9 @@ _start
 
 ### 8.3 BootInfo 与初始系统调用
 
-BootInfo 是自有 ABI，不直接照搬 seL4 的内存布局。至少包含：magic、ABI version、结构长度、页大小、支持的功能位、IPC buffer 地址、初始 capability 槽号、可用槽区间、启动模块信息。M3 添加 Untyped 描述数组；以后通过带类型和长度的扩展记录传递 DTB。
+BootInfo 是自有 ABI，不直接照搬 seL4 的内存布局。至少包含：magic、ABI version、结构长度、页大小、支持的功能位、IPC buffer 地址、初始 capability 槽号、可用槽区间、启动模块信息。能力与对象 添加 Untyped 描述数组；以后通过带类型和长度的扩展记录传递 DTB。
 
-M2 可以只发布静态初始对象和有限操作。它使用的初始 TCB/CSpace 是启动特例，尚不能创建任意对象，不能宣称已有完整 rootserver 能力。
+首个用户任务 可以只发布静态初始对象和有限操作。它使用的初始 TCB/CSpace 是启动特例，尚不能创建任意对象，不能宣称已有完整 rootserver 能力。
 
 建议第一批 syscall：`Yield`、`ThreadSuspendSelf`、仅 debug 可用的 `DebugPutChar`。暂停自己后内核运行 idle；用户代码不能通过普通返回地址返回 `rust_main()`。debug 系统调用使用固定字节参数，避免为最早调试接口引入任意用户指针读取。
 
@@ -211,10 +210,10 @@ M2 可以只发布静态初始对象和有限操作。它使用的初始 TCB/CSp
 1. GDB 或异常记录确认用户 PSTATE 为 EL0t，SVC 来源为 Lower AArch64；不要求 EL0 读取可能受限的系统寄存器来证明身份。
 2. SVC 往返后保存的用户寄存器、SP 和 PC 正确。
 3. 用户访问内核页、未映射页、直接访问 UART 均触发用户故障；用户写 text 或执行栈也失败。
-4. 在 M5 故障 IPC 实现前，非法访问使该线程进入 Faulted 并交给 idle；不重新执行故障指令，也不让它破坏内核。
-5. 关闭 debug 后同样进入用户入口；通过 GDB 断点或测试结果页验证。
+4. 在 IPC 与故障 故障 IPC 实现前，非法访问使该线程进入 Faulted 并交给 idle；不重新执行故障指令，也不让它破坏内核。
+5. 设置 LOG=off 后同样进入用户入口；通过 GDB 断点或测试结果页验证。
 
-## 9. M3：Capability、Untyped 与地址空间管理
+## 9. 能力与对象：Capability、Untyped 与地址空间管理
 
 这是从“能运行用户程序”进入“seL4 风格微内核”的关键阶段。
 
@@ -227,9 +226,9 @@ M2 可以只发布静态初始对象和有限操作。它使用的初始 TCB/CSp
 | TCB | 线程寄存器、调度状态、关联资源 | Configure、Read/WriteRegisters、Resume、Suspend |
 | Frame | 普通物理页或设备页 | Map、Unmap |
 | PageTable/VSpace | 用户地址空间及页表结构 | 安装页表、建立/删除映射 |
-| Endpoint | 同步 IPC 队列 | M5 实现 Send/Recv/Call |
-| Notification | 异步位集合通知 | M5 实现 Signal/Wait |
-| IRQControl/IRQHandler | 中断线路的控制权 | M8 实现授权、绑定和 Ack |
+| Endpoint | 同步 IPC 队列 | IPC 与故障 实现 Send/Recv/Call |
+| Notification | 异步位集合通知 | IPC 与故障 实现 Signal/Wait |
+| IRQControl/IRQHandler | 中断线路的控制权 | 设备中断与服务拆分 实现授权、绑定和 Ack |
 
 用户传入 `CapPtr` 槽号，内核在调用者 CSpace 中查找对象、验证类型和权限。CapPtr 不是地址，修改一个整数不会创建权限。第一版允许单层 CNode；多级 guard/radix 查找后置，并标明与 seL4 的差异。
 
@@ -245,7 +244,7 @@ M2 可以只发布静态初始对象和有限操作。它使用的初始 TCB/CSp
 
 ### 9.3 删除与回收
 
-M3 初期可以使用只增分配器，但必须明确限制：暂不支持安全回收时，相关操作返回 Unsupported，不能把仍被引用的内存重新发放。M3 完成需至少支持 Frame、页表和静态线程资源的正常解除引用；Endpoint 等生命周期随对应阶段补齐。
+能力与对象 初期可以使用只增分配器，但必须明确限制：暂不支持安全回收时，相关操作返回 Unsupported，不能把仍被引用的内存重新发放。能力与对象 完成需至少支持 Frame、页表和静态线程资源的正常解除引用；Endpoint 等生命周期随对应阶段补齐。
 
 完整回收顺序：停止使用者 → 移出运行/等待队列 → 删除映射并完成 TLB 失效 → 清理绑定与能力派生引用 → 在确定无可达引用后复用内存。`Delete` 删除一个 capability，不意味着同一对象其他 capability 自动失效；`Revoke` 撤销派生权限，不能只把某个槽清空。
 
@@ -253,9 +252,9 @@ M3 初期可以使用只增分配器，但必须明确限制：暂不支持安�
 
 验收：伪造槽号、错误对象类型、只读权写映射、覆盖已有槽、重复使用物理内存均失败；新页清零；合法 Retype/Map/Unmap 成功；撤销后旧权限不可用，复用后旧句柄不能访问新对象。
 
-## 10. M4：多线程、地址空间切换与抢占
+## 10. 多线程与抢占：多线程、地址空间切换与抢占
 
-TCB 至少保存用户上下文、CSpace/VSpace 引用、优先级、时间片、故障处理端点和队列节点。状态建议为 Runnable、Running、BlockedSend、BlockedRecv、BlockedReply、BlockedNotification、Suspended、Faulted；尚未实现的 IPC 状态在 M5 接入。
+TCB 至少保存用户上下文、CSpace/VSpace 引用、优先级、时间片、故障处理端点和队列节点。状态建议为 Runnable、Running、BlockedSend、BlockedRecv、BlockedReply、BlockedNotification、Suspended、Faulted；尚未实现的 IPC 状态在 IPC 与故障 接入。
 
 调度器维护每优先级 FIFO 就绪队列，选择最高优先级可运行线程；同优先级按时间片轮转，队列为空运行 idle。单核内核临界段先禁止抢占，设置单独的重调度标记，在退出内核时决定切换。
 
@@ -267,7 +266,7 @@ root task 可在自己的授权优先级范围内配置子线程；不能让普�
 
 验收：两个独立 VSpace 在相同 VA 映射不同内容；忙循环线程不主动 Yield，另一同优先级线程仍持续进展；挂起线程不再执行；全部暂停后进入 idle，定时器仍能唤醒内核。
 
-## 11. M5：IPC、Notification 与用户故障
+## 11. IPC 与故障：IPC、Notification 与用户故障
 
 ### 11.1 同步 IPC
 
@@ -289,7 +288,7 @@ Notification 记录 pending 位集合，多次 Signal 可合并；它不是记�
 
 验收：双向 IPC 和重复 Call/Reply 正常；非法消息、无权限端点、重复回复均失败；接收方退出或对象撤销时清理等待者，不永久悬挂；子程序越界访问只使该子程序停止，监管者和另一个程序继续运行。
 
-## 12. M6：独立用户态串口服务
+## 12. 用户态串口：独立用户态串口服务
 
 fatboot 从随启动模块提供的 `serial_server.elf` 创建服务，为其配置独立 CSpace/VSpace、UART Device Frame 和接收 endpoint。UART MMIO 页只映射给串口服务；客户端只持有具备发送/调用权限的 endpoint capability。
 
@@ -297,11 +296,11 @@ fatboot 从随启动模块提供的 `serial_server.elf` 创建服务，为其配
 
 控制台协议定义版本、操作号 `ConsoleWrite`、长度上限、返回状态；客户端按上限分块。消息边界内的输出由服务串行处理，badge 用于识别授权客户端；过长或不支持的请求返回错误。
 
-内核 debug 与用户 UART 共享设备时，不能依赖跨地址空间自旋锁保护。第一版采用“启动期内核 debug → 显式交接 → 用户串口服务”策略：交接后内核不再写该 UART，即使发生 panic 也停机供调试器检查。将来可为持续内核 debug 配第二串口，但不是前置依赖。
+内核 debug 与用户 UART 共享设备时，不能依赖跨地址空间自旋锁保护。第一版采用“启动期内核 debug → 显式交接 → 用户串口服务”策略：交接后普通内核日志不再写该 UART；致命 panic 可在停止正常执行后应急接管输出。引入多核或并发设备访问前，需实现停核协调或提供独立 panic 串口。
 
-验收：无磁盘可以启动串口服务；关闭 kernel-debug 后 fatboot 和测试客户端仍可经 IPC 输出；普通客户端没有 UART 映射且直接访问会故障；非法请求不影响下一条正常请求。用户服务启动失败由监管者记录状态，不能只依靠尚未启动的串口报告。
+验收：无磁盘可以启动串口服务；设置 LOG=off 后 fatboot 和测试客户端仍可经 IPC 输出；普通客户端没有 UART 映射且直接访问会故障；非法请求不影响下一条正常请求。用户服务启动失败由监管者记录状态，不能只依靠尚未启动的串口报告。
 
-## 13. M7：完整 fatboot——磁盘、FAT32、ELF、hello
+## 13. 完整 fatboot：完整 fatboot——磁盘、FAT32、ELF、hello
 
 ### 13.1 用户态 VirtIO 块设备
 
@@ -342,9 +341,9 @@ hello → 完成协议 → fatboot 监管与回收
 
 仅替换磁盘上的 hello 即可改变运行内容，无需重新链接内核或 fatboot。拔掉磁盘、文件缺失、损坏 FAT、截断 ELF、非法段权限分别返回可诊断错误；串口服务继续工作。此阶段跑通后，才算复现本地参考系统的主要可见功能。
 
-## 14. M8：设备 IRQ 与进一步拆服务
+## 14. 设备中断与服务拆分：设备 IRQ 与进一步拆服务
 
-M4 已实现调度 timer IRQ；此阶段实现的是用户设备 IRQ 授权与交付。
+多线程与抢占 已实现调度 timer IRQ；此阶段实现的是用户设备 IRQ 授权与交付。
 
 root task 通过 IRQControl 为目标线路创建 IRQHandler，绑定到驱动 Notification。硬件中断发生后，内核按 GIC/触发类型协议确认并屏蔽或保持受控状态，发送通知；驱动读写设备清除源，再调用 Ack 请求重新开放。EOI、deactivate 和屏蔽的顺序由实际 GIC 版本明确规定。
 
@@ -354,7 +353,7 @@ root task 通过 IRQControl 为目标线路创建 IRQHandler，绑定到驱动 N
 
 验收：块设备由轮询改成通知后读盘正确；重复/合并通知不会丢失完成项；驱动没有 GIC MMIO 权限；服务故障可使等待客户端收到错误或由监管者处置。具备 DMA 的服务重启前须停止设备并确认 DMA 静止，之后才能撤销/复用缓冲区。
 
-## 15. M9：完善、回归与性能
+## 15. 完善与优化：完善、回归与性能
 
 优先补齐对象撤销、线程死亡、IPC 等待者唤醒、进程资源回收和服务重启；再测量 IPC 延迟、上下文切换、映射开销与镜像尺寸。先保证慢路径正确，再引入 fastpath、ASID 优化、批量日志和共享内存性能改进。
 
@@ -377,7 +376,7 @@ src/
     syscall.rs
     ipc.rs
     fault.rs
-  debug/             # feature 约束的日志与轮询 UART
+  debug/             # LOG 控制的日志与轮询 UART
 crates/
   abi/               # no_std 常量、固定布局结构、错误码
   user-runtime/      # CRT、SVC wrappers、基础用户库
@@ -397,7 +396,7 @@ docs/
 
 内核和用户程序分别使用链接脚本。Cargo workspace 不能把当前内核全局 `-Tlink.lds` 自动套给全部用户 ELF；按 package/build script 或独立构建目标选择链接参数。`abi` 不依赖内核内部对象；跨边界结构采用 `repr(C)`、固定宽度类型、显式版本和保留字段，不直接暴露 Rust enum、Vec、引用或内部指针。
 
-syscall 寄存器约定建议统一为 x8 操作号、x0 目标 CapPtr/返回状态、x1…x6 标量参数与结果，其余寄存器默认保存。IPC 具体占用的消息寄存器需在 M5 固化；SVC 包装正确声明寄存器和内存影响。该约定是本项目设计，不是 seL4 ABI。
+syscall 寄存器约定建议统一为 x8 操作号、x0 目标 CapPtr/返回状态、x1…x6 标量参数与结果，其余寄存器默认保存。IPC 具体占用的消息寄存器需在 IPC 与故障 固化；SVC 包装正确声明寄存器和内存影响。该约定是本项目设计，不是 seL4 ABI。
 
 所有 syscall 必须定义非法 capability、权限不足、类型不符、参数错误、内存不足、不支持、对端消失等错误。用户内存访问不能直接把任意地址转为 Rust 引用；实现有边界检查和 fault 恢复能力的复制，或使用已验证、受控映射的 IPC buffer。
 
@@ -405,16 +404,16 @@ syscall 寄存器约定建议统一为 x8 操作号、x0 目标 CapPtr/返回状
 
 | 验证层 | 主要检查 | 适用阶段 |
 | --- | --- | --- |
-| 宿主测试 | Cap 派生/撤销状态机、尺寸溢出、ELF/FAT 解析异常输入 | M3、M7 起 |
-| 构建检查 | 内核无存储/网络依赖、链接布局、debug 消除 | M0 起 |
-| QEMU 集成 | EL0、访问权限、抢占、跨 VSpace、IPC 故障 | M2 起 |
-| 端到端 | 无盘串口、磁盘 hello、替换磁盘程序、失败恢复 | M6 起 |
+| 宿主测试 | Cap 派生/撤销状态机、尺寸溢出、ELF/FAT 解析异常输入 | 能力与对象、完整 fatboot 起 |
+| 构建检查 | 内核无存储/网络依赖、链接布局、debug 消除 | 构建基线 起 |
+| QEMU 集成 | EL0、访问权限、抢占、跨 VSpace、IPC 故障 | 首个用户任务 起 |
+| 端到端 | 无盘串口、磁盘 hello、替换磁盘程序、失败恢复 | 用户态串口 起 |
 
 每个阶段需要正常用例和对应的权限/失败用例；不能只观察一行 hello。调度测试要使用不主动让出的忙循环；能力测试要验证撤销后的旧引用；进程测试要验证同 VA 的不同物理内容。
 
-release 且无 kernel-debug 时，早期用 GDB 断点/结果页验证启动；M6 起用用户串口协议报告结果。测试 harness 设置超时，区分“预期暂停”“panic 停机”“异常死循环”。只有带 kernel-test 的镜像可以提供测试退出通道，正式构建不保留无授权的关机 syscall。
+release 且LOG=off 时，早期用 GDB 断点/结果页验证启动；用户态串口 起用用户串口协议报告结果。测试 harness 设置超时，区分“预期暂停”“panic 停机”“异常死循环”。只有带 kernel-test 的镜像可以提供测试退出通道，正式构建不保留无授权的关机 syscall。
 
-从 M2 开始持续检查：
+从 首个用户任务 开始持续检查：
 
 - 用户不可读写内核页，不可使用未授权 MMIO，不可自行安装页表。
 - 用户可控错误不得成为内核 panic；可恢复的内核用户复制 fault 有明确恢复路径。
@@ -424,11 +423,11 @@ release 且无 kernel-debug 时，早期用 GDB 断点/结果页验证启动；M
 
 ## 18. 第一轮实施任务清单
 
-建议先只提交 M0/M1，再做 M2；不要同一轮把磁盘、调度、IPC 和能力系统全部引入。
+建议先只提交 构建基线/内核底座，再做 首个用户任务；不要同一轮把磁盘、调度、IPC 和能力系统全部引入。
 
 - [ ] 修正构建产物名，提供无盘无网启动目标。
 - [ ] 将 FAT/分配器自测从默认启动路径移出。
-- [ ] 引入 kernel-debug，封住普通打印和 panic 的旁路。
+- [ ] 普通输出统一使用 log 宏和 LOG 等级，panic 保留独立应急输出。
 - [ ] 明确启动 EL、栈、BSS、页表对齐、RAM 管理边界。
 - [ ] 划分内核代码/数据权限，收缩设备映射。
 - [ ] 区分用户与内核异常，补充 ESR/FAR 诊断与终止策略。
@@ -436,7 +435,7 @@ release 且无 kernel-debug 时，早期用 GDB 断点/结果页验证启动；M
 - [ ] 打包最小 fatboot，构造 BootInfo、用户页表和初始 TCB。
 - [ ] 验证 EL0 → SVC → EL0 与用户非法访问。
 
-到这里，才完成“先把内核底座收干净，再启动第一个用户程序”的第一轮目标。其余功能按 M3 → M7 顺序推进。
+到这里，才完成“先把内核底座收干净，再启动第一个用户程序”的第一轮目标。其余功能按 能力与对象 → 完整 fatboot 顺序推进。
 
 ## 19. 参考与核对入口
 
@@ -456,6 +455,6 @@ release 且无 kernel-debug 时，早期用 GDB 断点/结果页验证启动；M
 | fatboot 用户态启动流程 | `../seL4/projects/sel4test/apps/boot/main.c` |
 | 串口服务与协议 | `../seL4/projects/sel4test/apps/serial/main.c`、`apps/include/console.h` |
 
-seL4 本身将 `KernelDebugBuild` 与 `KernelPrinting` 分开配置，后者默认值跟随前者。因此“所有日志只在 kernel-debug 时存在”是这里选择的简化规则，不能反过来当作 seL4 全部配置的描述。
+seL4 本身将 `KernelDebugBuild` 与 `KernelPrinting` 分开配置，后者默认值跟随前者。本项目按需求使用单一 LOG 等级控制日志，未复刻这两个配置；不能反过来当作 seL4 全部配置的描述。
 
 官方资料补充核对了三个概念：首个用户程序是 root task，由启动期提供镜像和 BootInfo；capability 是访问资源的授权；Untyped 是用户态请求构造对象的内存来源。参见 [Rust root task 教程](https://docs.sel4.systems/projects/rust/tutorial/root-task/)、[Capabilities 教程](https://docs.sel4.systems/Tutorials/capabilities.html)、[Untyped 教程](https://docs.sel4.systems/Tutorials/untyped.html)。本文的阶段划分、ABI、日志交接与首版限制均为面向本项目的设计选择。

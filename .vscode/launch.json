@@ -8,7 +8,7 @@
             "name": "ARM RSTiny",
             "type": "cppdbg",
             "request": "launch", 
-            "program": "${workspaceFolder}/target/aarch64-unknown-none-softfloat/debug/arm_rstiny",//可执行文件路径
+            "program": "${workspaceFolder}/target/kernel/debug-loginfo-test0/aarch64-unknown-none-softfloat/debug/kernel",//可执行文件路径
             "args": [],//启动参数,如果需要记录日志可以自己增加参数。因为gdbsever已经有了参数，这里可以不用设置
             "stopAtEntry": true,//会自动停在main,不需要则设置为false
             "cwd": "${workspaceRoot}",

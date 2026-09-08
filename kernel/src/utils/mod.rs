@@ -1,45 +1,28 @@
+mod console;
 pub mod heap_allocator;
 pub mod logging;
-mod timer;
 
-mod console;
-use core::arch::asm;
-use core::panic::PanicInfo;
+use core::{
+    panic::PanicInfo,
+    sync::atomic::{AtomicBool, Ordering},
+};
 
-const PSCI_SYSTEM_OFF: u32 = 0x8400_0008;
+static PANICKING: AtomicBool = AtomicBool::new(false);
 
-fn psci_hvc_call(func: u32, arg0: usize, arg1: usize, arg2: usize) -> usize {
-    let ret;
-    unsafe {
-        asm!(
-            "hvc #0",
-            inlateout("x0") func as usize => ret,
-            in("x1") arg0,
-            in("x2") arg1,
-            in("x3") arg2,
-        )
-    }
-    ret
+#[unsafe(naked)]
+#[unsafe(no_mangle)]
+pub extern "C" fn kernel_halt() -> ! {
+    core::arch::naked_asm!("msr daifset, #0xf", "2:", "wfe", "b 2b");
 }
-
-pub fn shutdown() -> ! {
-    warn!("Shutting down...");
-    psci_hvc_call(PSCI_SYSTEM_OFF, 0, 0, 0);
-    unreachable!("It should shutdown!")
-}
+pub use kernel_halt as halt;
 
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
-    if let Some(location) = info.location() {
-        error!(
-            "Panicked at {}:{} {}",
-            location.file(),
-            location.line(),
-            info.message()
-        );
-    } else {
-        error!("Panicked: {}", info.message());
+    unsafe { core::arch::asm!("msr daifset, #0xf", options(nomem, nostack)) };
+    unsafe { crate::set_boot_state(0xe2) };
+    // A recursive panic must not recurse through formatting indefinitely.
+    if !PANICKING.swap(true, Ordering::Relaxed) {
+        console::panic_print(info);
     }
-
-    shutdown()
+    halt()
 }

@@ -1,63 +1,59 @@
 OUTPUT_ARCH(aarch64)
-
-BASE_ADDRESS = 0x40080000;
-
 ENTRY(_start)
+
+PHDRS
+{
+    text PT_LOAD FLAGS(5);
+    rodata PT_LOAD FLAGS(4);
+    data PT_LOAD FLAGS(6);
+}
+
 SECTIONS
 {
-    . = BASE_ADDRESS;
+    . = 0x40080000;
     skernel = .;
-
     .text : {
         stext = .;
-        *(.text.boot)
+        KEEP(*(.text.boot))
+        KEEP(*(.text.probe))
         *(.text .text.*)
-        . = ALIGN(4K);
+        . = ALIGN(4096);
         etext = .;
-    }
-
+    } :text
     .rodata : {
         srodata = .;
-        *(.rodata .rodata.*)
-        *(.srodata .srodata.*)
-        . = ALIGN(4K);
+        *(.rodata .rodata.* .srodata .srodata.*)
+        . = ALIGN(4096);
         erodata = .;
-    }
-
+    } :rodata
     .data : {
         sdata = .;
-        *(.data.boot_page_table)
-        *(.data .data.*)
-        *(.sdata .sdata.*)
-        *(.got .got.*)
-        . = ALIGN(4K);
+        *(.data .data.* .sdata .sdata.* .got .got.*)
+        . = ALIGN(4096);
         edata = .;
-    }
-
-    .bss : {
-        boot_stack = .;
-        *(.bss.stack)
-        . = ALIGN(4K);
-        boot_stack_top = .;
-
+    } :data
+    .bss (NOLOAD) : {
         sbss = .;
-        *(.bss .bss.*)
-        *(.sbss .sbss.*)
-        . = ALIGN(4K);
+        *(.bss .bss.* .sbss .sbss.*)
+        . = ALIGN(4096);
         ebss = .;
-    }
-
-    . = ALIGN(64);
-    __heap_start = .;
-    . += 0x1000000; /* 16MB */
-    __heap_end = .;
-
-    /* 确保整个镜像结束时也是4K对齐 */
-    . = ALIGN(4096);
-
+    } :data
+    .stack (NOLOAD) : {
+        stack_guard = .;
+        . += 4096;
+        boot_stack = .;
+        . += 16K;
+        boot_stack_top = .;
+    } :data
+    .heap (NOLOAD) : {
+        __heap_start = .;
+        . += 16M;
+        __heap_end = .;
+    } :data
     ekernel = .;
 
-    /DISCARD/ : {
-        *(.eh_frame) *(.eh_frame_hdr)
-    }
+    ASSERT((sbss & 4095) == 0, "BSS alignment")
+    ASSERT((boot_stack_top & 4095) == 0, "stack alignment")
+    ASSERT(ekernel <= 0x42000000, "Kernel page tables cover only first 32 MiB of RAM")
+    /DISCARD/ : { *(.eh_frame .eh_frame_hdr .comment) }
 }

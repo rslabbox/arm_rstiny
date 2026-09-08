@@ -4,7 +4,6 @@
 //! basic allocation, deallocation, boundary condition tests, stress tests, etc.
 
 use alloc::{boxed::Box, format, string::String, vec, vec::Vec};
-use log::{error, info, warn};
 
 /// Test result structure
 #[derive(Debug, Clone)]
@@ -38,7 +37,7 @@ impl AllocatorTestSuite {
 
     /// Run all tests
     pub fn run_all_tests(&mut self) {
-        info!("Start testing allocator...");
+        log::info!("Start testing allocator...");
 
         self.test_basic_allocation();
         self.test_vec_operations();
@@ -49,12 +48,16 @@ impl AllocatorTestSuite {
         self.test_zero_size_allocation();
 
         self.print_results();
+        assert!(
+            self.results.iter().all(|result| result.passed),
+            "allocator self-test failed"
+        );
     }
 
     /// Basic allocation test
     fn test_basic_allocation(&mut self) {
         let test_name = "Basic allocation test";
-        info!("Running test: {}", test_name);
+        log::info!("Running test: {}", test_name);
 
         let mut passed = true;
         let mut error_msg = None;
@@ -87,7 +90,7 @@ impl AllocatorTestSuite {
     /// Vec operations test
     fn test_vec_operations(&mut self) {
         let test_name = "Vec operations test";
-        info!("Running test: {}", test_name);
+        log::info!("Running test: {}", test_name);
 
         let mut passed = true;
         let mut error_msg = None;
@@ -138,7 +141,7 @@ impl AllocatorTestSuite {
     /// Box allocation test
     fn test_box_allocation(&mut self) {
         let test_name = "Box allocation test";
-        info!("Running test: {}", test_name);
+        log::info!("Running test: {}", test_name);
 
         let mut passed = true;
         let mut error_msg = None;
@@ -175,7 +178,7 @@ impl AllocatorTestSuite {
     /// String allocation test
     fn test_string_allocation(&mut self) {
         let test_name = "String allocation test";
-        info!("Running test: {}", test_name);
+        log::info!("Running test: {}", test_name);
 
         let mut passed = true;
         let mut error_msg = None;
@@ -209,7 +212,7 @@ impl AllocatorTestSuite {
     /// Large memory allocation test
     fn test_large_allocation(&mut self) {
         let test_name = "Large memory allocation test";
-        info!("Running test: {}", test_name);
+        log::info!("Running test: {}", test_name);
 
         let mut passed = true;
         let mut error_msg = None;
@@ -240,7 +243,7 @@ impl AllocatorTestSuite {
     /// Multiple small memory allocations test
     fn test_many_small_allocations(&mut self) {
         let test_name = "Multiple small memory allocations test";
-        info!("Running test: {}", test_name);
+        log::info!("Running test: {}", test_name);
 
         let mut passed = true;
         let mut error_msg = None;
@@ -274,7 +277,7 @@ impl AllocatorTestSuite {
     /// Zero-size allocation test
     fn test_zero_size_allocation(&mut self) {
         let test_name = "Zero-size allocation test";
-        info!("Running test: {}", test_name);
+        log::info!("Running test: {}", test_name);
 
         let mut passed = true;
         let mut error_msg = None;
@@ -310,17 +313,17 @@ impl AllocatorTestSuite {
 
     /// Print test results
     fn print_results(&self) {
-        info!("=== Memory Allocator Test Results ===");
+        log::info!("=== Memory Allocator Test Results ===");
 
         let mut passed_count = 0;
         let total_count = self.results.len();
 
         for result in &self.results {
             if result.passed {
-                info!("✓ {}", result.name);
+                log::info!("✓ {}", result.name);
                 passed_count += 1;
             } else {
-                error!(
+                log::error!(
                     "✗ {} - {}",
                     result.name,
                     result.error_msg.unwrap_or("Unknown error")
@@ -328,12 +331,12 @@ impl AllocatorTestSuite {
             }
         }
 
-        info!("Test completed: {}/{} passed", passed_count, total_count);
+        log::info!("Test completed: {}/{} passed", passed_count, total_count);
 
         if passed_count == total_count {
-            info!("🎉 All tests passed! Memory allocator is working correctly.");
+            log::info!("🎉 All tests passed! Memory allocator is working correctly.");
         } else {
-            warn!(
+            log::warn!(
                 "⚠️  {} tests failed, please check the memory allocator implementation.",
                 total_count - passed_count
             );
