@@ -15,7 +15,9 @@ pub(crate) struct SingleCore<T> {
 // SAFETY: only CPU 0 executes kernel code, and all accesses require masked IRQs.
 // Kernel paths must not enable IRQs, switch contexts, or enter idle while borrowed.
 // FIQ/NMI paths must not access this state. This type is not suitable for SMP.
-unsafe impl<T: Send> Sync for SingleCore<T> {}
+// The boot entry excludes every other CPU. Values (including Rc ownership
+// graphs) remain confined to CPU 0; they are never transferred to another thread.
+unsafe impl<T> Sync for SingleCore<T> {}
 
 impl<T> SingleCore<T> {
     pub(crate) const fn new(value: T) -> Self {
@@ -32,7 +34,7 @@ impl<T> SingleCore<T> {
 
     pub(crate) fn try_borrow_mut(&self) -> Option<Borrow<'_, T>> {
         assert!(
-            crate::arch::irq::masked(),
+            crate::arch::machine::instructions::irq_masked(),
             "kernel state requires masked IRQs"
         );
         if self.borrowed.replace(true) {

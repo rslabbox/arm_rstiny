@@ -19,7 +19,7 @@ impl KernelStack {
             NonNull::new(unsafe { alloc_zeroed(Self::layout()) }).ok_or(Error::NoMemory)?;
         // SAFETY: the first page belongs exclusively to this allocation and is
         // not used for stack data or allocator metadata until restored in Drop.
-        unsafe { crate::arch::boot::set_heap_guard(allocation.as_ptr() as usize, true) };
+        unsafe { crate::memory::kernel::set_heap_guard(allocation.as_ptr() as usize, true) };
         Ok(Self { allocation })
     }
     pub fn top(&self) -> usize {
@@ -31,7 +31,7 @@ impl Drop for KernelStack {
         // SAFETY: the scheduler has switched away permanently. Restore both
         // aliases before the allocator can write its free-list into this page.
         unsafe {
-            crate::arch::boot::set_heap_guard(self.allocation.as_ptr() as usize, false);
+            crate::memory::kernel::set_heap_guard(self.allocation.as_ptr() as usize, false);
             dealloc(self.allocation.as_ptr(), Self::layout());
         }
     }

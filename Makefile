@@ -64,11 +64,12 @@ debug: build
 
 check:
 	cargo test -p bootloader --no-default-features --test images --target $(HOST_TARGET)
-	cargo test -p rstiny-runtime-macros -p rstiny-elf --target $(HOST_TARGET)
+	cargo test -p kernel-abi -p rstiny-runtime-macros -p rstiny-elf --target $(HOST_TARGET)
 	python3 -m unittest discover -s tools -p 'test_*.py'
 	python3 tools/check_bootloader.py --qemu $(QEMU)
 	python3 tools/check_kernel.py --qemu $(QEMU)
 	python3 tools/check_fatboot.py --qemu $(QEMU)
+	python3 tools/check_capabilities.py --qemu $(QEMU)
 	python3 tools/check_tasks.py --qemu $(QEMU)
 	python3 tools/check_user_context.py --qemu $(QEMU)
 	python3 tools/check_relocation.py --qemu $(QEMU)

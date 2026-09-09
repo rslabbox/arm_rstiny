@@ -6,7 +6,6 @@ use kernel_abi as abi;
 /// Constructed once by the runtime; it cannot be cloned or built by applications.
 pub struct BootInfo {
     raw: &'static abi::BootInfo,
-    ipc: &'static mut [u64],
     dtb: &'static [u8],
 }
 
@@ -24,10 +23,15 @@ impl BootInfo {
         self.raw.features & abi::FEATURE_DEBUG_CONSOLE != 0
     }
 
-    /// Scratch space for now. A future IPC API must borrow this buffer while
-    /// the kernel may access it, rather than keeping a second mutable reference.
-    pub fn ipc_buffer(&mut self) -> &mut [u64] {
-        self.ipc
+    /// First page after the initial image and kernel-supplied metadata.
+    /// The root task chooses how to allocate this initially unmapped range.
+    pub fn first_free_address(&self) -> usize {
+        (self.raw.extra + self.raw.extra_size).next_multiple_of(abi::PAGE_SIZE) as usize
+    }
+
+    /// Address of the IPC buffer privately used by the syscall library.
+    pub fn ipc_buffer_address(&self) -> usize {
+        self.raw.ipc_buffer as usize
     }
 }
 
@@ -72,10 +76,7 @@ pub unsafe fn start(pointer: *const (), main: fn(&mut BootInfo) -> !) -> ! {
             (raw.extra_size - header_size) as usize,
         )
     };
-    let ipc = unsafe {
-        core::slice::from_raw_parts_mut(raw.ipc_buffer as *mut u64, abi::PAGE_SIZE as usize / 8)
-    };
-    main(&mut BootInfo { raw, ipc, dtb })
+    main(&mut BootInfo { raw, dtb })
 }
 
 pub use rstiny_runtime_macros::entry;

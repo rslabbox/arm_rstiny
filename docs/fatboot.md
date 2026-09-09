@@ -66,29 +66,21 @@ fn main(info: &mut BootInfo) -> ! {
 
 `rstiny-runtime` 重导出 `rstiny-runtime-macros` 中的 `#[entry]` 属性宏，应用无需直接依赖宏 crate。宏生成固定入口，拒绝 async、unsafe、泛型、外部 ABI 和错误参数/返回值形式，具体 BootInfo 类型由编译器检查。入口要求不返回，应用显式暂停自身。
 
-运行库只构造一次 BootInfo 视图。IPC buffer 通过 `&mut BootInfo` 借用，不向应用暴露可任意构造的指针。当前内核不会异步读写该 buffer；未来 IPC 接口必须延续独占借用约束。默认用户 panic 通过 debug 接口尽力打印原因并暂停，不影响内核 panic 无条件打印及关机策略。
+运行库只构造一次只读 BootInfo 视图；IPC buffer 的原始地址由 syscall 封装使用，不向应用暴露可变切片，避免与实际 IPC 消息读写形成重叠借用。默认用户 panic 通过 debug 接口尽力打印原因并暂停，不影响内核 panic 无条件打印及关机策略。
 
 fatboot 中保留应用启动检查和结果符号，供静默启动验证使用；未知 syscall 的验证由宿主注入测试完成，不向应用公开任意调用号接口。
 
 ## ABI
 
-共享定义位于 `projects/libs/abi/src/lib.rs`。BootInfo 使用 `repr(C)` 的固定宽度字段：magic、version、size、page_size、features、ipc_buffer、extra、extra_size。当前版本为 3，大小为 64 字节；features 的 bit 0 表示临时 debug 字符接口可用。不发布尚未实现的 capability 槽。
+共享定义位于 `projects/libs/abi/src/lib.rs`。BootInfo 使用 `repr(C)` 的固定宽度字段：magic、version、size、page_size、features、ipc_buffer、extra、extra_size。当前版本为 4，大小为 64 字节；features 的 bit 0 表示临时 debug 字符接口可用。初始 capability 槽与对象范围见 [seL4 ABI](sel4-abi.md)。
 
 扩展区的 FDT 记录包含 u64 id=6 和 u64 len，随后为完整 DTB；len 包含 16 字节记录头。映射被固定以保证运行库只读切片有效，应用通过 `info.device_tree()` 获取 DTB。内核和 fatboot 均不解析设备节点，保留 DTB 只读传递接口。
 
-系统调用执行 `svc #0`，x8 为调用号，x0 为参数和返回值；原有调用保留其他通用寄存器以及用户 SP；新增带返回值的调用用 x1 返回结果。完整调用号及错误码见 [内存与任务 ABI](memory-task.md)。
-
-| x8 | 调用 | 当前行为 |
-| --- | --- | --- |
-| 0 | Yield | 让出 CPU，其他 Ready 任务可运行，之后返回成功 |
-| 1 | DebugPutChar | x0 为 0..255 的字节；超界返回参数错误，LOG=off 返回不支持 |
-| 2 | SuspendSelf | 保存上下文并暂停任务，调度其他 Ready 任务；无就绪任务时 idle |
-| 3..19 | 内存与任务操作 | 见内存与任务 ABI |
-| 其他 | 未知调用 | 返回不支持 |
+系统调用使用 `svc #0` 和 x7 负调用号：Call=-1、Yield=-7、DebugPutChar=-9。Call 使用 x0=CPtr、x1=MessageInfo、x2..x5=消息字；对象方法经当前 CSpace 授权。未知 syscall 停止调用任务；未知对象方法返回 IllegalOperation。用户 debug 封装先查询可用性，LOG=off 时跳过输出。直接调用被禁用的 DebugPutChar 则作为未知调用处理。详见 [seL4 ABI 与内核对象](sel4-abi.md)。
 
 DebugPutChar 通过内核串口输出，不接受用户指针，也不是串口驱动服务。内核普通日志仍走原有彩色 `log`；此接口只提供最早期用户调试输出。未来用户串口服务通过能力及 IPC 独立于 LOG 工作。
 
-用户不可恢复异常记录到 `LAST_FAULT`，任务转为 Faulted，释放其地址空间并调度其他任务；内核自身致命异常和 panic 则诊断后 PSCI 关机。现在有暂停/恢复、等待、退出/销毁接口和抢占调度；故障任务只保留终止结果，尚无故障 endpoint 或恢复故障任务的接口。目标使用 softfloat，FP/SIMD 显式陷入内核故障处理。
+用户不可恢复异常记录到 `LAST_FAULT`，任务转为 Faulted，按对象生命周期保留或释放地址空间并调度其他任务；内核自身致命异常和 panic 则诊断后 PSCI 关机。现在有暂停/恢复、等待、退出/销毁接口和抢占调度；故障任务只保留终止结果，尚无故障 endpoint 或恢复故障任务的接口。目标使用 softfloat，FP/SIMD 显式陷入内核故障处理。
 
 ## 验证
 
@@ -104,11 +96,9 @@ DebugPutChar 通过内核串口输出，不接受用户指针，也不是串口�
 
 ## hello 装载
 
-`make fatboot` 先编译 `projects/apps/hello`，strip 为 `target/apps/<MODE>/hello.elf`，再通过 `HELLO_ELF` 链接到 fatboot 的只读段。直接 Cargo check/clippy 无需该资源；生成可运行镜像请使用 Make。
+`make fatboot` 先编译 hello，再将 ELF 作为只读资源链接到 fatboot。`rstiny::elf::spawn` 使用 Untyped_Retype、PageTable/Frame_Map、CNode_Copy、TCB_Configure/WriteRegisters/Resume 创建用户任务，详细顺序见 [对象装载流程](sel4-abi.md#fatboot-装载普通程序)。装载、失败回滚和任务销毁围绕一份私有 Untyped 派生 cap 管理；sleep/wait/exit 仍是显式 Runtime 扩展。
 
-用户库 `rstiny::elf::spawn` 验证静态 AArch64 ELF64 的段边界、权限、入口和重叠后创建子任务，映射零页、复制文件内容并设置最终 R/RX/RW 权限。失败会销毁子任务并释放已分配页面。hello 使用 LLD 默认链接地址（可与 root 虚拟地址重叠，各任务物理映射独立），加载库在其 ELF 末尾留一页保护间隔，再分配独立 16 KiB 栈。无参数 `#[entry]` 使用传入的栈，不要求 BootInfo；root task 的带参数入口保持原协议。
-
-集成测试验证 hello 的 EL0 入口、独立映射、段字节/BSS、W^X 和栈保护页，以及正常退出回收；破坏嵌入 ELF 时加载失败，破坏 DTB 内容则不影响 hello 启动。
+测试验证 hello 的 EL0 入口、独立映射、段字节/BSS、W^X、栈保护页和正常退出回收。破坏嵌入 ELF 时加载失败，破坏 DTB 内容不影响 hello 启动。当前没有磁盘或 FAT 文件系统。
 
 ## 应用构建约定
 

@@ -2,6 +2,8 @@
 
 AArch64 Rust 微内核实验项目。当前可启动独立的 EL0 用户程序 `projects/apps/fatboot`，传递 BootInfo，并支持独立用户地址空间、可回收页管理及单核定时器抢占调度。
 
+顶级 `api` 管理用户调用与故障规则，`arch/kernel`、`arch/machine` 分别管理架构执行机制和硬件操作；目录职责和 seL4 对照见 [架构目录](docs/arch-layout.md)。
+
 ## 构建与运行
 
 需要 Rust nightly（包含 `aarch64-unknown-none-softfloat` target）、`cargo-binutils`/LLVM tools、QEMU AArch64、Python 3、GNU cpio 和 device-tree-compiler（`dtc`/`fdtget`）。无需 C 交叉编译器。当前验证环境为 rustc `1.100.0-nightly (5a2be9f5f 2026-09-06)`。
@@ -60,7 +62,7 @@ gdb-multiarch target/kernel/debug-loginfo-test0/aarch64-unknown-none-softfloat/d
 target remote :1234
 hbreak start_root
 continue
-x/gx &BOOT_ENTRY_EL_VALUE
+info registers cpsr
 # 从 loader 交接信息读取 ELF 用户入口；此处可检查 EL0t、SP 和 x0。
 set $user_entry = *((unsigned long *)&LOADER_BOOT_INFO + 3)
 hbreak *$user_entry
@@ -68,7 +70,7 @@ continue
 info registers cpsr sp x0
 ```
 
-`BOOT_ENTRY_EL_VALUE` 记录内核入口特权级，当前平台固定从 EL1 启动。`SCHEDULER` 保存任务表、当前任务和就绪队列，首个任务槽为 fatboot；`LAST_FAULT` 保存最近异常的来源、ESR/FAR 和通用寄存器。EL0 下调试器读取内核地址可能失败；集成测试用 QEMU 物理内存模式读取内核记录和非当前任务内存。
+在 `start_root` 断点处，`cpsr` 低四位应为 `0x5`（EL1h）。`SCHEDULER` 保存任务表、当前任务和就绪队列，首个任务槽为 fatboot；`LAST_FAULT` 保存最近异常的来源、ESR/FAR 和通用寄存器。EL0 下调试器读取内核地址可能失败；集成测试用 QEMU 物理内存模式读取内核记录和非当前任务内存。
 
 用户页表使用独立 TTBR0；TTBR1 提供独立的高地址内核镜像映射和物理直接映射。内核 ELF 固定链接在 `0xffff800000000000`，loader 动态选择物理位置；可用 `make run KERNEL_LOAD_MIN=0x41000000` 验证不同装载位置。用户不能访问内核、UART 或 GIC。内核元数据堆为 16 MiB；用户页和私有页表从独立 8 MiB 帧池及接管的实际 root image 区间分配，释放后可复用。最多 32 个任务，每个地址空间最多 1024 个用户页；DTB 经扩展 BootInfo 交给 fatboot，尚未用其发现和分配其余 RAM。
 
@@ -82,6 +84,9 @@ info registers cpsr sp x0
 
 - [Rust bootloader 引导链](docs/boot.md)
 - [用户内存与单核任务调度](docs/memory-task.md)
+- [中断控制器、定时器与调度 tick](docs/interrupts.md)
+- [内核映射与页表构建](docs/kernel-mapping.md)
+- [seL4 ABI 与内核对象接口](docs/sel4-abi.md)
 - [fatboot 启动、ABI 与验证](docs/fatboot.md)
 - [内核实现与验证记录](docs/kernel-implementation.md)
 - [完整微内核设计与分阶段路线](docs/microkernel-design.md)

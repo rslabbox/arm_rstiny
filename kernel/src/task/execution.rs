@@ -1,6 +1,6 @@
 //! Own a stable entry closure, kernel continuation and private stack.
 use super::stack::KernelStack;
-use crate::{arch::kernel_context::KernelContext, memory::Error};
+use crate::{arch::kernel::thread::kernel_context::KernelContext, memory::Error};
 use alloc::{alloc::alloc, boxed::Box};
 use core::{alloc::Layout, ptr::NonNull};
 
@@ -38,11 +38,7 @@ impl Execution {
         })?;
         let pointer = NonNull::from(Box::leak(entry));
         Ok(Self {
-            context: KernelContext::entry(
-                stack.top(),
-                trampoline as *const () as usize,
-                pointer.as_ptr() as usize,
-            ),
+            context: KernelContext::entry(stack.top(), trampoline, pointer.as_ptr() as usize),
             entry: pointer,
             _stack: stack,
         })

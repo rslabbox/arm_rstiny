@@ -1,6 +1,6 @@
 # ARM RSTiny 能力系统与 IPC 演进规划
 
-日期：2026-09-09。状态：设计提案，尚未实施。
+日期：2026-09-09。状态：长期设计提案，部分对象与执行机制已落地。当前已实现范围以 [seL4 ABI](sel4-abi.md) 为准；本文其余差距分析保留规划背景。
 
 本文是对当前单核进程内核的差距分析与修复规划。它不替代 [完整微内核设计与分阶段路线](microkernel-design.md)，而是把那条路线落成可执行的设计：给出对象模型、capability/Untyped/IPC/fault/IRQ 的具体语义、ABI 变更、模块改动、每阶段验收标准和风险。现状事实以 [内核实现与验证记录](kernel-implementation.md)、[用户内存与单核任务调度](memory-task.md)、[fatboot 启动与用户态边界](fatboot.md) 和源码为准。
 
@@ -16,15 +16,15 @@
 | P0 | 没有 IPC（Endpoint/Notification） | 全仓库无 endpoint 对象；IPC buffer 未使用 | 无法构建用户态服务，微内核不成立 |
 | P0 | 没有 Untyped/Retype，内核直接发页 | `kernel/src/memory/frame.rs`、`SYS_MAP` | 用户无法管理内存，无设备内存授权，无计费 |
 | P0 | 内核栈全局唯一，syscall 不可阻塞 | `boot_stack_top`、`enter()`/`root_idle()` | 阻塞式 IPC 的前置重构 |
-| P1 | 没有 fault endpoint，用户故障直接杀任务 | `kernel/src/arch/trap.rs` 的 `Event::Fault` | 无法容错/恢复，无 FAR/PC 交付 |
-| P1 | 没有用户 IRQ 授权 | `kernel/src/arch/irq.rs` 屏蔽未知中断 | 用户态驱动不可能 |
+| P1 | 没有 fault endpoint，用户故障直接杀任务 | `arch/kernel/thread/user.rs` 的 `UserEvent::Fault` | 无法容错/恢复，无 FAR/PC 交付 |
+| P1 | 没有用户 IRQ 授权 | `kernel/src/interrupt.rs` 屏蔽未知中断 | 用户态驱动不可能 |
 | P1 | 没有优先级，纯 FIFO | `Task` 无 priority 字段 | 与设计文档的固定优先级描述不符 |
 | P1 | 没有资源配额，子任务可耗尽全局池 | `SYS_TASK_CREATE`/`SYS_MAP` 无预算 | 单任务可饿死系统 |
 | P2 | 无 ASID，每次切换全量 TLB 失效 | `memory::sync_translations` | 性能，IPC 延迟指标不可用 |
 | P2 | 跨空间拷贝逐字节 + 二分 | `memory/space.rs` 的 `read/write` | 性能 |
-| P2 | 启动依赖 loader 的 MAIR/TCR | `arch/boot.rs` 的 `enable_mmu` | 平台/loader 耦合脆弱 |
+| P2 | 启动依赖 loader 的 MAIR/TCR | `arch/machine/mmu.rs` 的 `install_kernel_roots` | 平台/loader 耦合脆弱 |
 | P2 | ABI 无保留字段、无兼容读取 | `projects/libs/abi` | 前向兼容差 |
-| P2 | `irq::handle()` 返回值被忽略 | `arch/trap.rs` | 非 timer 中断被当作调度点 |
+| 已修复 | 分发返回 Continue/Reschedule | `task/runtime.rs` 使用结果 | 非 timer 中断不触发 tick 调度 |
 
 ### 1.2 第一版目标（本文的验收边界）
 
@@ -284,28 +284,11 @@ pub struct BootInfo {
 
 ### 8.2 syscall 约定
 
-- 保持 `x8` 调用号、`x0..x4` 参数、`x0` 状态、有返回值用 `x1`；新增能力参数一律是槽号，不是对象地址。
-- 建议按对象分组编号（示意，最终以 `projects/libs/abi` 为准）：
-
-| 组 | 调用 |
-| --- | --- |
-| 0x10 | UntypedRetype |
-| 0x20 | CNodeCopy / CNodeMint / CNodeMove / CNodeDelete / CNodeRevoke |
-| 0x30 | FrameMap / FrameUnmap / FrameGetInfo |
-| 0x40 | TCBConfigure / TCBSetSpace / TCBSetIPCBuffer / TCBReadRegisters / TCBWriteRegisters / TCBSetFaultEndpoint / TCBSetPriority / TCBResume / TCBSuspend |
-| 0x50 | Send / Recv / Call / ReplyRecv |
-| 0x60 | Signal / Wait / Poll |
-| 0x70 | IRQGetHandler / IRQSetNotification / IRQAck |
-| 0x80 | Yield / DebugPutChar（兼容） |
-
-- 错误码扩展：`InvalidCapability`、`WrongType`、`RangeError`、`TruncatedMessage`、`FailedLookup`、`RevokeFailed`、`DeleteFirst`。现有 0..9 保持含义不变。
+已采用 seL4 AArch64 non-MCS 的 x7 负调用号，Call 通过 x0 CPtr、x1 MessageInfo 和消息寄存器调用对象。方法标签来自选定 seL4 配置；具体参数、错误标签和实现限制见 [seL4 ABI](sel4-abi.md)。原先按对象分组自定义 syscall 编号的提案已取消。
 
 ### 8.3 迁移策略
 
-- 阶段 1 起新增能力接口，但**保留现有 task/memory syscall** 作为兼容 shim，避免一次性破坏 `tools/check_tasks.py` 和 fatboot。
-- shim 内部改为通过 root 的初始能力实现，语义不弱化。
-- 阶段 4（fault endpoint 完成）后，把 fatboot/hello 和测试迁移到能力接口，再删除 shim 与旧 BootInfo 字段。
-- `ABI_VERSION` 一次性升到 4；旧版本用户程序不保证可运行。
+ABI_VERSION 已升为 4，旧 x8 正调用号协议已删除，不保留兼容 shim。fatboot ELF 装载使用标准对象操作；托管任务、批量内存操作和 sleep/wait/exit 作为显式 Runtime 对象扩展保留，不占用 seL4 标准方法标签。完整 Endpoint IPC、物理 Untyped 与 fault/IRQ 服务仍属于后续规划。
 
 ## 9. 分阶段实施计划
 
@@ -313,7 +296,7 @@ pub struct BootInfo {
 
 目标：消除 P2 中不涉及 ABI 的问题，为后续重构降低风险。
 
-- `arch/trap.rs` 使用 `irq::handle()` 的返回值，只有 timer 才触发调度决策。
+- 已实现：`task/runtime.rs` 使用 `interrupt::handle()` 的结果，只有 timer 才触发中断调度点。
 - 跨空间 `read/write` 改为按页 `copy_nonoverlapping`，`MAX_COPY` 提到一页并按需循环；保持"失败无部分写入"。
 - 内核自己写 `MAIR_EL1`/`TCR_EL1`（或至少校验关键字段），不再隐式继承 loader 配置。
 - `Task.state` 改为 enum，去掉 `Task.root` 冗余字段。

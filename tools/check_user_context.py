@@ -10,6 +10,16 @@ from check_fatboot import write
 from elf_image import parse_elf
 
 
+# Independent wire fixture for the C-layout kernel continuation record.
+CONTEXT_FIELDS = tuple(f'x{i}' for i in range(19, 29)) + ('fp', 'lr', 'sp')
+CONTEXT_LAYOUT = struct.Struct('<13Q')
+
+
+def kernel_context(gdb, address):
+    assert address % 8 == 0
+    return dict(zip(CONTEXT_FIELDS, CONTEXT_LAYOUT.unpack(gdb.memory(address, CONTEXT_LAYOUT.size))))
+
+
 def run(qemu, kernel):
     syms = symbols(kernel)
     entry = parse_elf((boot_image(kernel).parent / 'rootserver').read_bytes())['entry']
@@ -25,9 +35,15 @@ def run(qemu, kernel):
         try:
             gdb = Gdb(directory / 'gdb', proc)
             gdb.run_to(syms['switch_kernel_context'])
+            if 'IRQ_SELF_TEST_PASSED' in syms:
+                assert gdb.word(syms['IRQ_SELF_TEST_PASSED']) == 1, 'GIC/timer lifecycle self-tests did not complete'
             scheduler_sp = gdb.reg('sp')
             assert syms['boot_stack'] <= scheduler_sp < syms['boot_stack_top']
-            stack_top = gdb.word(gdb.reg('x1') + 96)
+            initial = kernel_context(gdb, gdb.reg('x1'))
+            stack_top = initial['sp']
+            assert initial['x19'] != 0, 'missing trampoline argument'
+            assert syms['skernel'] <= initial['lr'] < syms['etext'], 'invalid trampoline'
+            assert all(initial[field] == 0 for field in CONTEXT_FIELDS if field not in ('x19', 'lr', 'sp'))
             stack_bottom = stack_top - 64 * 1024
             assert syms['__heap_start'] <= stack_bottom < stack_top <= syms['__heap_end']
             guard = stack_bottom - 4096
@@ -44,7 +60,7 @@ def run(qemu, kernel):
             # Inject yield in a loop, then separately a timer-only spin loop.
             write(gdb, entry, struct.pack('<II', 0xd4000001, 0x17ffffff))
             frame = gdb.reg('x0')
-            write(gdb, frame + 8 * 8, bytes(8))  # saved user x8 = Yield
+            write(gdb, frame + 7 * 8, struct.pack('<Q', (1 << 64)-7))  # saved user x7 = seL4 Yield
             baseline = gdb.reg('sp')
             assert baseline % 16 == 0
             assert stack_bottom <= baseline < stack_top
@@ -52,11 +68,16 @@ def run(qemu, kernel):
             gdb.run_to(syms['switch_kernel_context'])
             task_sp, task_return = gdb.reg('sp'), gdb.reg('x30')
             assert stack_bottom <= task_sp < stack_top
-            assert gdb.word(gdb.reg('x1') + 96) == scheduler_sp
+            assert kernel_context(gdb, gdb.reg('x1'))['sp'] == scheduler_sp
+            outgoing_context = gdb.reg('x0')
             saved = {f'x{i}': gdb.reg(f'x{i}') for i in range(19, 30)}
             for i, register in enumerate(saved):
                 gdb.write_reg(register, 0xdef00000 + i)
             gdb.run_to(task_return)
+            record = kernel_context(gdb, outgoing_context)
+            assert record['sp'] == task_sp and record['lr'] == task_return
+            for i, register in enumerate(saved):
+                assert record['fp' if register == 'x29' else register] == 0xdef00000 + i
             assert gdb.reg('sp') == task_sp and gdb.reg('cpsr') & 0x8f == 0x85
             for i, (register, value) in enumerate(saved.items()):
                 assert gdb.reg(register) == 0xdef00000 + i, register
@@ -96,7 +117,8 @@ def run(qemu, kernel):
             # Stop root, then force a timer pending *at* masked WFI. This
             # catches the lost-wakeup window that ordinary sleep tests miss.
             write(gdb, entry, struct.pack('<I', 0xd4000001))
-            write(gdb, frame + 8 * 8, struct.pack('<Q', 2))
+            write(gdb, frame + 7 * 8, struct.pack('<Q', (1 << 64)-1))
+            write(gdb, frame, struct.pack('<QQ', 1, 11 << 12)) # Call self TCB.Suspend
             write(gdb, frame + 256, struct.pack('<Q', entry))
             gdb.run_to(syms['root_idle'])
             assert gdb.reg('x0') == 2
@@ -131,10 +153,10 @@ def main():
     args = parser.parse_args()
     for mode in ('debug', 'release'):
         for level in ('off', 'info'):
-            kernel = build(mode, level, False)
+            kernel = build(mode, level, True)
             print(f'CHECK returning context {mode} LOG={level}', flush=True)
             run(args.qemu, kernel)
-    print('PASS: 2048 returns per configuration; private guarded task stack, kernel continuation switch, callee-saved registers, SP and IRQ state; SVC and timer-only EL0; pending-before-WFI idle wakeup.', flush=True)
+    print('PASS: GIC claim/complete, private/shared masking, unknown IRQ routing, one-shot timer; 2048 returns per configuration; private guarded task stack, kernel continuation switch, callee-saved registers, SP and IRQ state; SVC and timer-only EL0; pending-before-WFI idle wakeup.', flush=True)
 
 
 if __name__ == '__main__':

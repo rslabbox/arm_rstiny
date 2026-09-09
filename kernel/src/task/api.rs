@@ -1,5 +1,6 @@
-//! Authorized task operations. Task-table representation stays inside this module's parent.
+//! Internal task operations after capability authorization by the object layer.
 use super::*;
+use crate::arch::machine::time;
 use crate::memory::{UserConstPtr, UserPtr};
 
 fn actor(scheduler: &Scheduler) -> usize {
@@ -7,18 +8,22 @@ fn actor(scheduler: &Scheduler) -> usize {
         .current_slot()
         .expect("operation outside user event")
 }
-fn authorized<T>(
+fn with_target<T>(
     target: u64,
     operation: impl FnOnce(&mut Scheduler, usize, usize) -> Result<T, u64>,
 ) -> Result<T, u64> {
     with_scheduler(|scheduler| {
         let caller = actor(scheduler);
-        let target = scheduler.lookup(caller, target)?;
+        let target = scheduler.lookup(target)?;
         operation(scheduler, caller, target)
     })
 }
-fn space(scheduler: &Scheduler, slot: usize) -> Result<&AddressSpace, u64> {
-    scheduler.tasks[slot].space.as_ref().ok_or(INVALID_STATE)
+fn space(scheduler: &Scheduler, slot: usize) -> Result<core::cell::Ref<'_, AddressSpace>, u64> {
+    scheduler.tasks[slot]
+        .space
+        .as_ref()
+        .map(|space| space.borrow())
+        .ok_or(INVALID_STATE)
 }
 fn editable(scheduler: &Scheduler, caller: usize, target: usize) -> Result<(), u64> {
     if target != caller && !matches!(scheduler.tasks[target].state, TASK_CREATED | TASK_SUSPENDED) {
@@ -43,7 +48,7 @@ pub(crate) fn start(
     argument: u64,
     dispatch: impl FnMut(&mut UserContext) -> Disposition + Send + 'static,
 ) -> Result<(), u64> {
-    authorized(target, |scheduler, _, slot| {
+    with_target(target, |scheduler, _, slot| {
         if scheduler.tasks[slot].state != TASK_CREATED {
             return Err(INVALID_STATE);
         }
@@ -69,10 +74,10 @@ pub(crate) fn start(
     })
 }
 pub(crate) fn status(target: u64) -> Result<u64, u64> {
-    authorized(target, |scheduler, _, slot| Ok(scheduler.tasks[slot].state))
+    with_target(target, |scheduler, _, slot| Ok(scheduler.tasks[slot].state))
 }
 pub(crate) fn suspend(target: u64) -> Result<(), u64> {
-    authorized(target, |scheduler, _, slot| {
+    with_target(target, |scheduler, _, slot| {
         let task = &mut scheduler.tasks[slot];
         if !task.started || task.terminal() || task.state == TASK_SUSPENDED {
             return Err(INVALID_STATE);
@@ -84,13 +89,19 @@ pub(crate) fn suspend(target: u64) -> Result<(), u64> {
     })
 }
 pub(crate) fn resume(target: u64) -> Result<(), u64> {
-    authorized(target, |scheduler, _, slot| {
+    with_target(target, |scheduler, _, slot| {
+        if scheduler.tasks[slot].state == TASK_CREATED && scheduler.tasks[slot].execution.is_some()
+        {
+            scheduler.tasks[slot].started = true;
+            scheduler.ready(slot);
+            return Ok(());
+        }
         if scheduler.tasks[slot].state != TASK_SUSPENDED {
             return Err(INVALID_STATE);
         }
         match scheduler.tasks[slot].suspended_from {
             TASK_WAITING => scheduler.tasks[slot].state = TASK_WAITING,
-            TASK_SLEEPING if irq::now() < scheduler.tasks[slot].deadline => {
+            TASK_SLEEPING if time::now() < scheduler.tasks[slot].deadline => {
                 scheduler.tasks[slot].state = TASK_SLEEPING
             }
             _ => scheduler.ready(slot),
@@ -99,7 +110,7 @@ pub(crate) fn resume(target: u64) -> Result<(), u64> {
     })
 }
 pub(crate) fn destroy(target: u64) -> Result<(), u64> {
-    authorized(target, |scheduler, caller, slot| {
+    with_target(target, |scheduler, caller, slot| {
         if slot == caller {
             return Err(INVALID_ARGUMENT);
         }
@@ -107,12 +118,13 @@ pub(crate) fn destroy(target: u64) -> Result<(), u64> {
             scheduler.finish(slot, false, u64::MAX);
         }
         scheduler.tasks[slot] = Task::empty();
+        crate::object::forget_task(target);
         Ok(())
     })
 }
 /// None means the runtime must commit a wait; it is not a completed syscall.
 pub(crate) fn wait_result(target: u64) -> Result<Option<u64>, u64> {
-    authorized(target, |scheduler, caller, slot| {
+    with_target(target, |scheduler, caller, slot| {
         if caller == slot {
             return Err(INVALID_ARGUMENT);
         }
@@ -127,9 +139,16 @@ pub(crate) fn edit_space<T>(
     target: u64,
     operation: impl FnOnce(&mut AddressSpace) -> Result<T, crate::memory::Error>,
 ) -> Result<T, u64> {
-    authorized(target, |scheduler, caller, slot| {
+    with_target(target, |scheduler, caller, slot| {
         editable(scheduler, caller, slot)?;
-        operation(scheduler.tasks[slot].space.as_mut().ok_or(INVALID_STATE)?).map_err(|e| e as u64)
+        operation(
+            &mut scheduler.tasks[slot]
+                .space
+                .as_ref()
+                .ok_or(INVALID_STATE)?
+                .borrow_mut(),
+        )
+        .map_err(|e| e as u64)
     })
 }
 /// Stage the complete source before writing, including self-copy and overlaps.
@@ -142,14 +161,15 @@ fn copy_between(
     buffer: &mut [u8],
 ) -> Result<(), u64> {
     source
-        .read(space(scheduler, source_slot)?, buffer)
+        .read(&*space(scheduler, source_slot)?, buffer)
         .map_err(|e| e as u64)?;
     destination
         .write(
-            scheduler.tasks[destination_slot]
+            &mut scheduler.tasks[destination_slot]
                 .space
-                .as_mut()
-                .ok_or(INVALID_STATE)?,
+                .as_ref()
+                .ok_or(INVALID_STATE)?
+                .borrow_mut(),
             buffer,
         )
         .map_err(|e| e as u64)
@@ -162,7 +182,7 @@ pub(crate) fn write_memory(
     source: UserConstPtr<u8>,
     buffer: &mut [u8],
 ) -> Result<(), u64> {
-    authorized(target, |scheduler, caller, slot| {
+    with_target(target, |scheduler, caller, slot| {
         editable(scheduler, caller, slot)?;
         copy_between(scheduler, caller, source, slot, destination, buffer)
     })
@@ -175,8 +195,96 @@ pub(crate) fn read_memory(
     destination: UserPtr<u8>,
     buffer: &mut [u8],
 ) -> Result<(), u64> {
-    authorized(target, |scheduler, caller, slot| {
+    with_target(target, |scheduler, caller, slot| {
         editable(scheduler, caller, slot)?;
         copy_between(scheduler, slot, source, caller, destination, buffer)
+    })
+}
+
+pub(crate) fn current_cspace() -> u64 {
+    with_scheduler(|s| s.tasks[actor(s)].cspace)
+}
+pub(crate) fn ipc_read(offset: usize, bytes: &mut [u8]) -> Result<(), u64> {
+    with_scheduler(|s| {
+        let slot = actor(s);
+        let address = s.tasks[slot]
+            .ipc_buffer
+            .checked_add(offset)
+            .ok_or(INVALID_ARGUMENT)?;
+        if s.tasks[slot].ipc_buffer == 0 {
+            return Err(TRUNCATED_MESSAGE);
+        }
+        space(s, slot)?.read(address, bytes).map_err(|e| e as u64)
+    })
+}
+pub(crate) fn object_space(target: u64) -> Result<Rc<RefCell<AddressSpace>>, u64> {
+    with_target(target, |s, _, slot| {
+        s.tasks[slot].space.clone().ok_or(INVALID_STATE)
+    })
+}
+pub(crate) fn bind_cspace(target: u64, cspace: u64, ipc_buffer: usize) -> Result<(), u64> {
+    with_target(target, |s, _, slot| {
+        s.tasks[slot].cspace = cspace;
+        s.tasks[slot].ipc_buffer = ipc_buffer;
+        Ok(())
+    })
+}
+pub(crate) fn configure(
+    target: u64,
+    cspace: u64,
+    vspace: Rc<RefCell<AddressSpace>>,
+    ipc_buffer: usize,
+) -> Result<(), u64> {
+    with_target(target, |s, _, slot| {
+        if s.tasks[slot].started {
+            return Err(INVALID_STATE);
+        }
+        if ipc_buffer != 0 {
+            vspace
+                .borrow()
+                .check(ipc_buffer, 1024, 3)
+                .map_err(|e| e as u64)?;
+        }
+        s.tasks[slot].root = vspace.borrow().root();
+        s.tasks[slot].space = Some(vspace);
+        s.tasks[slot].cspace = cspace;
+        s.tasks[slot].ipc_buffer = ipc_buffer;
+        Ok(())
+    })
+}
+pub(crate) fn write_registers(
+    target: u64,
+    mut frame: TrapFrame,
+    resume: bool,
+    dispatch: impl FnMut(&mut UserContext) -> Disposition + Send + 'static,
+) -> Result<(), u64> {
+    with_target(target, |s, _, slot| {
+        if s.tasks[slot].started {
+            return Err(INVALID_STATE);
+        }
+        if frame.elr & 3 != 0
+            || frame.usp & 15 != 0
+            || frame.spsr & !0xf000_0000 != 0 && frame.spsr & !0xf000_0000 != 0x340
+        {
+            return Err(INVALID_ARGUMENT);
+        }
+        space(s, slot)?
+            .check(frame.elr as usize, 4, 4)
+            .map_err(|e| e as u64)?;
+        space(s, slot)?
+            .check(
+                frame.usp.checked_sub(16).ok_or(INVALID_ARGUMENT)? as usize,
+                16,
+                2,
+            )
+            .map_err(|e| e as u64)?;
+        frame.spsr = (frame.spsr & 0xf000_0000) | 0x340;
+        s.tasks[slot].execution =
+            Some(new_user_task(UserContext::new(frame), dispatch).map_err(|e| e as u64)?);
+        if resume {
+            s.tasks[slot].started = true;
+            s.ready(slot);
+        }
+        Ok(())
     })
 }

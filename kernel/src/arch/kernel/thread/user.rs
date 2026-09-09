@@ -1,9 +1,21 @@
 //! A returning, IRQ-masked boundary around one interval of EL0 execution.
-use super::{TrapFrame, irq};
+use super::TrapFrame;
+use crate::arch::machine::instructions;
 use crate::memory;
+use aarch64_cpu::registers::{CNTKCTL_EL1, CPACR_EL1, TPIDRRO_EL0, Writeable};
 use core::mem::{offset_of, size_of};
 
 pub struct UserContext(TrapFrame);
+
+/// Configure the EL0 execution environment shared by all user tasks. Run once,
+/// IRQ-masked, before the first user-mode entry: EL0 may not read the system
+/// counter or enable its own event stream, and FP/SIMD stays trapped until a
+/// task context supports it.
+pub(crate) fn configure_el0_domain() {
+    assert!(instructions::irq_masked());
+    CNTKCTL_EL1.set(0); // EL0 cannot reprogram timers or enable its own event stream.
+    CPACR_EL1.set(0); // FP/SIMD remains trapped until its context is supported.
+}
 impl UserContext {
     pub fn new(frame: TrapFrame) -> Self {
         Self(frame)
@@ -11,47 +23,44 @@ impl UserContext {
     pub fn frame(&self) -> &TrapFrame {
         &self.0
     }
-    /// AArch64 syscall ABI: x8 is the number, x0..x4 are arguments.
+    /// seL4 AArch64 ABI: x7 is the number, x0 the cap, x1 MessageInfo.
     pub fn syscall_number(&self) -> u64 {
-        self.0.r[8]
+        self.0.r[7]
     }
     pub fn arg0(&self) -> u64 {
         self.0.r[0]
     }
-    pub fn arg1(&self) -> u64 {
+    pub fn message_info(&self) -> u64 {
         self.0.r[1]
     }
-    pub fn arg2(&self) -> u64 {
-        self.0.r[2]
+    pub fn message_register(&self, index: usize) -> u64 {
+        assert!(index < 4);
+        self.0.r[2 + index]
     }
-    pub fn arg3(&self) -> u64 {
-        self.0.r[3]
-    }
-    /// x0 is status; x1 changes only for a successful value-returning call.
-    pub fn set_syscall_result(&mut self, result: Result<Option<u64>, u64>) {
-        match result {
-            Ok(value) => {
-                self.0.r[0] = kernel_abi::OK;
-                if let Some(value) = value {
-                    self.0.r[1] = value;
-                }
-            }
-            Err(code) => self.0.r[0] = code,
+    pub fn set_reply(&mut self, badge: u64, message_info: u64, words: &[u64]) {
+        assert!(words.len() <= 4);
+        self.0.r[0] = badge;
+        self.0.r[1] = message_info;
+        for (index, word) in words.iter().enumerate() {
+            self.0.r[index + 2] = *word;
         }
     }
 
     /// # Safety
     /// The page-table root and all mappings must remain owned for this call.
     /// Only the single-CPU runtime may call this, without shared-state borrows.
-    pub unsafe fn run(&mut self, root: usize) -> UserEvent {
-        assert!(irq::masked());
+    pub unsafe fn run(&mut self, root: usize, ipc_buffer: usize) -> UserEvent {
+        assert!(instructions::irq_masked());
         let mut trap = RawTrap::default();
         memory::activate(root);
+        // Runtime convention: read-only thread register locates this task's
+        // IPC buffer. This is separate from the seL4 syscall wire protocol.
+        TPIDRRO_EL0.set(ipc_buffer as u64);
         // SAFETY: exclusively borrowed context and stack-local result remain
         // alive until the assembly restores this kernel continuation.
         unsafe { run_user(&mut self.0, &mut trap) };
         memory::activate_kernel();
-        assert!(irq::masked());
+        assert!(instructions::irq_masked());
         match trap.kind {
             1 => UserEvent::Interrupt,
             0 if trap.esr >> 26 == 0x15 && trap.esr & 0xffff == 0 => UserEvent::Syscall,
@@ -68,7 +77,7 @@ impl UserContext {
 }
 #[derive(Default)]
 #[repr(C)]
-pub(super) struct RawTrap {
+pub(in crate::arch::kernel) struct RawTrap {
     pub kind: u64,
     pub esr: u64,
     pub far: u64,
@@ -85,7 +94,7 @@ pub enum UserEvent {
 
 // AAPCS64 callee-saved registers plus trusted pointers, never user-visible.
 #[repr(C, align(16))]
-pub(super) struct KernelReturnFrame {
+pub(in crate::arch::kernel) struct KernelReturnFrame {
     pub saved: [u64; 12],
     pub context: *mut TrapFrame,
     pub trap: *mut RawTrap,

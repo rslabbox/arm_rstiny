@@ -55,14 +55,16 @@ SMP、MCS、虚拟化、动态链接、POSIX、网络栈、磁盘写入与形式
 
 ## 3. 当前项目与参考系统的差距
 
-### 3.1 当前项目已有内容
+### 3.1 路线制定时的项目基线
+
+下表记录最初行为，文件路径已随目录迁移更新；当前实现以 [架构目录](arch-layout.md) 和各子系统文档为准。
 
 | 位置 | 当前行为 | 后续处理 |
 | --- | --- | --- |
-| `src/arch/boot.rs` | 启动栈、EL 切换、启动页表、开启 MMU | 保留思路，审计并拆分启动映射和运行期映射 |
-| `src/arch/page_table.rs` | 页表项与权限位构造 | 扩展完整页表遍历、映射、撤销、TLB 操作 |
-| `src/arch/trap.S`、`context.rs` | 异常入口与通用寄存器保存恢复 | 用作用户态入口、syscall 和线程切换基础 |
-| `src/arch/trap.rs` | 同步异常及 IRQ 主要打印日志 | 按异常来源与 ESR 分类处理，增加调度和故障路径 |
+| `src/arch/kernel/boot.rs` | 启动栈、EL 切换、启动页表、开启 MMU | 保留思路，审计并拆分启动映射和运行期映射 |
+| `src/arch/kernel/vspace/page_table.rs` | 页表项与权限位构造 | 扩展完整页表遍历、映射、撤销、TLB 操作 |
+| `src/arch/kernel/trap.S`、`src/arch/kernel/thread/context.rs` | 异常入口与通用寄存器保存恢复 | 用作用户态入口、syscall 和线程切换基础 |
+| `src/arch/kernel/trap.rs` | 同步异常及 IRQ 主要打印日志 | 按异常来源与 ESR 分类处理，增加调度和故障路径 |
 | `src/utils/console.rs` | 内核直接访问 PL011 | 缩为编译期可选 debug 输出后端 |
 | `src/utils/logging.rs` | `LOG` 选择日志级别，普通打印绕过级别 | 普通输出统一走 LOG，panic 使用独立应急输出 |
 | `src/utils/heap_allocator.rs` | 固定 16 MiB 内核堆，初始化时直接打印 | 早期可保留；后续对象内存改由 Untyped 授权管理 |
@@ -372,7 +374,9 @@ SMP 需要独立设计跨核调度、锁、IPI、TLB shootdown 和跨核回收�
 ```text
 src/
   main.rs
-  arch/aarch64/       # 启动、trap、上下文、页表、TLB/cache
+  arch/
+    kernel/          # boot、trap、thread、vspace
+    machine/         # CPU 指令、MMU、GIC、counter/timer
   platform/qemu_virt/ # 地址布局、GIC、架构 timer、PSCI
   kernel/
     boot.rs          # 初始资源与 root task
@@ -402,7 +406,7 @@ docs/
 
 内核链接脚本与用户 ELF 链接配置分离。Cargo workspace 不能把内核的 `-Tlink.lds` 套给用户 ELF；用户构建入口统一配置 LLD 默认布局，应用不维护独立脚本。`abi` 不依赖内核内部对象；跨边界结构采用 `repr(C)`、固定宽度类型、显式版本和保留字段，不直接暴露 Rust enum、Vec、引用或内部指针。
 
-syscall 寄存器约定建议统一为 x8 操作号、x0 目标 CapPtr/返回状态、x1…x6 标量参数与结果，其余寄存器默认保存。IPC 具体占用的消息寄存器需在 IPC 与故障 固化；SVC 包装正确声明寄存器和内存影响。该约定是本项目设计，不是 seL4 ABI。
+syscall 已采用 seL4 AArch64 non-MCS 约定：x7 负调用号、x0 目标 CapPtr、x1 MessageInfo、x2..x5 消息寄存器。对象方法、运行时扩展和实际兼容边界见 [seL4 ABI](sel4-abi.md)；Endpoint IPC 仍待实现。
 
 所有 syscall 必须定义非法 capability、权限不足、类型不符、参数错误、内存不足、不支持、对端消失等错误。用户内存访问不能直接把任意地址转为 Rust 引用；实现有边界检查和 fault 恢复能力的复制，或使用已验证、受控映射的 IPC buffer。
 

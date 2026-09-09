@@ -1,7 +1,7 @@
 //! Adopt elfloader's loaded root image; the kernel neither embeds nor loads ELF files.
+use crate::memory::address::phys_to_virt;
 use crate::{
-    arch::boot,
-    config::phys_to_virt,
+    arch::kernel::boot,
     memory::{self, AddressSpace},
 };
 use kernel_abi::*;
@@ -23,7 +23,9 @@ pub extern "C" fn start_root() -> ! {
     // SAFETY: the boot contract validated and mapped this reserved physical page.
     let headers = unsafe {
         core::slice::from_raw_parts(
-            phys_to_virt(loaded.image_end) as *const u8,
+            phys_to_virt(memory_addr::PhysAddr::from_usize(loaded.image_end))
+                .expect("direct-map address")
+                .as_usize() as *const u8,
             PAGE_SIZE as usize,
         )
     };
@@ -100,7 +102,12 @@ pub extern "C" fn start_root() -> ! {
         core::slice::from_raw_parts((&header as *const BootInfoHeader).cast::<u8>(), header_size)
     };
     let dtb = unsafe {
-        core::slice::from_raw_parts(phys_to_virt(loaded.dtb) as *const u8, loaded.dtb_size)
+        core::slice::from_raw_parts(
+            phys_to_virt(memory_addr::PhysAddr::from_usize(loaded.dtb))
+                .expect("direct-map address")
+                .as_usize() as *const u8,
+            loaded.dtb_size,
+        )
     };
     space
         .initialize(layout.extra as usize, header_bytes)
@@ -141,6 +148,6 @@ pub extern "C" fn start_root() -> ! {
         space,
         loaded.entry as u64,
         layout.boot_info,
-        crate::syscall::dispatch,
+        crate::api::dispatch,
     )
 }

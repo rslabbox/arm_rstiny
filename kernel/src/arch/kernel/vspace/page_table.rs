@@ -132,7 +132,7 @@ impl From<MemFlags> for DescriptorAttr {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(transparent)]
 pub struct PageTableEntry(u64);
 
@@ -151,6 +151,19 @@ impl PageTableEntry {
             attr |= DescriptorAttr::NON_BLOCK;
         }
         Self(attr.bits() | (paddr.as_usize() & Self::PHYS_ADDR_MASK) as u64)
+    }
+    pub fn is_present(self) -> bool {
+        self.0 & DescriptorAttr::VALID.bits() != 0
+    }
+    pub fn is_table_or_page(self) -> bool {
+        self.0 & (DescriptorAttr::VALID | DescriptorAttr::NON_BLOCK).bits()
+            == (DescriptorAttr::VALID | DescriptorAttr::NON_BLOCK).bits()
+    }
+    pub fn flags(self) -> MemFlags {
+        DescriptorAttr::from_bits_retain(self.0).into()
+    }
+    pub fn physical(self) -> PhysAddr {
+        PhysAddr::from_usize(self.0 as usize & Self::PHYS_ADDR_MASK)
     }
     pub fn new_table(paddr: PhysAddr) -> Self {
         let attr = DescriptorAttr::NON_BLOCK | DescriptorAttr::VALID;

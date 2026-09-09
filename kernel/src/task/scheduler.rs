@@ -6,12 +6,17 @@ use super::{
 use crate::utils::single_core::SingleCore;
 use crate::{
     arch::{
-        TrapFrame, irq,
-        kernel_context::{self, KernelContext},
-        user::UserContext,
+        kernel::thread::{
+            TrapFrame,
+            kernel_context::{self, KernelContext},
+            user::UserContext,
+        },
+        machine::{instructions, time},
     },
     memory::AddressSpace,
 };
+use alloc::rc::Rc;
+use core::cell::RefCell;
 use kernel_abi::*;
 #[path = "api.rs"]
 pub(crate) mod api;
@@ -19,7 +24,6 @@ pub(crate) mod api;
 /// Scheduling decisions, independent of syscall numbers and register encoding.
 pub(crate) enum Disposition {
     Resume,
-    Suspend,
     Sleep(u64),
     Wait(u64),
     Exit(u64),
@@ -29,11 +33,13 @@ pub(crate) enum Disposition {
 pub(super) struct Task {
     state: u64,
     root: usize,
+    cspace: u64,
+    ipc_buffer: usize,
     execution: Option<Execution>,
     completion: Option<u64>,
     id: u64,
     parent: u64,
-    space: Option<AddressSpace>,
+    space: Option<Rc<RefCell<AddressSpace>>>,
     deadline: u64,
     wait_for: u64,
     result: u64,
@@ -45,6 +51,8 @@ impl Task {
         Self {
             state: TASK_CREATED,
             root: 0,
+            cspace: 0,
+            ipc_buffer: 0,
             execution: None,
             completion: None,
             id: 0,
@@ -78,7 +86,7 @@ static SCHEDULER: SingleCore<Scheduler> = SingleCore::new(Scheduler {
     pending: None,
 });
 pub(super) fn with_scheduler<T>(operation: impl FnOnce(&mut Scheduler) -> T) -> T {
-    assert!(irq::masked());
+    assert!(instructions::irq_masked());
     // The mutable borrow ends before restoring a task context or entering idle.
     operation(&mut SCHEDULER.borrow_mut())
 }
@@ -87,8 +95,9 @@ impl Scheduler {
     fn current_slot(&self) -> Option<usize> {
         self.current
     }
-    pub(super) fn current_root(&self) -> usize {
-        self.tasks[self.current.expect("user execution outside task")].root
+    pub(super) fn current_root(&self) -> (usize, usize) {
+        let task = &self.tasks[self.current.expect("user execution outside task")];
+        (task.root, task.ipc_buffer)
     }
     pub(super) fn current_id(&self) -> Option<u64> {
         self.current_slot().map(|slot| self.tasks[slot].id)
@@ -109,19 +118,16 @@ impl Scheduler {
             id,
             parent,
             root: space.root(),
-            space: Some(space),
+            space: Some(Rc::new(RefCell::new(space))),
             ..Task::empty()
         };
         Ok(slot)
     }
-    fn lookup(&self, caller: usize, id: u64) -> Result<usize, u64> {
+    fn lookup(&self, id: u64) -> Result<usize, u64> {
         let index = (id % MAX_TASKS as u64) as usize;
         let task = &self.tasks[index];
         if id == 0 || task.id != id {
             return Err(NOT_FOUND);
-        }
-        if index != caller && task.parent != self.tasks[caller].id {
-            return Err(PERMISSION_DENIED);
         }
         Ok(index)
     }
@@ -139,6 +145,7 @@ impl Scheduler {
         task.execution = None;
         task.space = None; // We already switched back to the kernel's page table.
         let id = task.id;
+        crate::object::retire_task(id);
         let root_id = if self.tasks[0].terminal() {
             0
         } else {
@@ -173,7 +180,7 @@ impl Scheduler {
         }
     }
     fn wake_sleepers(&mut self) {
-        let now = irq::now();
+        let now = time::now();
         for index in 0..MAX_TASKS {
             if self.tasks[index].state == TASK_SLEEPING && now >= self.tasks[index].deadline {
                 self.ready(index);
@@ -203,10 +210,6 @@ impl Scheduler {
         self.tasks[index].execution = Some(active.execution);
         match disposition {
             Disposition::Resume => {}
-            Disposition::Suspend => {
-                self.tasks[index].suspended_from = TASK_RUNNING;
-                self.tasks[index].state = TASK_SUSPENDED;
-            }
             Disposition::Sleep(deadline) => {
                 self.tasks[index].deadline = deadline;
                 self.tasks[index].state = TASK_SLEEPING;
@@ -236,6 +239,12 @@ impl Scheduler {
         .expect("root kernel stack");
         let index = self.create(0, space).expect("cannot create root task");
         self.tasks[index].execution = Some(execution);
+        self.tasks[index].ipc_buffer = boot_info as usize - crate::memory::PAGE_SIZE;
+        self.tasks[index].cspace = crate::object::init_root(
+            self.tasks[index].id,
+            self.tasks[index].space.as_ref().unwrap().clone(),
+            self.tasks[index].ipc_buffer,
+        );
         self.tasks[index].started = true;
         self.ready(index);
     }
@@ -261,7 +270,7 @@ struct SwitchLink {
 /// destruction can discard the continuation without unwinding its stack.
 /// Returns a wait completion only when the target has terminated.
 pub(crate) fn park(disposition: Disposition) -> Option<u64> {
-    assert!(irq::masked());
+    assert!(instructions::irq_masked());
     let (id, link) = with_scheduler(|scheduler| {
         assert!(scheduler.pending.is_none());
         scheduler.pending = Some(disposition);
@@ -288,7 +297,7 @@ pub(crate) fn park(disposition: Disposition) -> Option<u64> {
 
 /// Schedule kernel continuations. This loop has no user trap or syscall policy.
 pub(super) fn run() -> ! {
-    let mut scheduler_context = KernelContext::empty();
+    let mut scheduler_context = KernelContext::default();
     loop {
         let next = with_scheduler(|scheduler| scheduler.take_next());
         if let Some(mut active) = next {
@@ -320,5 +329,6 @@ pub(super) fn run() -> ! {
 #[unsafe(no_mangle)]
 extern "C" fn root_idle(root_state: u64) {
     core::hint::black_box(root_state);
-    irq::wait_and_service();
+    instructions::wait_for_interrupt();
+    let _ = crate::interrupt::handle();
 }

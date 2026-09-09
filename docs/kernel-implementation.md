@@ -10,7 +10,7 @@
 | --- | --- |
 | 项目结构 | 根 Cargo workspace 接入 kernel、fatboot 和共享 ABI，内核与用户程序分别传递链接脚本 |
 | 构建 | 统一使用 `kernel` 包名与产物名；按优化级别/LOG/test 配置分目录；默认无磁盘无网络 |
-| 启动 | Rust bootloader 在固定 EL1 入口负责 ELF 装载和启用 MMU；boot.rs 接收 x0..x5、建栈、清零内核 BSS 并安装运行期映射 |
+| 启动 | Rust bootloader 在固定 EL1 入口负责 ELF 装载和启用 MMU；boot.rs 接收 x0..x5、建栈和清零 BSS；memory/kernel 组装映射，arch/machine/mmu 安装根表 |
 | 内存 | 4 KiB 对齐的四级页表；替换 loader 临时映射后使用细粒度运行期映射；text RX、rodata R/NX、data/BSS/heap/stack RW/NX |
 | 保护 | 所有内核页禁止 EL0 访问；启用 WXN；栈下留未映射页；TTBR1 提供高地址内核映射，TTBR0 独立管理用户页；设备仅映射 UART/GIC 所需范围 |
 | 分配 | 保留有界 16 MiB 启动堆及原分配器测试；检查范围位于约定 RAM 内；不对外分配未映射 RAM |
@@ -19,7 +19,7 @@
 | 故障 | 每个向量入口记录 kind/source；ESR/FAR/寄存器先保存后打印；内核致命异常与 panic 调用 PSCI 关机；正常启动进入 fatboot，用户暂停/故障后 idle；固件返回时停驻兜底 |
 | 自测 | kernel-test 单独开启；分配器失败有断言；故障探针仅在测试构建保留 |
 
-默认路径不执行旧的 `user_main()`；原先这个 EL1 普通函数已移除，避免误认成用户态。`arch/irq.rs` 现在实现 GICv3/PPI 30 和物理定时器抢占；`utils/timer.rs` 仅为读计数器工具。
+默认路径不执行旧的 `user_main()`；原先这个 EL1 普通函数已移除，避免误认成用户态。GIC、单次定时器、调度 tick 和中断分发已分开，见 [中断设计](interrupts.md)；`arch/machine/time.rs` 提供系统 counter。
 
 ## 实际验证
 
@@ -53,3 +53,5 @@
 内核启动实现不使用独立 boot.S；早期 MMU 初始化由 bootloader/ 中的 Rust 实现完成，必要的系统寄存器操作使用内联汇编。固定 EL1 入口通过 dev/release 集成验证；trap.S 的异常寄存器保存入口保持独立。引导产物、上游来源及兼容范围见 [引导链](boot.md)。
 
 用户执行已采用 [可返回的控制权反转](user-execution.md)：EL0 trap 保存现场并恢复内核调用链，由 task/runtime.rs 的共享栈循环完成调度。旧的重置栈跳转路径已删除。
+
+正式映射现由区域布局、页表遍历/存储、MMU 安装三层实现，详见 [内核映射设计](kernel-mapping.md)。

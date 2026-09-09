@@ -35,6 +35,8 @@ def check_mapping(qemu, kernel, minimum):
             gdb.run_to(syms['start_root'])
             assert gdb.word(syms['LOADER_BOOT_INFO'] + 48) == physical, 'kernel did not discover its PA'
             check_layout(gdb, syms)
+            if 'SELF_TEST_PASSED' in syms:
+                assert gdb.word(syms['SELF_TEST_PASSED']) == 1, 'relocated kernel self-tests failed'
             print(f'  VA {syms["skernel"]:#x} -> PA {physical:#x}', flush=True)
         except Exception:
             print((tmp / 'serial').read_text(errors='replace'), flush=True)
@@ -74,6 +76,17 @@ def main():
                 run_tasks(args.qemu, kernel)
             finally:
                 build(mode, 'info', False, 0)
+        # Run the production address APIs themselves at both placements, including
+        # software/hardware translation agreement and separate user spaces.
+        tested_digest = None
+        for minimum in (0x41000000, 0x43e00000):
+            kernel = build(mode, 'info', True, minimum)
+            current_digest = hashlib.sha256(kernel.read_bytes()).digest()
+            if tested_digest is None:
+                tested_digest = current_digest
+            assert current_digest == tested_digest, 'test kernel depends on physical placement'
+            print(f'CHECK address translation {mode} minimum={minimum:#x}', flush=True)
+            check_mapping(args.qemu, kernel, minimum)
         # An impossible placement must fail before modifying destination RAM.
         kernel = build(mode, 'info', False, 0x48000000)
         reject(args.qemu, boot_image(kernel), 0, b'070701')

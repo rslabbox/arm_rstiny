@@ -316,7 +316,7 @@ def boot(qemu, elf, printing, tests=False, probe=None, layout=False, quiet_boot=
                     gdb.run_to(syms['_start'])
                     check_handoff(gdb, elf)
                 gdb.run_to(syms["start_root"])
-                assert gdb.word(syms["BOOT_ENTRY_EL_VALUE"]) == 1
+                assert gdb.reg("cpsr") & 0xF == 5, "kernel startup is not EL1h"
                 if tests:
                     assert gdb.word(syms["SELF_TEST_PASSED"]) == 1
                 if layout:

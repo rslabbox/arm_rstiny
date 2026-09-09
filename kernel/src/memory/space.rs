@@ -2,19 +2,20 @@ use super::{
     Error, MAX_PAGES, PAGE_SIZE, USER_END, USER_START, frame::Frame, sync_code, sync_translations,
     validate_permissions,
 };
-use crate::{arch::PageTableEntry, config::MemFlags};
-use alloc::vec::Vec;
-use memory_addr::PhysAddr;
+use crate::{arch::kernel::vspace::PageTableEntry, config::MemFlags};
+use alloc::{rc::Rc, vec::Vec};
+use memory_addr::{PhysAddr, VirtAddr};
 
 struct Page {
     va: usize,
-    frame: Frame,
+    frame: Rc<Frame>,
     permissions: u64,
     pinned: bool,
 }
 struct Table {
     index: usize,
-    frame: Frame,
+    frame: Rc<Frame>,
+    managed: bool,
 }
 
 pub struct AddressSpace {
@@ -51,7 +52,11 @@ impl AddressSpace {
         let l2 = Frame::allocate()?;
         // SAFETY: all three frames are uniquely owned, zeroed, inactive tables.
         unsafe {
-            crate::arch::boot::prepare_user_tables(root.address(), l1.address(), l2.address())
+            crate::arch::kernel::vspace::paging::prepare_user_tables(
+                root.address(),
+                l1.address(),
+                l2.address(),
+            )
         };
         Ok(Self {
             root,
@@ -143,7 +148,8 @@ impl AddressSpace {
             if !self.tables.iter().any(|t| t.index == index) {
                 tables.push(Table {
                     index,
-                    frame: Frame::allocate()?,
+                    frame: Rc::new(Frame::allocate()?),
+                    managed: true,
                 });
             }
         }
@@ -153,10 +159,10 @@ impl AddressSpace {
         for address in range.step_by(PAGE_SIZE) {
             pages.push(Page {
                 va: address,
-                frame: match loaded {
+                frame: Rc::new(match loaded {
                     Some(physical) => Frame::take_boot(physical + address - va)?,
                     None => Frame::allocate()?,
-                },
+                }),
                 permissions,
                 pinned,
             });
@@ -184,6 +190,107 @@ impl AddressSpace {
         sync_translations();
         Ok(())
     }
+    /// Query this address space, not the currently installed TTBR0. Includes
+    /// the byte offset; mapping existence does not authorize a requested access.
+    pub fn translate(&self, va: VirtAddr) -> Result<super::Translation, Error> {
+        let va = va.as_usize();
+        if !(USER_START..USER_END).contains(&va) {
+            return Err(Error::InvalidArgument);
+        }
+        let page = &self.pages[self.index(va)?];
+        // SAFETY: metadata keeps the containing table/frame alive and only this
+        // single-core owner can mutate them. The leaf index is bounded to 512.
+        let entry = unsafe {
+            (self.table(va) as *const PageTableEntry)
+                .add((va >> 12) & 511)
+                .read_volatile()
+        };
+        if !entry.is_present() {
+            return Err(Error::NotMapped);
+        }
+        if !entry.is_table_or_page() || entry.physical().as_usize() != page.frame.physical() {
+            return Err(Error::InvalidArgument);
+        }
+        Ok(super::Translation {
+            physical: PhysAddr::from_usize(entry.physical().as_usize() + (va & (PAGE_SIZE - 1))),
+            flags: entry.flags(),
+            page_size: PAGE_SIZE,
+        })
+    }
+    pub fn frame_at(&self, va: usize) -> Result<Rc<Frame>, Error> {
+        Ok(self.pages[self.index(va)?].frame.clone())
+    }
+    /// Install an explicitly supplied small-page object. The containing L3
+    /// table must already exist; no implicit user-object allocation occurs.
+    pub fn map_page(&mut self, va: usize, frame: Rc<Frame>, permissions: u64) -> Result<(), Error> {
+        Self::range(va, PAGE_SIZE)?;
+        validate_permissions(permissions)?;
+        if self.index(va).is_ok() {
+            return Err(Error::AlreadyMapped);
+        }
+        if self.pages.len() == MAX_PAGES {
+            return Err(Error::NoMemory);
+        }
+        if !self.tables.iter().any(|t| t.index == va >> 21) {
+            return Err(Error::NotMapped);
+        }
+        self.pages.try_reserve(1).map_err(|_| Error::NoMemory)?;
+        if permissions & 4 != 0 {
+            sync_code(frame.address(), PAGE_SIZE);
+        }
+        store(
+            self.table(va),
+            (va >> 12) & 511,
+            descriptor(&frame, permissions),
+        );
+        self.pages.push(Page {
+            va,
+            frame,
+            permissions,
+            pinned: false,
+        });
+        self.pages.sort_unstable_by_key(|p| p.va);
+        sync_translations();
+        Ok(())
+    }
+    /// This fixed-window VSpace preinstalls L1/L2; object PageTables are L3.
+    pub fn map_table(&mut self, va: usize, frame: Rc<Frame>) -> Result<(), Error> {
+        if va >= USER_END {
+            return Err(Error::InvalidArgument);
+        }
+        let index = va >> 21;
+        if self.tables.iter().any(|t| t.index == index) {
+            return Err(Error::AlreadyMapped);
+        }
+        self.tables.try_reserve(1).map_err(|_| Error::NoMemory)?;
+        store(
+            self.l2.address(),
+            index,
+            PageTableEntry::new_table(PhysAddr::from_usize(frame.physical())),
+        );
+        self.tables.push(Table {
+            index,
+            frame,
+            managed: false,
+        });
+        sync_translations();
+        Ok(())
+    }
+    pub fn unmap_table(&mut self, va: usize) -> Result<(), Error> {
+        let index = va >> 21;
+        if self.pages.iter().any(|p| p.va >> 21 == index) {
+            return Err(Error::Permission);
+        }
+        let slot = self
+            .tables
+            .iter()
+            .position(|t| t.index == index)
+            .ok_or(Error::NotMapped)?;
+        store(self.l2.address(), index, PageTableEntry::empty());
+        sync_translations();
+        self.tables.remove(slot);
+        Ok(())
+    }
     fn mutable_range(&self, va: usize, len: usize) -> Result<core::ops::Range<usize>, Error> {
         let range = Self::range(va, len)?;
         for address in range.clone().step_by(PAGE_SIZE) {
@@ -205,13 +312,14 @@ impl AddressSpace {
         sync_translations(); // Revoke translations before releasing physical ownership.
         self.pages.retain(|page| !range.contains(&page.va));
         for table in &self.tables {
-            if !self.pages.iter().any(|page| page.va >> 21 == table.index) {
+            if table.managed && !self.pages.iter().any(|page| page.va >> 21 == table.index) {
                 store(self.l2.address(), table.index, PageTableEntry::empty());
             }
         }
         sync_translations();
-        self.tables
-            .retain(|table| self.pages.iter().any(|page| page.va >> 21 == table.index));
+        self.tables.retain(|table| {
+            !table.managed || self.pages.iter().any(|page| page.va >> 21 == table.index)
+        });
         Ok(())
     }
     pub fn protect(&mut self, va: usize, len: usize, permissions: u64) -> Result<(), Error> {
@@ -260,12 +368,23 @@ impl AddressSpace {
     /// Validates the entire user range before copying through owned frame aliases.
     pub fn read(&self, va: usize, buffer: &mut [u8]) -> Result<(), Error> {
         self.check(va, buffer.len(), 1)?;
-        for (offset, byte) in buffer.iter_mut().enumerate() {
-            let page = &self.pages[self.index(va + offset)?];
-            // SAFETY: range validated and the frame remains owned throughout copying.
-            *byte = unsafe {
-                *((page.frame.address() + ((va + offset) & (PAGE_SIZE - 1))) as *const u8)
-            };
+        let mut offset = 0;
+        while offset < buffer.len() {
+            let address = va + offset;
+            let count = (PAGE_SIZE - (address & (PAGE_SIZE - 1))).min(buffer.len() - offset);
+            let mapping = self.translate(VirtAddr::from_usize(address))?;
+            let source = super::address::phys_to_virt(mapping.physical)
+                .map_err(|_| Error::InvalidArgument)?;
+            // SAFETY: complete range validated; mapping owns the source page and
+            // the destination is the caller's writable slice. Overlap is allowed.
+            unsafe {
+                core::ptr::copy(
+                    source.as_usize() as *const u8,
+                    buffer.as_mut_ptr().add(offset),
+                    count,
+                );
+            }
+            offset += count;
         }
         Ok(())
     }
@@ -276,12 +395,23 @@ impl AddressSpace {
     /// Loader-only initialization; callers cannot access it through a user syscall.
     pub fn initialize(&mut self, va: usize, buffer: &[u8]) -> Result<(), Error> {
         self.check(va, buffer.len(), 1)?;
-        for (offset, byte) in buffer.iter().enumerate() {
-            let page = &self.pages[self.index(va + offset)?];
-            // SAFETY: mapping is owned and no user runs concurrently on this CPU.
+        let mut offset = 0;
+        while offset < buffer.len() {
+            let address = va + offset;
+            let count = (PAGE_SIZE - (address & (PAGE_SIZE - 1))).min(buffer.len() - offset);
+            let mapping = self.translate(VirtAddr::from_usize(address))?;
+            let destination = super::address::phys_to_virt(mapping.physical)
+                .map_err(|_| Error::InvalidArgument)?;
+            // SAFETY: range validated; initialization uses the owned frame's
+            // writable kernel alias while no user task executes on this CPU.
             unsafe {
-                *((page.frame.address() + ((va + offset) & (PAGE_SIZE - 1))) as *mut u8) = *byte
-            };
+                core::ptr::copy(
+                    buffer.as_ptr().add(offset),
+                    destination.as_usize() as *mut u8,
+                    count,
+                );
+            }
+            offset += count;
         }
         if !buffer.is_empty() {
             for address in (va & !(PAGE_SIZE - 1)..va + buffer.len()).step_by(PAGE_SIZE) {

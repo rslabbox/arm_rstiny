@@ -1,5 +1,7 @@
 //! User address spaces own their mappings, frames and private page tables.
-mod frame;
+pub(crate) mod address;
+pub(crate) mod frame;
+pub(crate) mod kernel;
 mod space;
 mod user_ptr;
 pub use frame::available as available_frames;
@@ -31,7 +33,7 @@ pub fn validate_permissions(flags: u64) -> Result<(), Error> {
 
 pub fn sync_translations() {
     aarch64_cpu::asm::barrier::dsb(aarch64_cpu::asm::barrier::ISH);
-    crate::arch::instructions::flush_tlb_all();
+    crate::arch::machine::instructions::flush_tlb_all();
 }
 
 pub fn activate(root: usize) {
@@ -42,7 +44,7 @@ pub fn activate(root: usize) {
 }
 
 pub fn activate_kernel() {
-    activate(crate::arch::boot::kernel_root());
+    activate(kernel::empty_user_root());
 }
 
 pub fn sync_code(address: usize, size: usize) {
@@ -60,4 +62,12 @@ pub fn sync_code(address: usize, size: usize) {
     }
     barrier::dsb(barrier::ISH);
     barrier::isb(barrier::SY);
+}
+
+/// One mapped byte address and the permissions of its containing leaf page.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Translation {
+    pub physical: memory_addr::PhysAddr,
+    pub flags: crate::config::MemFlags,
+    pub page_size: usize,
 }

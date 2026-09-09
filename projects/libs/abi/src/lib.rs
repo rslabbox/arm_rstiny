@@ -4,14 +4,32 @@ pub const PAGE_SIZE: u64 = 4096;
 pub const MAX_DTB_SIZE: u64 = 1024 * 1024;
 pub const BOOTINFO_HEADER_FDT: u64 = 6;
 pub const BOOTINFO_MAGIC: u64 = 0x5253_5449_4e59_4249;
-pub const ABI_VERSION: u64 = 3;
+pub const ABI_VERSION: u64 = 4;
 pub const FEATURE_DEBUG_CONSOLE: u64 = 1;
 mod syscall;
 pub use syscall::Syscall;
+mod message;
+mod object;
+pub use message::*;
+pub use object::*;
 
+// seL4 error labels, encoded in the reply MessageInfo.label.
 pub const OK: u64 = 0;
-pub const UNSUPPORTED: u64 = 1;
-pub const INVALID_ARGUMENT: u64 = 2;
+pub const INVALID_ARGUMENT: u64 = 1;
+pub const INVALID_CAPABILITY: u64 = 2;
+pub const UNSUPPORTED: u64 = 3;
+pub const RANGE_ERROR: u64 = 4;
+pub const ALIGNMENT_ERROR: u64 = 5;
+pub const NOT_FOUND: u64 = 6;
+pub const TRUNCATED_MESSAGE: u64 = 7;
+pub const ALREADY_MAPPED: u64 = 8;
+pub const REVOKE_FIRST: u64 = 9;
+pub const NO_MEMORY: u64 = 10;
+// Internal errors collapse into their seL4 wire categories.
+pub const NOT_MAPPED: u64 = NOT_FOUND;
+pub const PERMISSION_DENIED: u64 = UNSUPPORTED;
+pub const INVALID_STATE: u64 = UNSUPPORTED;
+pub const BUSY: u64 = UNSUPPORTED;
 
 #[derive(Clone, Copy)]
 #[repr(C)]
@@ -82,14 +100,6 @@ pub struct BootInfoHeader {
     pub len: u64,
 }
 
-// Memory and task APIs use x0..x4 arguments; result calls return a value in x1.
-pub const NO_MEMORY: u64 = 3;
-pub const NOT_MAPPED: u64 = 4;
-pub const ALREADY_MAPPED: u64 = 5;
-pub const PERMISSION_DENIED: u64 = 6;
-pub const NOT_FOUND: u64 = 7;
-pub const INVALID_STATE: u64 = 8;
-pub const BUSY: u64 = 9;
 pub const TASK_CREATED: u64 = 0;
 pub const TASK_RUNNING: u64 = 1;
 pub const TASK_SUSPENDED: u64 = 2;

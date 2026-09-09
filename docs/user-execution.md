@@ -19,7 +19,7 @@ fn new_user_task(
 }
 ```
 
-root 由 `boot.rs` 注入 `syscall::dispatch`；子任务由 syscall 层在 TaskStart 时注入同一处理器。TaskCreate 先预留句柄和空地址空间，调用者完成装载后才启动，因此内核栈和入口在 TaskStart 时创建。校验或内存分配失败时任务保持 Created，局部分配由所有权回收，可以重试。
+root 由 `boot.rs` 注入 `api::dispatch`；标准对象路径在 TCB_WriteRegisters 时构造 Execution，TCB_Resume 后启动。托管 Runtime.Start 则同时准备并启动任务。配置或分配失败时，任务保持未启动，临时资源由所有权回收。
 
 回调保存在任务拥有的稳定堆分配中，支持带状态的 `FnMut`。任务执行模块不引用具体 syscall 模块，也没有全局处理器注册表。Linux clone 的 set_child_tid、进程/线程拆分、信号及 POSIX ABI 不在本项目的接口中。
 
@@ -32,26 +32,29 @@ root 由 `boot.rs` 注入 `syscall::dispatch`；子任务由 syscall 层在 Task
 | `task/execution.rs` | 稳定入口闭包、内核上下文和内核栈的唯一所有权 |
 | `task/stack.rs` | 可失败的内核栈分配、保护页及回收 |
 | `task/scheduler.rs` | 内核 continuation 调度、park、状态转换、等待关系、idle 和回收 |
-| `task/api.rs` | 当前调用者身份、目标授权与地址空间操作 |
-| `arch/kernel_context.rs` | IRQ 屏蔽状态下切换内核 callee-saved 寄存器和 SP |
-| `arch/user.rs`、`arch/trap.rs` | 进入 EL0、返回陷入事件及致命异常诊断 |
-| `syscall/dispatch.rs` | 枚举分发、参数解码和 ABI 结果写回 |
+| `task/api.rs` | 当前调用者身份、内部任务生命周期与地址空间操作 |
+| `arch/kernel/thread/kernel_context.rs` | IRQ 屏蔽状态下切换内核 callee-saved 寄存器和 SP |
+| `arch/kernel/thread/user.rs`、`arch/kernel/trap.rs` | 进入 EL0、返回陷入事件及致命异常诊断 |
+| `api/dispatch.rs`、`api/message.rs` | 系统调用分发、MessageInfo/IPC buffer 解码和回复 |
+| `arch/kernel/thread/user.rs` 的 `UserContext` | AArch64 系统调用寄存器读写约定 |
+| `api/faults.rs` | 故障记录和用户故障处置 |
+| `object/` | 当前 CSpace 的 cap 解析、对象方法与派生/撤销 |
 
 ## 每个任务的运行循环
 
 循环在任务自己的内核栈上执行：
 
 1. 在短期调度器借用内读取当前任务的页表根，结束借用。
-2. 调用 `uctx.run(root)`，进入 EL0。
+2. 调用 `uctx.run(root, ipc_buffer)`，进入 EL0。
 3. 陷入返回同一 Rust 调用点；此时 IRQ 屏蔽，TTBR0 已恢复为空内核根。
 4. Syscall 交给注入的回调；IRQ 完成 ack/清源/EOI；用户故障记录后请求终止当前任务。
 5. 调用 `park(action)` 切回调度器栈。再次被选中时从该调用后继续循环。
 
 非定时器或伪中断直接继续当前任务。保留现有 FIFO 与正常 syscall 后轮转的策略；10 ms 定时器可抢占不主动 yield 的 EL0 程序。EL1 期间 IRQ 始终屏蔽，不支持内核抢占。
 
-`wait` 可以在 syscall handler 内调用 `park(Wait(target))`。调度器记录等待关系，子任务终止时保存完成值并唤醒等待者。等待者恢复自己的内核调用栈，`park` 返回完成值，handler 返回，dispatch 写回 x0/x1。等待者暂停期间的完成只记录结果，不自动恢复它。查询完成状态与提交等待之间不会运行其他任务，避免丢失唤醒。
+`wait` 可以在 syscall handler 内调用 `park(Wait(target))`。调度器记录等待关系，子任务终止时保存完成值并唤醒等待者。等待者恢复自己的内核调用栈，`park` 返回完成值，handler 返回，dispatch 写回 MessageInfo 与消息寄存器。等待者暂停期间的完成只记录结果，不自动恢复它。查询完成状态与提交等待之间不会运行其他任务，避免丢失唤醒。
 
-Sleep/Suspend 在用户循环提交对应动作；Exit/Fault 切走后永久不再返回该 continuation。调度器本身不编码 syscall 返回寄存器。
+Sleep 提交阻塞动作；TCB_Suspend 更新目标调度状态；Exit/Fault 切走后永久不再返回该 continuation。调度器本身不编码 syscall 返回寄存器。
 
 ## 三种上下文与栈
 
@@ -59,7 +62,7 @@ Sleep/Suspend 在用户循环提交对应动作；Exit/Fault 切走后永久不�
 
 保存 EL0 的 x0..x30、SP_EL0、ELR_EL1、SPSR_EL1，复用 272 字节 TrapFrame。它持久存在于任务入口闭包的捕获中，通过可变借用传给运行循环和 syscall handler。任务运行期间其他任务不能访问或替换它。
 
-用户 ABI 使用 softfloat。FP/SIMD 通过 CPACR_EL1 禁止，TLS 尚未实现。
+用户 ABI 使用 softfloat。FP/SIMD 通过 CPACR_EL1 禁止，通用 TLS 尚未实现；TPIDRRO_EL0 用于运行库定位 IPC buffer。
 
 ### KernelReturnFrame
 
@@ -69,7 +72,7 @@ SVC #0 作为正常 Syscall 返回，未知调用号由 dispatch 拒绝。EL1 �
 
 ### KernelContext 与 Execution
 
-KernelContext 保存内核 x19..x30 和 SP，按 16 字节对齐，共 112 字节。首次恢复时，x19 指向可信入口捕获，x30 指向入口 trampoline，SP 指向独立栈顶。后续恢复返回先前的 park 调用。
+KernelContext 使用 x19..x28、fp（x29）、lr（x30）、sp 具名字段，按 8 字节自然对齐，共 104 字节；实际执行栈仍要求 16 字节对齐。汇编偏移由 `offset_of!` 生成，编译期检查每对 STP/LDP 字段相邻。首次恢复时，x19 指向可信入口捕获，x30 指向入口 trampoline，SP 指向独立栈顶。后续恢复返回先前的 park 调用。
 
 Execution 拥有稳定堆分配的入口捕获和 64 KiB 内核栈。栈下方额外分配一个 4 KiB 保护页；该页在内核镜像映射和物理直接映射中都取消映射。释放前恢复两处映射，再交回堆分配器。栈来自现有 16 MiB 内核堆，不占用用户帧池。
 
@@ -86,11 +89,11 @@ Execution 拥有稳定堆分配的入口捕获和 64 KiB 内核栈。栈下方�
 
 ## 系统调用与用户指针
 
-共享 ABI 库以 `#[repr(u64)] enum Syscall` 定义调用号，用户库只在 SVC 边界转换为整数。dispatch 通过 `TryFrom<u64>` 检查调用号，再穷尽匹配枚举，没有 route 层。
+共享 ABI 使用 `#[repr(i64)] enum Syscall` 定义 seL4 non-MCS 负调用号；x7 选择调用，Call 的 x0 选择当前 CSpace 中的 capability，x1 为 MessageInfo。对象方法由 `object/` 处理，不把任务/内存方法继续分配为独立 syscall。
 
-寄存器布局封装在 UserContext 的 `syscall_number()`、`arg0()..arg3()`、`set_syscall_result()` 中。指针参数通过 `uctx.argN().into()` 构造 `UserConstPtr<u8>` 或 `UserPtr<u8>`；转换不验证地址，也不创建 Rust 用户内存引用。task API 授权后在指定地址空间中验证完整范围、映射与权限，再通过内核持有的帧复制。源数据完整暂存后再写目标，支持重叠复制且失败不部分写入。
+寄存器操作封装在 UserContext 中。额外消息字与 capability 从当前任务登记的 IPC buffer 读取，逐页校验用户映射。运行时复制服务用 `UserConstPtr` / `UserPtr` 表达用户指针；在验证完整范围与权限后，通过内核帧别名复制，不直接构造用户内存的 Rust 引用。身份只从当前线程设施读取；授权由当前 CSpace 的 cap 解析决定，内部 generation ID 不暴露给用户。
 
-映射起点、任务入口与栈顶按地址处理，不作为普通数据指针解引用。
+完整 wire 布局、对象方法、运行时扩展及兼容边界见 [seL4 ABI](sel4-abi.md)。
 
 ## 验证
 
@@ -99,5 +102,5 @@ Execution 拥有稳定堆分配的入口捕获和 64 KiB 内核栈。栈下方�
 - 2048 次 EL0 返回，验证内核 callee-saved 寄存器、SP、IRQ 状态和定时器独立返回。
 - task → scheduler → task 的真实内核 continuation 切换与寄存器恢复，独立内核栈范围及双别名保护页。
 - 31 个同时挂起的子任务及保护页回收，超过堆容量累计值的 260 次任务启动/退出/销毁。
-- 当前任务身份、父子授权、跨页复制、内存耗尽回滚、定时器抢占、sleep、wait、暂停中的等待完成、销毁阻塞任务。
+- 当前任务身份、跨 CSpace capability 授权、跨页复制、内存耗尽回滚、定时器抢占、sleep、wait、暂停中的等待完成、销毁阻塞任务。
 - masked WFI 前已有 pending timer 的唤醒、用户故障隔离、LOG=off、内核物理重定位和不同 root 虚拟地址。

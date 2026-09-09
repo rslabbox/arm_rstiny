@@ -71,7 +71,7 @@ def check_layout(gdb, syms, elf, level, dtb, guard_protected=False):
         assert va not in mapping, 'kernel/MMIO present in user TTBR0'
     assert (stack_bottom - 4096 not in mapping) == guard_protected
     bi = struct.unpack('<8Q', gdb.memory(boot_info, 64))
-    assert bi == (0x525354494e594249, 3, 64, 4096, int(level != 'off'), ipc, extra, extra_size)
+    assert bi == (0x525354494e594249, 4, 64, 4096, int(level != 'off'), ipc, extra, extra_size)
     assert gdb.memory(boot_info + 64, 4096 - 64) == bytes(4096 - 64)
     assert gdb.memory(extra, 16) == struct.pack('<QQ', 6, extra_size)
     assert gdb.memory(extra + 16, len(dtb)) == dtb, 'DTB changed during BootInfo transfer'
@@ -138,6 +138,7 @@ def run(qemu, kernel, user, level, scenario):
                     phoff = struct.unpack_from('<Q', hello_data, 32)[0]
                     phnum = struct.unpack_from('<H', hello_data, 56)[0]
                     expected = set(range(child_stack_bottom, child_stack_top, 4096))
+                    expected.add(child_stack_top) # explicit IPC frame configured on the TCB
                     for i in range(phnum):
                         typ, flags, offset, va, _, filesz, memsz, _ = struct.unpack_from('<IIQQQQQQ', hello_data, phoff + i * 56)
                         if typ != 1 or memsz == 0:
@@ -182,23 +183,33 @@ def run(qemu, kernel, user, level, scenario):
                     # Patch a scratch instruction at the user entry through the
                     # debugger; guest writes to this RX page are tested below.
                     write(gdb, us['_start'], struct.pack('<I', 0xd4000001)) # svc #0
-                    for number, argument, result in [(0, 17, 0), (20, 0, 1), (999, 0, 1), (2**64 - 1, 0, 1), (1, 256, 2)]:
-                        values = {f'x{i}': 0x12340000 + i for i in range(31)}
-                        values['x0'], values['x8'] = argument, number
-                        for reg, value in values.items():
-                            gdb.write_reg(reg, value)
-                        gdb.write_reg('pc', us['_start'])
-                        gdb.run_to(us['_start'] + 4)
-                        assert gdb.reg('cpsr') & 15 == 0
-                        assert gdb.reg('sp') == stack_top
-                        for reg, value in values.items():
-                            assert gdb.reg(reg) == (result if reg == 'x0' else value), reg
-                    if level == 'off':
-                        gdb.write_reg('x8', 1)
-                        gdb.write_reg('x0', 65)
-                        gdb.write_reg('pc', us['_start'])
-                        gdb.run_to(us['_start'] + 4)
-                        assert gdb.reg('x0') == 1
+                    # Yield preserves every user GPR. Call returns MessageInfo
+                    # in x1 and message words in x2..x5, preserving x6..x30.
+                    cases = [
+                        ((1 << 64)-7, 17, 0, None),
+                        ((1 << 64)-1, 17, 0x1000 << 12, (0, 1)),
+                        ((1 << 64)-1, 17, 0xffff << 12, (3, 0)),
+                        ((1 << 64)-1, 65535, 0, (6, 0)),
+                        ((1 << 64)-1, 17, 127, (7, 0)),
+                    ]
+                    if level != 'off':
+                        cases.append(((1 << 64)-9, 65, 0, None))
+                    for number, cap, tag, reply in cases:
+                        values = {f'x{i}': 0x12340000+i for i in range(31)}
+                        values.update(x0=cap,x1=tag,x7=number)
+                        for reg,value in values.items(): gdb.write_reg(reg,value)
+                        gdb.write_reg('pc',us['_start'])
+                        gdb.run_to(us['_start']+4)
+                        assert gdb.reg('cpsr') & 15 == 0 and gdb.reg('sp') == stack_top
+                        if reply is not None:
+                            values.update(x0=0,x1=(reply[0] << 12)|1,x2=reply[1])
+                        for reg,value in values.items():
+                            assert gdb.reg(reg) == value, (reg,gdb.reg(reg),value)
+                elif scenario in ('unknown-syscall', 'disabled-debug'):
+                    write(gdb,us['_start'],struct.pack('<I',0xd4000001))
+                    gdb.write_reg('x7',999 if scenario == 'unknown-syscall' else (1 << 64)-9)
+                    gdb.run_to(ks['root_idle'])
+                    assert gdb.reg('x0') == 3, 'unknown syscall must fault the task'
                 else:
                     # Injections only change instructions/registers through the
                     # host debugger. Access checks are executed by the EL0 CPU.
@@ -260,7 +271,9 @@ def main():
             user = ROOT / f'target/apps/{mode}/{TARGET}/{mode}/fatboot'
             print(f'CHECK fatboot {mode} LOG={level}', flush=True)
             run(args.qemu, kernel, user, level, 'normal')
-            for scenario in ('ignored-dtb', 'invalid-bootinfo', 'invalid-extra', 'invalid-hello', 'invalid-hello-entry', 'svc-registers', 'kernel-read', 'uart-read', 'text-write',
+            if level == 'off':
+                run(args.qemu, kernel, user, level, 'disabled-debug')
+            for scenario in ('ignored-dtb', 'invalid-bootinfo', 'invalid-extra', 'invalid-hello', 'invalid-hello-entry', 'svc-registers', 'unknown-syscall', 'kernel-read', 'uart-read', 'text-write',
                              'bootinfo-write', 'dtb-write', 'guard-read', 'null-read', 'stack-execute'):
                 print(f'  {scenario}', flush=True)
                 run(args.qemu, kernel, user, level, scenario)

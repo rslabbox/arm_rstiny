@@ -1,3 +1,4 @@
+use crate::memory::address::virt_to_phys;
 use crate::utils::single_core::SingleCore;
 use core::alloc::{GlobalAlloc, Layout};
 use core::ptr::NonNull;
@@ -37,8 +38,18 @@ pub fn init_heap() {
         let heap_end = &__heap_end as *const u8 as usize;
         let heap_size = heap_end - heap_start;
 
-        assert!(crate::config::virt_to_phys(heap_start) >= crate::config::RAM_START);
-        assert!(crate::config::virt_to_phys(heap_end) <= crate::config::RAM_END);
+        assert!(
+            virt_to_phys(memory_addr::VirtAddr::from_usize(heap_start))
+                .expect("kernel address")
+                .as_usize()
+                >= crate::config::RAM_START
+        );
+        assert!(
+            virt_to_phys(memory_addr::VirtAddr::from_usize(heap_end))
+                .expect("kernel address")
+                .as_usize()
+                <= crate::config::RAM_END
+        );
         HEAP_ALLOCATOR
             .0
             .borrow_mut()
