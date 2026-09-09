@@ -4,8 +4,10 @@
 extern crate alloc;
 
 mod arch;
+mod boot;
 mod config;
 mod memory;
+mod syscall;
 mod task;
 #[cfg(feature = "kernel-test")]
 mod test;
@@ -23,5 +25,5 @@ pub fn rust_main() -> ! {
     #[cfg(feature = "kernel-test")]
     test::run();
     log::info!("Kernel ready: launching fatboot");
-    task::start_root()
+    boot::start_root()
 }

@@ -137,5 +137,10 @@ pub extern "C" fn start_root() -> ! {
         loaded.entry,
         layout.boot_info
     );
-    super::start(space, loaded.entry as u64, layout.boot_info)
+    crate::task::start(
+        space,
+        loaded.entry as u64,
+        layout.boot_info,
+        crate::syscall::dispatch,
+    )
 }

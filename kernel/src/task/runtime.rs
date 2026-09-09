@@ -1,32 +1,49 @@
-//! Own the kernel call chain; traps return events and never select tasks.
-use super::scheduler::with_scheduler;
-use crate::arch::{irq, user::UserEvent};
+//! Per-task user loop; the creator supplies the syscall policy.
+use super::{
+    execution::Execution,
+    scheduler::{Disposition, park, with_scheduler},
+};
+use crate::{
+    arch::{
+        irq,
+        user::{UserContext, UserEvent},
+    },
+    memory::Error,
+};
 
-pub(super) fn run() -> ! {
-    loop {
-        let next = with_scheduler(|scheduler| scheduler.take_next());
-        match next {
-            Some(mut active) => {
-                let mut event = active.run();
-                // An unrelated/spurious IRQ is not a consumed time slice.
-                while matches!(event, UserEvent::Interrupt) && !irq::handle() {
-                    event = active.run();
-                }
-                with_scheduler(|scheduler| scheduler.complete_run(active, event));
-            }
-            None => {
-                let state = with_scheduler(|scheduler| scheduler.root_state());
-                root_idle(state);
-            }
-        }
-    }
+pub(super) fn new_user_task(
+    mut uctx: UserContext,
+    mut dispatch_syscall: impl FnMut(&mut UserContext) -> Disposition + Send + 'static,
+) -> Result<Execution, Error> {
+    Execution::new(move || {
+        run_user_thread_loop(&mut uctx, &mut dispatch_syscall);
+    })
 }
 
-/// Stable debugger boundary: x0 describes the root task, independent of its layout.
-/// WFI wakes for a pending IRQ even with DAIF.I set; service it before selecting.
-#[inline(never)]
-#[unsafe(no_mangle)]
-extern "C" fn root_idle(root_state: u64) {
-    core::hint::black_box(root_state);
-    irq::wait_and_service();
+fn run_user_thread_loop(
+    uctx: &mut UserContext,
+    dispatch_syscall: &mut impl FnMut(&mut UserContext) -> Disposition,
+) -> ! {
+    loop {
+        let root = with_scheduler(|scheduler| scheduler.current_root());
+        // SAFETY: this task owns the context; its address space stays alive while
+        // running. No scheduler borrow crosses EL0 or a kernel context switch.
+        let event = unsafe { uctx.run(root) };
+        let action = match event {
+            UserEvent::Syscall => dispatch_syscall(uctx),
+            UserEvent::Interrupt => {
+                if !irq::handle() {
+                    continue;
+                }
+                Disposition::Resume
+            }
+            UserEvent::Fault(fault) => {
+                crate::arch::trap::record_user_fault(uctx.frame(), &fault);
+                Disposition::Fault(fault.esr)
+            }
+        };
+        // All per-iteration locals are plain values. Captured context/handler
+        // stay owned by Execution, so destruction never leaks stack resources.
+        assert!(park(action).is_none());
+    }
 }

@@ -1,34 +1,52 @@
-use super::queue::{MAX_TASKS, RunQueue};
+use super::{
+    execution::Execution,
+    queue::{MAX_TASKS, RunQueue},
+    runtime::new_user_task,
+};
 use crate::utils::single_core::SingleCore;
 use crate::{
     arch::{
         TrapFrame, irq,
-        user::{UserContext, UserEvent},
+        kernel_context::{self, KernelContext},
+        user::UserContext,
     },
     memory::AddressSpace,
 };
 use kernel_abi::*;
+#[path = "api.rs"]
+pub(crate) mod api;
 
-#[repr(C)]
+/// Scheduling decisions, independent of syscall numbers and register encoding.
+pub(crate) enum Disposition {
+    Resume,
+    Suspend,
+    Sleep(u64),
+    Wait(u64),
+    Exit(u64),
+    Fault(u64),
+}
+
 pub(super) struct Task {
-    pub(super) state: u64,
-    pub(super) root: usize,
-    pub(super) context: Option<UserContext>,
-    pub(super) id: u64,
-    pub(super) parent: u64,
-    pub(super) space: Option<AddressSpace>,
-    pub(super) deadline: u64,
-    pub(super) wait_for: u64,
-    pub(super) result: u64,
-    pub(super) started: bool,
-    pub(super) suspended_from: u64,
+    state: u64,
+    root: usize,
+    execution: Option<Execution>,
+    completion: Option<u64>,
+    id: u64,
+    parent: u64,
+    space: Option<AddressSpace>,
+    deadline: u64,
+    wait_for: u64,
+    result: u64,
+    started: bool,
+    suspended_from: u64,
 }
 impl Task {
-    pub(super) const fn empty() -> Self {
+    const fn empty() -> Self {
         Self {
             state: TASK_CREATED,
             root: 0,
-            context: None,
+            execution: None,
+            completion: None,
             id: 0,
             parent: 0,
             space: None,
@@ -39,22 +57,25 @@ impl Task {
             suspended_from: TASK_CREATED,
         }
     }
-    pub(super) fn terminal(&self) -> bool {
+    fn terminal(&self) -> bool {
         matches!(self.state, TASK_EXITED | TASK_FAULTED)
     }
 }
-#[repr(C)]
 pub(super) struct Scheduler {
-    pub(super) tasks: [Task; MAX_TASKS],
-    pub(super) current: Option<usize>,
-    pub(super) queue: RunQueue,
-    pub(super) generation: u64,
+    tasks: [Task; MAX_TASKS],
+    current: Option<usize>,
+    queue: RunQueue,
+    generation: u64,
+    switch: Option<SwitchLink>,
+    pending: Option<Disposition>,
 }
 static SCHEDULER: SingleCore<Scheduler> = SingleCore::new(Scheduler {
     tasks: [const { Task::empty() }; MAX_TASKS],
     current: None,
     queue: RunQueue::new(),
     generation: 1,
+    switch: None,
+    pending: None,
 });
 pub(super) fn with_scheduler<T>(operation: impl FnOnce(&mut Scheduler) -> T) -> T {
     assert!(irq::masked());
@@ -63,7 +84,16 @@ pub(super) fn with_scheduler<T>(operation: impl FnOnce(&mut Scheduler) -> T) -> 
 }
 
 impl Scheduler {
-    pub(super) fn create(&mut self, parent: u64, space: AddressSpace) -> Result<usize, u64> {
+    fn current_slot(&self) -> Option<usize> {
+        self.current
+    }
+    pub(super) fn current_root(&self) -> usize {
+        self.tasks[self.current.expect("user execution outside task")].root
+    }
+    pub(super) fn current_id(&self) -> Option<u64> {
+        self.current_slot().map(|slot| self.tasks[slot].id)
+    }
+    fn create(&mut self, parent: u64, space: AddressSpace) -> Result<usize, u64> {
         let slot = self
             .tasks
             .iter()
@@ -84,7 +114,7 @@ impl Scheduler {
         };
         Ok(slot)
     }
-    pub(super) fn lookup(&self, caller: usize, id: u64) -> Result<usize, u64> {
+    fn lookup(&self, caller: usize, id: u64) -> Result<usize, u64> {
         let index = (id % MAX_TASKS as u64) as usize;
         let task = &self.tasks[index];
         if id == 0 || task.id != id {
@@ -95,18 +125,18 @@ impl Scheduler {
         }
         Ok(index)
     }
-    pub(super) fn ready(&mut self, slot: usize) {
+    fn ready(&mut self, slot: usize) {
         assert_ne!(self.tasks[slot].state, TASK_READY);
         self.tasks[slot].state = TASK_READY;
         self.queue.push(slot);
     }
-    pub(super) fn finish(&mut self, slot: usize, fault: bool, result: u64) {
+    fn finish(&mut self, slot: usize, fault: bool, result: u64) {
         self.queue.remove(slot);
         let task = &mut self.tasks[slot];
         task.state = if fault { TASK_FAULTED } else { TASK_EXITED };
         task.result = result;
         task.root = 0;
-        task.context = None;
+        task.execution = None;
         task.space = None; // We already switched back to the kernel's page table.
         let id = task.id;
         let root_id = if self.tasks[0].terminal() {
@@ -125,8 +155,7 @@ impl Scheduler {
             if (self.tasks[waiter].state == TASK_WAITING || suspended_wait)
                 && self.tasks[waiter].wait_for == id
             {
-                self.tasks[waiter].frame_mut().r[0] = OK;
-                self.tasks[waiter].frame_mut().r[1] = result;
+                self.tasks[waiter].completion = Some(result);
                 self.tasks[waiter].wait_for = 0;
                 if suspended_wait {
                     self.tasks[waiter].suspended_from = TASK_READY;
@@ -151,7 +180,7 @@ impl Scheduler {
             }
         }
     }
-    pub(super) fn take_next(&mut self) -> Option<ActiveRun> {
+    fn take_next(&mut self) -> Option<ActiveTask> {
         self.reap_orphans();
         self.wake_sleepers();
         let index = self.queue.pop()?;
@@ -160,68 +189,136 @@ impl Scheduler {
         assert_eq!(task.state, TASK_READY);
         task.state = TASK_RUNNING;
         self.current = Some(index);
-        Some(ActiveRun {
+        Some(ActiveTask {
             id: task.id,
-            root: task.root,
-            context: task.context.take().expect("ready user context"),
+            execution: task.execution.take().expect("ready task execution"),
         })
     }
-    pub(super) fn complete_run(&mut self, active: ActiveRun, event: UserEvent) {
+    fn complete_run(&mut self, active: ActiveTask) {
+        self.switch = None;
+        let disposition = self.pending.take().expect("task returned without parking");
         let index = self.current.take().expect("active user task");
         assert_eq!(self.tasks[index].id, active.id);
-        assert!(self.tasks[index].context.is_none());
-        self.tasks[index].context = Some(active.context);
-        match event {
-            UserEvent::Syscall => {
-                let outcome = self.syscall(index);
-                match outcome {
-                    super::syscall::Outcome::Complete(result) => match result {
-                        Ok(value) => {
-                            self.tasks[index].frame_mut().r[0] = OK;
-                            if let Some(value) = value {
-                                self.tasks[index].frame_mut().r[1] = value;
-                            }
-                        }
-                        Err(code) => self.tasks[index].frame_mut().r[0] = code,
-                    },
-                    super::syscall::Outcome::Waiting => {}
-                    super::syscall::Outcome::Exited(code) => self.finish(index, false, code),
-                }
+        assert!(self.tasks[index].execution.is_none());
+        self.tasks[index].execution = Some(active.execution);
+        match disposition {
+            Disposition::Resume => {}
+            Disposition::Suspend => {
+                self.tasks[index].suspended_from = TASK_RUNNING;
+                self.tasks[index].state = TASK_SUSPENDED;
             }
-            UserEvent::Interrupt => {}
-            UserEvent::Fault(fault) => {
-                crate::arch::trap::record_user_fault(self.tasks[index].frame(), &fault);
-                self.finish(index, true, fault.esr);
+            Disposition::Sleep(deadline) => {
+                self.tasks[index].deadline = deadline;
+                self.tasks[index].state = TASK_SLEEPING;
             }
+            Disposition::Wait(target) => {
+                self.tasks[index].wait_for = target;
+                self.tasks[index].state = TASK_WAITING;
+            }
+            Disposition::Exit(code) => self.finish(index, false, code),
+            Disposition::Fault(code) => self.finish(index, true, code),
         }
         if self.tasks[index].state == TASK_RUNNING {
             self.ready(index);
         }
     }
-    pub(super) fn root_state(&self) -> u64 {
+    pub(super) fn install_root(
+        &mut self,
+        space: AddressSpace,
+        entry: u64,
+        boot_info: u64,
+        dispatch: impl FnMut(&mut UserContext) -> Disposition + Send + 'static,
+    ) {
+        let execution = new_user_task(
+            UserContext::new(TrapFrame::user(entry, 0, boot_info)),
+            dispatch,
+        )
+        .expect("root kernel stack");
+        let index = self.create(0, space).expect("cannot create root task");
+        self.tasks[index].execution = Some(execution);
+        self.tasks[index].started = true;
+        self.ready(index);
+    }
+    fn root_state(&self) -> u64 {
         self.tasks[0].state
     }
 }
-impl Task {
-    pub(super) fn frame(&self) -> &TrapFrame {
-        self.context.as_ref().expect("saved context").frame()
-    }
-    pub(super) fn frame_mut(&mut self) -> &mut TrapFrame {
-        self.context.as_mut().expect("saved context").frame_mut()
+
+/// The scheduler owns the active execution until it returns to the scheduler
+/// stack. A running task cannot destroy its own stack or address space.
+struct ActiveTask {
+    id: u64,
+    execution: Execution,
+}
+#[derive(Clone, Copy)]
+struct SwitchLink {
+    task: usize,
+    scheduler: usize,
+}
+
+/// Suspend at a cancellation-safe point, retaining this task's Rust call chain.
+/// No shared-state guard or stack-owned resource may cross this boundary:
+/// destruction can discard the continuation without unwinding its stack.
+/// Returns a wait completion only when the target has terminated.
+pub(crate) fn park(disposition: Disposition) -> Option<u64> {
+    assert!(irq::masked());
+    let (id, link) = with_scheduler(|scheduler| {
+        assert!(scheduler.pending.is_none());
+        scheduler.pending = Some(disposition);
+        (
+            scheduler.current_id().unwrap(),
+            scheduler.switch.expect("park outside task"),
+        )
+    });
+    // SAFETY: the scheduler's suspended run frame owns both contexts and stacks.
+    // No shared-state borrow survives this call. Before selecting another task
+    // the scheduler clears this link; a resumed task uses its newly installed link.
+    unsafe {
+        kernel_context::switch(
+            link.task as *mut KernelContext,
+            link.scheduler as *const KernelContext,
+        )
+    };
+    with_scheduler(|scheduler| {
+        assert_eq!(scheduler.current_id(), Some(id));
+        let slot = scheduler.current.unwrap();
+        scheduler.tasks[slot].completion.take()
+    })
+}
+
+/// Schedule kernel continuations. This loop has no user trap or syscall policy.
+pub(super) fn run() -> ! {
+    let mut scheduler_context = KernelContext::empty();
+    loop {
+        let next = with_scheduler(|scheduler| scheduler.take_next());
+        if let Some(mut active) = next {
+            with_scheduler(|scheduler| {
+                assert!(scheduler.switch.is_none());
+                scheduler.switch = Some(SwitchLink {
+                    task: core::ptr::addr_of_mut!(active.execution.context) as usize,
+                    scheduler: core::ptr::addr_of_mut!(scheduler_context) as usize,
+                });
+            });
+            // SAFETY: active and scheduler_context stay at stable stack addresses
+            // until this call returns. The task always switches back via park.
+            unsafe {
+                kernel_context::switch(
+                    core::ptr::addr_of_mut!(scheduler_context),
+                    core::ptr::addr_of!(active.execution.context),
+                )
+            };
+            with_scheduler(|scheduler| scheduler.complete_run(active));
+        } else {
+            let state = with_scheduler(|scheduler| scheduler.root_state());
+            root_idle(state);
+        }
     }
 }
 
-/// Unique context detached from the scheduler for one IRQ-masked execution.
-/// Its address space stays in the running slot; no task mutation happens in traps.
-pub(super) struct ActiveRun {
-    id: u64,
-    root: usize,
-    context: UserContext,
-}
-impl ActiveRun {
-    pub(super) fn run(&mut self) -> UserEvent {
-        // SAFETY: the single runtime owns this token, drops its scheduler borrow
-        // before entry, and cannot release its task's space until run returns.
-        unsafe { self.context.run(self.root) }
-    }
+/// Debugger boundary on the scheduler stack; x0 is the root task's state.
+#[inline(never)]
+#[unsafe(no_mangle)]
+extern "C" fn root_idle(root_state: u64) {
+    core::hint::black_box(root_state);
+    irq::wait_and_service();
 }

@@ -1,9 +1,11 @@
 //! User address spaces own their mappings, frames and private page tables.
 mod frame;
 mod space;
+mod user_ptr;
 pub use frame::available as available_frames;
 pub use frame::{finish_boot, prepare_boot};
 pub use space::AddressSpace;
+pub use user_ptr::{UserConstPtr, UserPtr};
 pub const PAGE_SIZE: usize = 4096;
 pub const USER_START: usize = PAGE_SIZE;
 pub const USER_END: usize = kernel_abi::USER_ADDRESS_LIMIT as usize;

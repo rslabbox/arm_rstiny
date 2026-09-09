@@ -1,175 +1,103 @@
-# 用户态执行控制权反转设计
+# 用户任务执行模型
 
-状态：已实现。本文记录当前单核内核的用户态执行与返回协议。
+状态：已实现，固定 AArch64 QEMU virt、单 CPU。
 
-## 目标与决策
+## 任务创建与控制反转
 
-将“异常入口直接分发并永不返回”改为“运行用户上下文，返回陷入事件，由 Rust 调度循环处理”。ELF 装载、root 启动布局和用户入口宏仍属于各自层次，控制权反转不改变它们的职责。
+参考 x-kernel 的 `posix/process/src/runtime.rs::new_user_task`：创建方提供用户上下文和 syscall 回调，构造一个拥有独立内核栈的可调度任务。每个任务的入口运行自己的用户循环；调度器只保存、恢复内核 continuation，不解释用户陷入或 syscall 编号。
 
-参考 x-kernel 的 `arch/kcpu/src/aarch64/userspace.rs::UserContext::run`、`arch/kcpu/src/aarch64/excp.S` 和 `posix/process/src/runtime.rs::run_user_thread_loop`。其关键机制是保存进入用户态前的内核调用现场，使 lower-EL trap 最终通过 `ret` 返回 `run()`，而不是在异常处理路径上直接跳入下一任务。
+本项目的入口构造为：
 
-本项目采用共享内核栈上的单一执行循环，不引入每任务独立内核栈。每个用户任务仍拥有独立地址空间与用户上下文；内核在处理完事件并释放局部资源后，才运行下一任务。sleep、wait 和将来的阻塞 IPC 通过显式等待状态实现，不把挂起的 Rust 调用栈作为任务状态。
+```rust
+fn new_user_task(
+    mut uctx: UserContext,
+    mut dispatch_syscall: impl FnMut(&mut UserContext) -> Disposition + Send + 'static,
+) -> Result<Execution, Error> {
+    Execution::new(move || {
+        run_user_thread_loop(&mut uctx, &mut dispatch_syscall);
+    })
+}
+```
 
-这与 x-kernel 的完整实现不同：x-kernel 将每个用户线程的运行循环承载在可调度的内核任务中。可返回的用户执行接口本身并不要求这种一对一内核任务模型。只有需要在深层内核调用中挂起、稍后从同一调用点继续时，才值得引入持久内核上下文及每任务内核栈。
+root 由 `boot.rs` 注入 `syscall::dispatch`；子任务由 syscall 层在 TaskStart 时注入同一处理器。TaskCreate 先预留句柄和空地址空间，调用者完成装载后才启动，因此内核栈和入口在 TaskStart 时创建。校验或内存分配失败时任务保持 Created，局部分配由所有权回收，可以重试。
 
-约束：单 CPU、EL0 抢占、EL1 不抢占；继续使用当前 FIFO 和 10ms 定时器。暂不增加 SMP、异步 Rust 执行器、内核线程、TLS、FP/SIMD 保存或 POSIX 信号。
-
-## 执行模型
-
-旧的重置 SP、`enter() -> !`、`dispatch() -> !` 及不返回的用户 trap handler 已删除。所有正常用户陷入最终回到调用 `UserContext::run()` 的 Rust 执行循环；内核致命异常仍不返回。
-
-runtime 在一轮结束时完成事件提交，再选择下一任务。用户上下文在 Task 的 `Option<UserContext>` 与私有 ActiveRun 之间转移，运行期间不会持有调度器借用。idle 使用同一条内核调用链，既不重置栈也不打开内核 IRQ。
+回调保存在任务拥有的稳定堆分配中，支持带状态的 `FnMut`。任务执行模块不引用具体 syscall 模块，也没有全局处理器注册表。Linux clone 的 set_child_tid、进程/线程拆分、信号及 POSIX ABI 不在本项目的接口中。
 
 ## 模块边界
 
 | 模块 | 职责 |
 | --- | --- |
-| `arch/context.rs` | 纯寄存器布局与 Rust/汇编偏移断言 |
-| `arch/user.rs` | 私有构造的 UserContext、可返回的执行边界、陷入原因解码 |
-| `arch/trap.S` | 保存/恢复用户及内核现场，区分 EL0 返回路径和 EL1 异常路径 |
-| `arch/trap.rs` | EL1 故障诊断、不可恢复的架构事件；不选择用户任务 |
-| `arch/irq.rs` | GIC acknowledge、设备源处理、EOI，报告是否发生定时器事件 |
-| `task/runtime.rs` | 唯一长期执行循环，组织选择、运行、提交事件和 idle |
-| `task/scheduler.rs` | 任务表、运行队列、等待关系、状态转换与回收 |
-| `task/syscall.rs` | 解码和验证调用，执行对象操作，返回明确的完成/等待/退出结果 |
-| `task/boot.rs` | 建立初始任务，然后调用 runtime 的运行入口 |
+| `boot.rs` | 接管 root 镜像、建立 BootInfo，组装首个用户任务 |
+| `task/runtime.rs` | new_user_task 和每任务 run_user_thread_loop，调用注入的 syscall 策略 |
+| `task/execution.rs` | 稳定入口闭包、内核上下文和内核栈的唯一所有权 |
+| `task/stack.rs` | 可失败的内核栈分配、保护页及回收 |
+| `task/scheduler.rs` | 内核 continuation 调度、park、状态转换、等待关系、idle 和回收 |
+| `task/api.rs` | 当前调用者身份、目标授权与地址空间操作 |
+| `arch/kernel_context.rs` | IRQ 屏蔽状态下切换内核 callee-saved 寄存器和 SP |
+| `arch/user.rs`、`arch/trap.rs` | 进入 EL0、返回陷入事件及致命异常诊断 |
+| `syscall/dispatch.rs` | 枚举分发、参数解码和 ABI 结果写回 |
 
-runtime 使用本内核的具体 syscall handler 即可，不为了模仿 x-kernel 而先增加可插拔 trait 或回调注册表。发生实际多运行环境需求时，再提取接口。
+## 每个任务的运行循环
 
-## 三种上下文分别归谁所有
+循环在任务自己的内核栈上执行：
 
-### UserContext：每个用户任务的持久状态
+1. 在短期调度器借用内读取当前任务的页表根，结束借用。
+2. 调用 `uctx.run(root)`，进入 EL0。
+3. 陷入返回同一 Rust 调用点；此时 IRQ 屏蔽，TTBR0 已恢复为空内核根。
+4. Syscall 交给注入的回调；IRQ 完成 ack/清源/EOI；用户故障记录后请求终止当前任务。
+5. 调用 `park(action)` 切回调度器栈。再次被选中时从该调用后继续循环。
 
-包含 x0..x30、SP_EL0、ELR_EL1、SPSR_EL1，底层复用现有 TrapFrame 布局。字段通过初始化、系统调用结果写回等受控接口修改，用户输入不能直接构造任意 SPSR 或内核返回地址。
+非定时器或伪中断直接继续当前任务。保留现有 FIFO 与正常 syscall 后轮转的策略；10 ms 定时器可抢占不主动 yield 的 EL0 程序。EL1 期间 IRQ 始终屏蔽，不支持内核抢占。
 
-用户 ABI 继续使用 softfloat，TLS 当前不支持；以后启用这些功能时，必须同时扩展保存/恢复范围。
+`wait` 可以在 syscall handler 内调用 `park(Wait(target))`。调度器记录等待关系，子任务终止时保存完成值并唤醒等待者。等待者恢复自己的内核调用栈，`park` 返回完成值，handler 返回，dispatch 写回 x0/x1。等待者暂停期间的完成只记录结果，不自动恢复它。查询完成状态与提交等待之间不会运行其他任务，避免丢失唤醒。
 
-### ActiveRun：执行循环暂时拥有的运行状态
+Sleep/Suspend 在用户循环提交对应动作；Exit/Fault 切走后永久不再返回该 continuation。调度器本身不编码 syscall 返回寄存器。
 
-调度器在 IRQ 关闭且短期借用有效时选出任务，将其 UserContext 移出任务槽，连同带 generation 的 TaskId 和页表根组成 ActiveRun。任务槽明确标记 Running，context 字段为 None，禁止第二次取出。其 AddressSpace 仍由任务槽持有。
+## 三种上下文与栈
 
-离开调度器借用后才能进入 EL0。此时单核内核不执行其他调度策略，EL0 trap 只保存现场并返回，不能销毁任务或释放地址空间，因此页表根在整次 run 中稳定。提交事件时验证 TaskId，再归还上下文并变更状态。不能同时保留可写的槽内上下文和一份活动副本。
+### UserContext
 
-ActiveRun 是私有的一次性对象，不向普通调用者暴露可脱离任务生命周期使用的页表根。这样保留现有全局调度器也不会把 `SingleCore::Borrow` 带入用户执行阶段。
+保存 EL0 的 x0..x30、SP_EL0、ELR_EL1、SPSR_EL1，复用 272 字节 TrapFrame。它持久存在于任务入口闭包的捕获中，通过可变借用传给运行循环和 syscall handler。任务运行期间其他任务不能访问或替换它。
 
-### KernelReturnFrame：一次 run 调用的临时状态
+用户 ABI 使用 softfloat。FP/SIMD 通过 CPACR_EL1 禁止，TLS 尚未实现。
 
-该记录为 112 字节。放在可信 EL1 栈上，保存 AAPCS64 所要求的 x19..x30、恢复内核调用链所需的信息，以及用户上下文和陷入结果缓冲区的可信指针。该记录只存在于一次调用期间，始终 16 字节对齐，不加入用户 TrapFrame，也不映射给 EL0。
+### KernelReturnFrame
 
-保留当前 64 KiB 内核栈及保护页，不按任务数复制。汇编与 Rust 使用 `offset_of!`、`size_of!` 和传入汇编的常量核对布局，不能再在多个文件中散布偏移数字。
+一次 `UserContext::run` 在任务内核栈上创建的临时记录，保存内核 x19..x30 和可信的上下文/陷入缓冲区指针，共 112 字节。lower-EL 向量保存完整用户现场和 ESR/FAR，然后恢复该记录，通过 ret 返回 Rust。每次 run 返回时完全回收，调用深度不随陷入次数增长。
 
-## 可返回的执行边界
+SVC #0 作为正常 Syscall 返回，未知调用号由 dispatch 拒绝。EL1 异常、FIQ、SError 走内核致命诊断；EL0 同步故障只终止对应任务。
 
-对上层提供的概念接口如下：
+### KernelContext 与 Execution
 
-```rust
-pub(crate) enum UserEvent {
-    Syscall,
-    Interrupt,
-    Fault(UserFault),
-}
+KernelContext 保存内核 x19..x30 和 SP，按 16 字节对齐，共 112 字节。首次恢复时，x19 指向可信入口捕获，x30 指向入口 trampoline，SP 指向独立栈顶。后续恢复返回先前的 park 调用。
 
-impl ActiveRun {
-    // 私有封装保证空间存活、上下文有效、本 CPU 唯一活动执行。
-    fn run(&mut self) -> UserEvent;
-}
+Execution 拥有稳定堆分配的入口捕获和 64 KiB 内核栈。栈下方额外分配一个 4 KiB 保护页；该页在内核镜像映射和物理直接映射中都取消映射。释放前恢复两处映射，再交回堆分配器。栈来自现有 16 MiB 内核堆，不占用用户帧池。
 
-// 更底层的 UserContext 执行方法只由上述封装调用；如暴露裸页表根，
-// 必须标记 unsafe 并写明生命周期、映射和 IRQ 前置条件。
-```
+原有带保护页的 64 KiB 引导栈承载调度器与 idle。调度器在一次执行期间将 Execution 从任务槽移出，任务槽标记 Running；切回后核对带 generation 的 ID，再归还或销毁。稳定入口捕获的地址不随 Execution 所有者移动而改变。
 
-`UserFault` 保存原始 ESR、ELR、来源和仅在有效时存在的 FAR。ESR/FAR 在返回其他 Rust 处理逻辑之前抓取，不能等到嵌套异常之后再读取。同步异常中的 SVC #0 解码为 Syscall，其他同步异常保持现有故障策略。SVC 的 ELR 已指向下一指令，不再手动加 4。未知调用号仍是普通 syscall 错误，不是用户故障。
+## 切换、销毁与借用约束
 
-FIQ/SError 不直接归为普通任务错误，尤其异步 SError 不一定能归因于当前用户；继续走内核致命诊断路径。EL1 同步异常也不能伪装成 `run()` 的正常返回。
+- 当前任务身份由 `task::current_id() -> Option<u64>` 提供。boot/idle 返回 None；syscall 与 task API 不接受可指定 caller。
+- 一次只运行一个内核 continuation。切换前必须回到空 TTBR0，结束调度器、帧池、堆和 GIC 的所有共享状态借用。
+- 调度器栈上的当前执行对象与调度器 KernelContext 在一次切换期间保持地址稳定。park 使用本轮调度器安装的切换链接；恢复后验证身份并取出等待完成值。
+- 当前任务不能自行释放正在使用的栈。Exit/Fault 先切回调度器，调度器再销毁入口捕获、栈和地址空间。destroy 其他停止执行的任务可以立即回收。
+- 强制销毁不展开被挂起的 Rust 栈。允许挂起的边界不能保留依赖 Drop 回收的栈局部资源或共享状态借用；持久资源由 Execution 的入口捕获及任务对象拥有。当前 wait 和用户循环满足这一约束。今后增加阻塞 handler 时也必须遵守。
+- EL1 关闭 IRQ 只保证单核互斥，不保证硬实时延迟。SMP、内核抢占和任意位置取消需要新的同步及资源协议。
 
-### AArch64 进入与返回顺序
+## 系统调用与用户指针
 
-1. 进入时要求 DAIF.I 已设置，无调度器、帧池或控制器借用存活。
-2. 创建临时 KernelReturnFrame，保存内核 callee-saved 寄存器与返回地址。SP_EL1 留在可信内核栈；不再重置为栈顶。
-3. 激活该任务的 TTBR0，执行现有屏障和 TLB 维护，恢复用户寄存器，通过 `eret` 进入 EL0t。用户 PSTATE 允许 IRQ。
-4. lower-EL 向量在内核栈暂存完整用户现场，保存原因和故障寄存器，并将用户现场写回 ActiveRun 的上下文。必须在借用 x0 等作为临时寄存器之前保存其用户值。
-5. 根据可信栈记录恢复内核调用现场，通过 `ret` 回到执行包装层。此时仍在 EL1，IRQ 关闭。
-6. 包装层立即切回内核空 TTBR0，完成屏障/TLB 维护，然后向 runtime 返回 UserEvent。
+共享 ABI 库以 `#[repr(u64)] enum Syscall` 定义调用号，用户库只在 SVC 边界转换为整数。dispatch 通过 `TryFrom<u64>` 检查调用号，再穷尽匹配枚举，没有 route 层。
 
-返回到 runtime 之前不能调用调度器、syscall handler 或回收用户内存。底层记录不从用户寄存器取得可信指针，不允许 EL0 伪造内核 SP 或返回地址。
+寄存器布局封装在 UserContext 的 `syscall_number()`、`arg0()..arg3()`、`set_syscall_result()` 中。指针参数通过 `uctx.argN().into()` 构造 `UserConstPtr<u8>` 或 `UserPtr<u8>`；转换不验证地址，也不创建 Rust 用户内存引用。task API 授权后在指定地址空间中验证完整范围、映射与权限，再通过内核持有的帧复制。源数据完整暂存后再写目标，支持重叠复制且失败不部分写入。
 
-## Rust 执行循环
-
-```rust
-// 结构示意，不是可直接编译的实现。
-loop {
-    let Some(mut active) = scheduler.take_next() else {
-        irq::wait_and_service();
-        scheduler.wake_expired();
-        continue;
-    };
-    let event = active.run();
-    // 已回到 EL1、IRQ masked、内核空 TTBR0。
-    let event = service_arch_event(event); // IRQ: ack、清源、EOI
-    scheduler.complete_run(active, event); // 消费 ActiveRun
-}
-```
-
-每次循环都在前一次 `run()` 返回后重新进入，调用深度不随 trap 次数增加。初次进入循环时保留的引导栈帧也是固定数量；不允许用不断递归调用 runtime 的方式模拟循环。
-
-为了让本轮只改变控制流，先保留当前成功 syscall 后轮转的行为，不同时改变公平性策略。以后可以明确引入 ContinueCurrent 和 Reschedule，但必须另外验证延迟和公平性。
-
-## 系统调用、等待与退出
-
-系统调用处理不能再切换 CPU 上下文或直接进入下一个用户任务。它返回明确结果，由调度器提交：
-
-| 结果 | 提交动作 |
-| --- | --- |
-| 完成 | 写回 x0，必要时写 x1；根据调用结果设置 Ready/Suspended/Sleeping 等状态 |
-| wait 尚未完成 | 保存等待目标，进入 Waiting；最终返回值由目标终止事件填写 |
-| exit | 记录终止结果，释放用户空间，唤醒等待者，不再恢复此上下文 |
-| 普通错误 | 写回错误码，保留其他用户寄存器，按原策略继续调度 |
-
-sleep/suspend-self 可以在停车前预写其成功返回值；wait 必须区分“调用已完成”和“尚待结果”，避免给用户暴露伪造结果。任务暂停时保留原等待状态，恢复时继续原等待；终止事件发生在暂停期间，也必须保存最终结果而不错误入队。
-
-故障、正常退出、外部 destroy 共用明确的终止提交逻辑。只有切回内核 TTBR0、停止使用该空间且不存在借用时，才允许释放帧和页表。释放地址空间与保留 exit/fault 结果分离，维持现有 wait 后 destroy 的接口。ActiveRun 归还或丢弃后不得再次访问已回收任务槽。
-
-将来的阻塞 IPC 同样保存等待对象和完成所需的数据，不保留栈上用户指针借用或跨任务可变引用。若某类操作必须保存多步执行状态，使用显式 continuation 数据；不能悄悄在共享栈上切换任务。
-
-## IRQ 与 idle
-
-EL0 IRQ 只让 run 返回 Interrupt；runtime 在 IRQ 关闭状态调用 GIC 服务函数，完成 acknowledge、清除/重装来源和 EOI。该函数报告实际事件，不能把未知 IRQ 或 spurious IRQ 都当作时间片中断。
-
-当前 QEMU AArch64 idle 路径保持 DAIF.I=1（IRQ 掩蔽），使用带适当屏障的 WFI 等待，再在 Rust 中检查并服务可交付的 pending IRQ。AArch64 WFI 可被 DAIF 掩蔽的 IRQ 唤醒；GIC 的优先级/组使能仍必须允许该中断送达 CPU。调度循环每次选择任务前检查到期等待者，无可运行任务才进入 WFI，返回后再次选择；伪唤醒则重试；不得依赖“开 IRQ → 普通 WFI”之间没有竞争窗口。
-
-此方案使 idle 不需要重置栈或通过 EL1 IRQ 路径跳入任务。专项测试在实际 QEMU 配置上覆盖“中断已 pending 才执行 WFI”及“休眠后到期”两种情况。若平台要求另一种等待序列，应由 arch 层实现等价的无丢唤醒协议。
-
-EL1 IRQ 向量仍需有明确行为：如未来开放内核 IRQ，只允许保存现场、服务并返回被中断的内核指令流，不能借用当前共享栈去运行另一个用户任务。当前不开放内核 IRQ；非预期进入属于应诊断的内核不变量破坏。EL1 故障继续无条件诊断并按现有策略关机。
-
-## 必须保持的不变量
-
-1. 同一 CPU 最多一个 ActiveRun；调度器不可同时持有其用户上下文。
-2. IRQ masked 进入及返回 run；只有恢复用户 PSTATE 时开放用户 IRQ。
-3. 不持有 SingleCore 借用跨越 run、idle 或任何可能开放 IRQ 的边界。
-4. lower-EL trap 在返回前不调用调度器；EL1 异常不使用用户返回记录。
-5. 每次 trap 消耗的栈空间在返回时完全回收；内核栈不能指向用户地址。
-6. 地址空间先失活，之后才可以修改/释放其生命周期资源。
-7. 用户未修改的 GPR、SP、PC 和 PSTATE 在适用的恢复路径中保持语义一致。
-8. LOG=off 不改变执行行为；内核 panic/致命异常继续无条件打印。
+映射起点、任务入口与栈顶按地址处理，不作为普通数据指针解引用。
 
 ## 验证
 
-`make check` 包含完整 debug/release × LOG=off/info 回归，以及以下专项验证：
+`make check` 覆盖 debug/release × LOG=off/info：
 
-| 检查 | 覆盖 |
-| --- | --- |
-| `check_user_context.py` | 每种配置连续 2048 次返回，内核 x19..x29 哨兵、x30 返回地址、SP 与 IRQ 状态；纯 EL0 死循环的定时器返回；在 masked WFI 指令处设置 pending timer 的唤醒 |
-| `check_tasks.py` | 内存事务和失败回滚、任务授权、暂停恢复、等待、退出、故障回收、timer-only 双任务抢占、sleep 唤醒 idle |
-| `check_fatboot.py` | root 栈保护初始化、hello、SVC 用户寄存器保存、读写执行权限、用户故障隔离 |
-| `check_kernel.py` | 内核启动、页表权限、分配器、LOG 过滤、EL1 故障/panic 无条件诊断与 PSCI 关机 |
-| `check_relocation.py` | 内核物理位置和 root 虚拟布局变化后上述任务执行仍然有效 |
-
-`root_idle(root_state)` 是可返回的调试边界，在 x0 发布 root 状态；测试不再读取 Scheduler 对象布局。`run_user` 是实际架构调用入口的符号，用于直接检查调用者现场。没有为测试保留旧执行路径。
-
-用户 ABI 不变；能力系统、IPC、TLS 和 FP/SIMD 支持不属于本轮控制流重构。
-
-## 后续扩展边界
-
-当需要独立内核线程或同步阻塞内核调用时，再增加 KernelContext、每任务 KernelStack 和内核任务调度器；届时每个用户线程可以拥有自己的 run_user_thread_loop，接近 x-kernel 的完整模式。必须额外设计栈映射、不可移动的上下文存储、挂起期间借用约束，以及切离退出任务栈后再释放栈的回收协议。
-
-这些并不是现在让 run 可返回的前置条件。现阶段的完成标准是架构层交还事件、Rust 循环拥有调度控制流，且现有微内核行为保持完整。
+- 2048 次 EL0 返回，验证内核 callee-saved 寄存器、SP、IRQ 状态和定时器独立返回。
+- task → scheduler → task 的真实内核 continuation 切换与寄存器恢复，独立内核栈范围及双别名保护页。
+- 31 个同时挂起的子任务及保护页回收，超过堆容量累计值的 260 次任务启动/退出/销毁。
+- 当前任务身份、父子授权、跨页复制、内存耗尽回滚、定时器抢占、sleep、wait、暂停中的等待完成、销毁阻塞任务。
+- masked WFI 前已有 pending timer 的唤醒、用户故障隔离、LOG=off、内核物理重定位和不同 root 虚拟地址。

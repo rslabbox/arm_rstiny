@@ -17,13 +17,13 @@ pub enum Error {
     Unknown(u64),
 }
 
-fn invoke(number: u64, args: [u64; 5]) -> Result<u64, Error> {
+fn invoke(number: abi::Syscall, args: [u64; 5]) -> Result<u64, Error> {
     let status: u64;
     let value: u64;
     // The kernel preserves x2..x30; x0 is status and x1 is the result for
     // value-returning calls. Memory may change across this boundary.
     unsafe {
-        core::arch::asm!("svc #0", in("x8") number,
+        core::arch::asm!("svc #0", in("x8") number as u64,
             inlateout("x0") args[0] => status, inlateout("x1") args[1] => value,
             in("x2") args[2], in("x3") args[3], in("x4") args[4]);
     }
@@ -41,7 +41,7 @@ fn invoke(number: u64, args: [u64; 5]) -> Result<u64, Error> {
         code => Err(Error::Unknown(code)),
     }
 }
-fn call(number: u64, argument: u64) -> Result<(), Error> {
+fn call(number: abi::Syscall, argument: u64) -> Result<(), Error> {
     invoke(number, [argument, 0, 0, 0, 0]).map(|_| ())
 }
 
@@ -51,29 +51,29 @@ pub use task::{Permissions, Task, TaskState};
 
 /// Sleep for at least the requested milliseconds; zero yields to ready tasks.
 pub fn sleep(milliseconds: u64) -> Result<(), Error> {
-    call(abi::SYS_SLEEP, milliseconds)
+    call(abi::Syscall::Sleep, milliseconds)
 }
 pub fn clock_milliseconds() -> Result<u64, Error> {
-    invoke(abi::SYS_CLOCK, [0; 5])
+    invoke(abi::Syscall::Clock, [0; 5])
 }
 pub fn available_frames() -> Result<usize, Error> {
-    invoke(abi::SYS_MEMORY_AVAILABLE, [0; 5]).map(|n| n as usize)
+    invoke(abi::Syscall::MemoryAvailable, [0; 5]).map(|n| n as usize)
 }
 /// Exit, releasing the current address space. Its parent can wait and reap it.
 pub fn exit(code: u64) -> ! {
-    let _ = call(abi::SYS_EXIT, code);
+    let _ = call(abi::Syscall::Exit, code);
     loop {
         core::hint::spin_loop();
     }
 }
 
 pub fn yield_now() -> Result<(), Error> {
-    call(abi::SYS_YIELD, 0)
+    call(abi::Syscall::Yield, 0)
 }
 
 /// Permanently park this call site. Use Task::suspend for resumable suspension.
 pub fn suspend_self() -> ! {
-    let _ = call(abi::SYS_SUSPEND_SELF, 0);
+    let _ = call(abi::Syscall::SuspendSelf, 0);
     // Do not recurse into panic if a broken kernel unexpectedly returns.
     loop {
         core::hint::spin_loop();
@@ -82,7 +82,7 @@ pub fn suspend_self() -> ! {
 
 /// Temporary kernel debug console, unavailable when the kernel uses LOG=off.
 pub fn debug_putchar(byte: u8) -> Result<(), Error> {
-    call(abi::SYS_DEBUG_PUTCHAR, byte.into())
+    call(abi::Syscall::DebugPutchar, byte.into())
 }
 
 struct DebugWriter;

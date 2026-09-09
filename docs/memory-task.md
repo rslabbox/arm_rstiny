@@ -8,15 +8,17 @@
 | --- | --- |
 | `kernel/src/memory/frame.rs` | 物理帧唯一所有权、分配清零、释放和余量统计 |
 | `kernel/src/memory/space.rs` | 地址空间、页元数据、私有页表、map/unmap/protect、受控跨页复制 |
-| `kernel/src/task/boot.rs` | 接管 loader 已装载页、初始 BootInfo/IPC buffer |
+| `kernel/src/boot.rs` | 接管 loader 已装载页、初始 BootInfo/IPC buffer |
 | `kernel/src/task/scheduler.rs` | 任务上下文所有权、状态转换、等待关系、选择与回收 |
-| `kernel/src/task/runtime.rs` | 可返回用户执行、事件提交、共享内核栈上的调度循环与 idle |
+| `kernel/src/task/runtime.rs` | 每任务用户执行循环及创建时注入的 syscall 回调 |
 | `kernel/src/task/queue.rs` | 有界 FIFO 就绪队列，不在调度路径分配内存 |
-| `kernel/src/task/syscall.rs` | 用户参数/句柄校验与任务、内存系统调用 |
+| `kernel/src/task/api.rs` | 授权的任务操作、地址空间访问和生命周期检查；任务表字段保持私有 |
+| `kernel/src/syscall/dispatch.rs` | ABI 解码、handler 路由与即时/延迟结果编码 |
+| `kernel/src/syscall/task.rs`、`memory.rs` | 任务与内存调用处理，返回显式调度决定 |
 | `kernel/src/arch/irq.rs` | 通过 arm-gic-driver 配置 GICv3、PPI 30、物理定时器重装与中断完成 |
 | `projects/libs/user` | `Task`、`TaskState`、`Permissions`、错误类型及系统调用封装 |
 
-一个任务当前包含一个用户地址空间和一个执行上下文。没有共享地址空间的多线程，也没有通用内核线程。这里的任务句柄是受父子所有权约束的内核对象引用，尚不是完整的 seL4 CSpace/capability 派生和撤销系统。
+一个已启动任务包含一个用户地址空间、用户上下文、独立内核栈及可恢复的内核上下文。没有共享地址空间的多线程，也没有通用内核线程。这里的任务句柄是受父子所有权约束的内核对象引用，尚不是完整的 seL4 CSpace/capability 派生和撤销系统。
 
 ## 用户内存
 
@@ -30,7 +32,7 @@
 - 主用户帧池 8 MiB，共 2048 帧；另接管 loader 装载的实际 root image 区间，跨度最多 1024 帧。已映射页由 root 持有，空洞在接管完成后可分配；释放后两池均可复用。用户数据和私有页表都计入池配额。
 - 每个地址空间最多 1024 个用户映射页；页表帧另行计费。
 - 最多 32 个任务，包括 fatboot。耗尽时返回 NoMemory，不以用户输入触发内核 panic。
-- 内核栈为 64 KiB，下方仍有保护页；堆、帧池和栈均为 NOLOAD，不增大磁盘启动镜像。
+- 引导/调度器栈为 64 KiB；每个已启动任务另从内核堆分配 64 KiB 栈，均带下方 4 KiB 保护页。任务栈保护页的镜像和物理别名均取消映射，销毁后恢复并释放。堆、帧池和引导栈均为 NOLOAD，不增大磁盘启动镜像。
 
 这些是当前固定平台的明确配额，不表示已发现或分配 QEMU 的全部 128 MiB RAM。内核不在运行时解析 DTB；PSCI、MMIO 和受支持 RAM 参数在构建时生成。运行期内存发现、完整保留区处理和释放剩余 RAM 尚未实现。loader 的 DTB 和保留程序头页不加入帧池；DTB 另复制到用户只读的扩展 BootInfo。
 
@@ -69,9 +71,9 @@ Wait 在目标未终止时阻塞，结束后返回退出码或 ESR；通过 Stat
 
 没有 Ready 任务时内核在现有调用栈上、IRQ 掩蔽状态执行 WFI；pending timer 唤醒后由 Rust 处理 IRQ，再检查到期任务。用户异常保存到 `LAST_FAULT`，终止该任务并调度其他任务。内核自身异常或 panic 无条件诊断并 PSCI 关机。CNTKCTL_EL1 禁止 EL0 修改定时器。FP/SIMD 通过 CPACR_EL1 显式禁止，相关用户指令产生故障；尚无 FP/SIMD 上下文保存。
 
-EL1 内核执行期间 IRQ 屏蔽、不可抢占，所有系统调用在切换前完成，不保存阻塞的 Rust 内核调用栈。这使共享内核栈和单核调度器独占访问成立。它不是硬实时实现：映射清零、复制和元数据操作会增加中断响应延迟。
+EL1 内核执行期间 IRQ 屏蔽、不可抢占，任务通过显式 park 切回调度器。独立内核栈保留阻塞的 Rust 调用链，wait 在唤醒后从原 handler 调用点继续。任何共享状态借用都必须在切换前结束；强制销毁不会展开挂起栈，所以持久资源必须由任务对象或入口捕获持有。它不是硬实时实现：映射清零、复制和元数据操作会增加中断响应延迟。
 
-调度器、帧池、堆和 GIC 状态通过内核内部的 `SingleCore` 封装访问。访问时检查 IRQ 已屏蔽，并使用非原子的借用标记防止可变引用重叠；不等待，不切换 IRQ 状态，不使用自旋锁。借用必须在 eret 或 idle 前结束，持有借用期间不得打开 IRQ。日志使用可失败的借用检查防止重入，panic 绕过它独立输出。此机制依赖单核执行约定，不支持 SMP。
+调度器、帧池、堆和 GIC 状态通过内核内部的 `SingleCore` 封装访问。访问时检查 IRQ 已屏蔽，并使用非原子的借用标记防止可变引用重叠；不等待，不切换 IRQ 状态，不使用自旋锁。借用必须在 eret、内核上下文切换或 idle 前结束，持有借用期间不得打开 IRQ。日志使用可失败的借用检查防止重入，panic 绕过它独立输出。此机制依赖单核执行约定，不支持 SMP。
 
 ## 用户接口与 ABI
 
@@ -125,4 +127,8 @@ fatboot 也通过实际 Rust API 检查任务创建/销毁计费和定时器睡�
 
 当前已实现上述单核内存与任务接口的完整生命周期。未实现 SMP、共享地址空间线程、优先级/实时调度、需求分页、COW/fork、文件映射、swap、POSIX、通用 ELF exec、IPC 和完整 capability 系统；这些需要各自的用户接口及资源语义，不能从本次实现推断已具备。
 
-执行模型见 [用户态执行控制权反转设计](user-execution.md)。当前实现采用可返回的用户执行边界与共享内核栈上的 Rust 调度循环。
+执行模型见 [用户态执行控制权反转设计](user-execution.md)。当前实现采用可返回的用户执行边界、每任务独立内核栈和内核 continuation 调度。
+
+Syscall 回调在创建任务入口时注入，由每任务 runtime 调用；任务模块不引用具体 syscall 实现。调度器仅接收 Resume/Suspend/Sleep/Wait/Exit/Fault 决定，不解释调用号或写 x0/x1。wait 完成值保存在任务中，恢复时由 syscall 层编码；暂停期间发生完成也不会自动恢复任务。
+
+当前调用者由内核当前任务设施确定，syscall 与任务操作 API 不接受 caller 参数。`task::current_id()` 只返回 ID 副本，boot/idle 返回 None；所有目标句柄仍执行 generation 和父子授权检查。

@@ -1,6 +1,6 @@
 //! Validated boot metadata and transfer to the kernel's high-address entry.
-use crate::{console::Console, mmu};
-use core::{arch::asm, fmt::Write};
+use crate::{console::bootinfo, mmu};
+use core::arch::asm;
 
 use crate::boot_info::Handoff;
 
@@ -14,15 +14,14 @@ pub(crate) unsafe fn enter(info: Handoff) -> ! {
         mmu::init_boot_page_tables(info.kernel_mapping);
         mmu::enable_mmu();
     }
-    let _ = writeln!(
-        Console,
+    bootinfo!(
         "kernel entry={:#x}; kernel paddr={:#x}; root paddr={:#x}..{:#x}",
         info.kernel_entry,
         info.kernel_mapping.physical().start(),
         info.image_start,
         info.image_end
     );
-    let _ = write!(Console, "Enabling MMU and jumping to entry point...\n\n");
+    bootinfo!("Enabling MMU and jumping to entry point...\n");
     // SAFETY: The high kernel entry and image/DTB ranges are now mapped.
     unsafe { jump_to_kernel(info) }
 }

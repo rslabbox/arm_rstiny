@@ -201,7 +201,3 @@ pub(crate) fn plan() -> Result<LoadPlan<'static>, BootError> {
     .map_err(|_| layout::Error::LoadMinimum)?;
     LoadPlan::new(images, loader, minimum)
 }
-
-#[cfg(test)]
-#[path = "../tests/image_cases.rs"]
-mod tests;

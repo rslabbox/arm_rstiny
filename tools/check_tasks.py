@@ -5,7 +5,7 @@ from pathlib import Path
 import struct
 import subprocess
 import tempfile
-from check_kernel import Gdb, build, boot_image
+from check_kernel import Gdb, build, boot_image, mappings
 from check_fatboot import write
 
 from elf_image import parse_elf, root_layout
@@ -95,6 +95,20 @@ def run(qemu, kernel):
                 call(15, child, DATA, 0x40000000, 8, status=2) # invalid source pointer
                 call(16, child, DATA, 0x40000000, 8, status=2) # invalid destination
                 call(15, child, DATA, buffer, 4097, status=2)
+                # Wrapping an address must not bypass range or permission checks.
+                for invalid in (0, 2**64 - 8):
+                    call(15, child, DATA, invalid, 32, status=2)
+                    call(16, child, DATA, invalid, 32, status=2)
+                    call(15, child, invalid, buffer, 32, status=2)
+                    call(16, child, invalid, buffer, 32, status=2)
+                call(16, child, DATA, entry, 8, status=6) # caller RX destination
+                for number in (15, 16):
+                    write(gdb, buffer, payload + bytes(16))
+                    if number == 15:
+                        call(number, root, buffer + 8, buffer, len(payload))
+                    else:
+                        call(number, root, buffer, buffer + 8, len(payload))
+                    assert gdb.memory(buffer + 8, len(payload)) == payload, 'overlapping self-copy'
                 call(13, child, DATA, 3 * PAGE, status=4)
                 call(13, root, layout['boot_info'], PAGE, status=6) # lifetime-pinned BootInfo
                 call(14, root, layout['boot_info'], PAGE, 3, status=6)
@@ -195,6 +209,45 @@ def run(qemu, kernel):
                 assert call(18) - before >= 100
                 call(8, sleeper)
 
+                # Complete a wait while its caller is suspended. The scheduler
+                # retains a value, and dispatch encodes it only on resumption.
+                grandchild_code = mov(0, 200) + mov(8, 11) + [0xd4000001]
+                grandchild_code += mov(0, 42) + mov(8, 10) + [0xd4000001]
+                parent_code = mov(8, 4) + [0xd4000001, 0xaa0103f3] # x19 = child
+                parent_code += mov(9, DATA) + [0xf9000133] # save handle
+                def child_call(number, *arguments):
+                    code = [0xaa1303e0] # x0 = x19
+                    for register, argument in enumerate(arguments, 1):
+                        code += mov(register, argument)
+                    return code + mov(8, number) + [0xd4000001]
+                parent_code += child_call(12, CODE, PAGE, 3)
+                parent_code += child_call(15, CODE, CODE + 1024, len(grandchild_code) * 4)
+                parent_code += child_call(14, CODE, PAGE, 5)
+                parent_code += child_call(12, STACK, PAGE, 3)
+                parent_code += child_call(5, CODE, STACK + PAGE, 0)
+                parent_code += child_call(19)
+                parent_code += [0xaa0103e0] + mov(8, 10) + [0xd4000001]
+                assert len(parent_code) < 256
+                parent_code += [0] * (256 - len(parent_code)) + grandchild_code
+                waiter = task(parent_code)
+                call(5, waiter, CODE, STACK + PAGE, 0)
+                for _ in range(30):
+                    if call(9, waiter) == 7:
+                        break
+                    call(11, 1)
+                assert call(9, waiter) == 7
+                call(6, waiter)
+                call(16, waiter, DATA, buffer, 8)
+                grandchild = gdb.word(buffer)
+                call(11, 250)
+                assert call(9, waiter) == 2, 'completion resumed a suspended waiter'
+                call(7, waiter)
+                assert call(19, waiter) == 42, 'deferred wait result was lost'
+                assert call(9, grandchild) == 6 # adopted after parent exit
+                call(8, grandchild)
+                call(8, waiter)
+                assert call(17) == baseline
+
                 # A suspended waiter must resume waiting rather than return a
                 # fabricated result. Its unstarted child is adopted on destroy.
                 waiter_code = mov(8, 4) + [0xd4000001] + mov(9, DATA) + [0xf9000121, 0xaa0103e0]
@@ -233,6 +286,33 @@ def run(qemu, kernel):
                     assert call(19, denied) >> 26 == ec
                     assert call(9, denied) == 3
                     call(8, denied)
+                # Every started task owns a persistent, guarded kernel stack.
+                # Park all available children, then reclaim their stack aliases.
+                before_stacks = mappings(gdb)
+                sleepers = [task(mov(0, 60000) + mov(8, 11) + [0xd4000001, 0x14000000])
+                            for _ in range(31)]
+                for sleeper in sleepers:
+                    call(5, sleeper, CODE, STACK + PAGE, 0)
+                    # An IRQ can preempt the first entry before its Sleep SVC.
+                    for _ in range(20):
+                        state = call(9, sleeper)
+                        if state != 4:
+                            break
+                        call(0)
+                    assert state == 5, f'sleeper state {state}'
+                assert len(before_stacks.keys() - mappings(gdb).keys()) == 2 * 31
+                for sleeper in sleepers:
+                    call(8, sleeper)
+                assert mappings(gdb) == before_stacks, 'destroy failed to restore kernel stack aliases'
+                assert call(17) == baseline
+
+                # More than the 16 MiB heap could retain if 64 KiB stacks leaked.
+                for _ in range(260):
+                    exited = task(mov(0, 42) + mov(8, 10) + [0xd4000001])
+                    call(5, exited, CODE, STACK + PAGE, 0)
+                    assert call(19, exited) == 42
+                    call(8, exited)
+                assert mappings(gdb) == before_stacks
                 replacement = call(4)
                 assert replacement != fault
                 call(9, fault, status=7)

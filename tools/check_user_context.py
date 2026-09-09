@@ -5,7 +5,7 @@ from pathlib import Path
 import struct
 import subprocess
 import tempfile
-from check_kernel import Gdb, build, boot_image, symbols
+from check_kernel import Gdb, build, boot_image, symbols, translate, KERNEL_OFFSET
 from check_fatboot import write
 from elf_image import parse_elf
 
@@ -24,6 +24,21 @@ def run(qemu, kernel):
         gdb = None
         try:
             gdb = Gdb(directory / 'gdb', proc)
+            gdb.run_to(syms['switch_kernel_context'])
+            scheduler_sp = gdb.reg('sp')
+            assert syms['boot_stack'] <= scheduler_sp < syms['boot_stack_top']
+            stack_top = gdb.word(gdb.reg('x1') + 96)
+            stack_bottom = stack_top - 64 * 1024
+            assert syms['__heap_start'] <= stack_bottom < stack_top <= syms['__heap_end']
+            guard = stack_bottom - 4096
+            physical_guard = translate(gdb, stack_bottom) - 4096
+            for address in (guard, KERNEL_OFFSET + physical_guard):
+                try:
+                    translate(gdb, address)
+                except AssertionError as error:
+                    assert 'unmapped kernel VA' in str(error)
+                else:
+                    raise AssertionError('task stack guard still mapped')
             gdb.run_to(syms['run_user'])
             # The user mapping is already active, but no EL0 instruction has run.
             # Inject yield in a loop, then separately a timer-only spin loop.
@@ -32,6 +47,21 @@ def run(qemu, kernel):
             write(gdb, frame + 8 * 8, bytes(8))  # saved user x8 = Yield
             baseline = gdb.reg('sp')
             assert baseline % 16 == 0
+            assert stack_bottom <= baseline < stack_top
+            # Preserve a suspended Rust caller through task -> scheduler -> task.
+            gdb.run_to(syms['switch_kernel_context'])
+            task_sp, task_return = gdb.reg('sp'), gdb.reg('x30')
+            assert stack_bottom <= task_sp < stack_top
+            assert gdb.word(gdb.reg('x1') + 96) == scheduler_sp
+            saved = {f'x{i}': gdb.reg(f'x{i}') for i in range(19, 30)}
+            for i, register in enumerate(saved):
+                gdb.write_reg(register, 0xdef00000 + i)
+            gdb.run_to(task_return)
+            assert gdb.reg('sp') == task_sp and gdb.reg('cpsr') & 0x8f == 0x85
+            for i, (register, value) in enumerate(saved.items()):
+                assert gdb.reg(register) == 0xdef00000 + i, register
+                gdb.write_reg(register, value)
+            gdb.run_to(syms['run_user'])
             seen = set()
             for iteration in range(2048):
                 if iteration:
@@ -104,7 +134,7 @@ def main():
             kernel = build(mode, level, False)
             print(f'CHECK returning context {mode} LOG={level}', flush=True)
             run(args.qemu, kernel)
-    print('PASS: 2048 returns per configuration; kernel callee-saved registers, SP and IRQ state; SVC and timer-only EL0; pending-before-WFI idle wakeup.', flush=True)
+    print('PASS: 2048 returns per configuration; private guarded task stack, kernel continuation switch, callee-saved registers, SP and IRQ state; SVC and timer-only EL0; pending-before-WFI idle wakeup.', flush=True)
 
 
 if __name__ == '__main__':

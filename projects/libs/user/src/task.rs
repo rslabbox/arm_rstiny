@@ -24,44 +24,46 @@ pub enum TaskState {
 
 impl Task {
     pub fn current() -> Result<Self, Error> {
-        invoke(abi::SYS_TASK_ID, [0; 5]).map(Self)
+        invoke(abi::Syscall::TaskId, [0; 5]).map(Self)
     }
     /// Create a stopped child with an empty user address space.
     pub fn create() -> Result<Self, Error> {
-        invoke(abi::SYS_TASK_CREATE, [0; 5]).map(Self)
+        invoke(abi::Syscall::TaskCreate, [0; 5]).map(Self)
     }
     pub fn id(self) -> u64 {
         self.0
     }
-    fn operation(self, number: u64) -> Result<(), Error> {
+    fn operation(self, number: abi::Syscall) -> Result<(), Error> {
         invoke(number, [self.0, 0, 0, 0, 0]).map(|_| ())
     }
     pub fn suspend(self) -> Result<(), Error> {
-        self.operation(abi::SYS_TASK_SUSPEND)
+        self.operation(abi::Syscall::TaskSuspend)
     }
     pub fn resume(self) -> Result<(), Error> {
-        self.operation(abi::SYS_TASK_RESUME)
+        self.operation(abi::Syscall::TaskResume)
     }
     /// Terminate and reap a child. Stale copies of its handle are rejected.
     pub fn destroy(self) -> Result<(), Error> {
-        self.operation(abi::SYS_TASK_DESTROY)
+        self.operation(abi::Syscall::TaskDestroy)
     }
     /// Wait for child termination. Does not reap; inspect status to distinguish faults.
     pub fn wait(self) -> Result<u64, Error> {
-        invoke(abi::SYS_WAIT, [self.0, 0, 0, 0, 0])
+        invoke(abi::Syscall::Wait, [self.0, 0, 0, 0, 0])
     }
     pub fn status(self) -> Result<TaskState, Error> {
-        Ok(match invoke(abi::SYS_TASK_STATUS, [self.0, 0, 0, 0, 0])? {
-            abi::TASK_CREATED => TaskState::Created,
-            abi::TASK_RUNNING => TaskState::Running,
-            abi::TASK_SUSPENDED => TaskState::Suspended,
-            abi::TASK_FAULTED => TaskState::Faulted,
-            abi::TASK_READY => TaskState::Ready,
-            abi::TASK_SLEEPING => TaskState::Sleeping,
-            abi::TASK_EXITED => TaskState::Exited,
-            abi::TASK_WAITING => TaskState::Waiting,
-            code => return Err(Error::Unknown(code)),
-        })
+        Ok(
+            match invoke(abi::Syscall::TaskStatus, [self.0, 0, 0, 0, 0])? {
+                abi::TASK_CREATED => TaskState::Created,
+                abi::TASK_RUNNING => TaskState::Running,
+                abi::TASK_SUSPENDED => TaskState::Suspended,
+                abi::TASK_FAULTED => TaskState::Faulted,
+                abi::TASK_READY => TaskState::Ready,
+                abi::TASK_SLEEPING => TaskState::Sleeping,
+                abi::TASK_EXITED => TaskState::Exited,
+                abi::TASK_WAITING => TaskState::Waiting,
+                code => return Err(Error::Unknown(code)),
+            },
+        )
     }
     /// Start a created task with x0=argument, other GPRs zero, and IRQs enabled.
     /// # Safety
@@ -69,7 +71,7 @@ impl Task {
     /// the caller must have initialized all memory required by the loaded code.
     pub unsafe fn start(self, entry: usize, stack: usize, argument: u64) -> Result<(), Error> {
         invoke(
-            abi::SYS_TASK_START,
+            abi::Syscall::TaskStart,
             [self.0, entry as u64, stack as u64, argument, 0],
         )
         .map(|_| ())
@@ -84,7 +86,7 @@ impl Task {
         rights: Permissions,
     ) -> Result<(), Error> {
         invoke(
-            abi::SYS_MAP,
+            abi::Syscall::Map,
             [self.0, address as u64, length as u64, rights as u64, 0],
         )
         .map(|_| ())
@@ -93,7 +95,7 @@ impl Task {
     /// No live references, stack, or executable continuation may require this range.
     pub unsafe fn unmap(self, address: usize, length: usize) -> Result<(), Error> {
         invoke(
-            abi::SYS_UNMAP,
+            abi::Syscall::Unmap,
             [self.0, address as u64, length as u64, 0, 0],
         )
         .map(|_| ())
@@ -107,7 +109,7 @@ impl Task {
         rights: Permissions,
     ) -> Result<(), Error> {
         invoke(
-            abi::SYS_PROTECT,
+            abi::Syscall::Protect,
             [self.0, address as u64, length as u64, rights as u64, 0],
         )
         .map(|_| ())
@@ -117,7 +119,7 @@ impl Task {
     /// Writing the destination must not violate existing Rust reference invariants.
     pub unsafe fn write_memory(self, address: usize, data: &[u8]) -> Result<(), Error> {
         invoke(
-            abi::SYS_WRITE_MEMORY,
+            abi::Syscall::WriteMemory,
             [
                 self.0,
                 address as u64,
@@ -131,7 +133,7 @@ impl Task {
     /// Read up to 4096 bytes from a stopped child or self into a Rust buffer.
     pub fn read_memory(self, address: usize, data: &mut [u8]) -> Result<(), Error> {
         invoke(
-            abi::SYS_READ_MEMORY,
+            abi::Syscall::ReadMemory,
             [
                 self.0,
                 address as u64,

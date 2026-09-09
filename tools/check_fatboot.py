@@ -182,7 +182,7 @@ def run(qemu, kernel, user, level, scenario):
                     # Patch a scratch instruction at the user entry through the
                     # debugger; guest writes to this RX page are tested below.
                     write(gdb, us['_start'], struct.pack('<I', 0xd4000001)) # svc #0
-                    for number, argument, result in [(0, 17, 0), (999, 0, 1), (1, 256, 2)]:
+                    for number, argument, result in [(0, 17, 0), (20, 0, 1), (999, 0, 1), (2**64 - 1, 0, 1), (1, 256, 2)]:
                         values = {f'x{i}': 0x12340000 + i for i in range(31)}
                         values['x0'], values['x8'] = argument, number
                         for reg, value in values.items():

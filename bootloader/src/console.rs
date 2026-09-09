@@ -5,6 +5,23 @@ use core::{
     fmt::{self, Write},
 };
 
+/// Print a boot message followed by a newline, regardless of log filtering.
+/// UART must already be initialized; output is best-effort and allocation-free.
+macro_rules! bootinfo {
+    () => {
+        $crate::console::print_bootinfo(core::format_args!(""))
+    };
+    ($($arg:tt)*) => {
+        $crate::console::print_bootinfo(core::format_args!($($arg)*))
+    };
+}
+pub(crate) use bootinfo;
+
+pub(crate) fn print_bootinfo(arguments: fmt::Arguments<'_>) {
+    // A UART timeout must not turn an informational message into a boot failure.
+    let _ = writeln!(Console, "{arguments}");
+}
+
 pub(crate) fn init() {
     uart().init();
 }
@@ -14,7 +31,7 @@ fn uart() -> pl011::Pl011Uart {
     // before the MMU and remains mapped Device through the temporary tree.
     unsafe { pl011::Pl011Uart::new(platform::UART_BASE as *mut u8) }
 }
-pub(crate) struct Console;
+struct Console;
 impl Write for Console {
     fn write_str(&mut self, text: &str) -> fmt::Result {
         for byte in text.bytes() {

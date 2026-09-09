@@ -11,3 +11,5 @@ pub use self::page_table::PageTableEntry;
 pub mod user;
 
 pub mod irq;
+
+pub(crate) mod kernel_context;

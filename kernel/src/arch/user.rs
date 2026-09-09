@@ -11,8 +11,33 @@ impl UserContext {
     pub fn frame(&self) -> &TrapFrame {
         &self.0
     }
-    pub fn frame_mut(&mut self) -> &mut TrapFrame {
-        &mut self.0
+    /// AArch64 syscall ABI: x8 is the number, x0..x4 are arguments.
+    pub fn syscall_number(&self) -> u64 {
+        self.0.r[8]
+    }
+    pub fn arg0(&self) -> u64 {
+        self.0.r[0]
+    }
+    pub fn arg1(&self) -> u64 {
+        self.0.r[1]
+    }
+    pub fn arg2(&self) -> u64 {
+        self.0.r[2]
+    }
+    pub fn arg3(&self) -> u64 {
+        self.0.r[3]
+    }
+    /// x0 is status; x1 changes only for a successful value-returning call.
+    pub fn set_syscall_result(&mut self, result: Result<Option<u64>, u64>) {
+        match result {
+            Ok(value) => {
+                self.0.r[0] = kernel_abi::OK;
+                if let Some(value) = value {
+                    self.0.r[1] = value;
+                }
+            }
+            Err(code) => self.0.r[0] = code,
+        }
     }
 
     /// # Safety

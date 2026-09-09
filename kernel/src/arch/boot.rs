@@ -321,3 +321,54 @@ pub(crate) unsafe fn prepare_user_tables(root: usize, l1: usize, l2: usize) {
 pub(crate) fn kernel_root() -> usize {
     virt_to_phys(addr_of!(EMPTY_USER_ROOT) as usize)
 }
+
+/// Change only an exclusively owned heap guard page in both kernel aliases.
+/// # Safety
+/// The caller owns this page, holds no pointers that will access it while
+/// guarded, and restores it before releasing the allocation. Single CPU only.
+pub(crate) unsafe fn set_heap_guard(address: usize, guarded: bool) {
+    unsafe extern "C" {
+        static __heap_start: u8;
+        static __heap_end: u8;
+    }
+    assert!(super::irq::masked());
+    assert!(address.is_multiple_of(PAGE_SIZE));
+    assert!(address >= addr_of!(__heap_start) as usize && address < addr_of!(__heap_end) as usize);
+    let physical = virt_to_phys(address);
+    let descriptor = if guarded {
+        PageTableEntry::empty()
+    } else {
+        PageTableEntry::new_page(
+            PhysAddr::from_usize(physical),
+            MemFlags::READ | MemFlags::WRITE,
+            false,
+        )
+    };
+    // SAFETY: the boot builder populated these L3 tables for the entire heap.
+    // We replace only a private page's entries, with IRQs masked.
+    unsafe {
+        set(
+            addr_of_mut!(IMAGE_L3)
+                .cast::<Table>()
+                .add((address >> 21) & 15),
+            (address >> 12) & 511,
+            descriptor,
+        );
+        set(
+            addr_of_mut!(RAM_L3)
+                .cast::<Table>()
+                .add((physical - RAM_START) >> 21),
+            (physical >> 12) & 511,
+            if guarded {
+                PageTableEntry::empty()
+            } else {
+                PageTableEntry::new_page(
+                    PhysAddr::from_usize(physical),
+                    MemFlags::READ | MemFlags::WRITE,
+                    false,
+                )
+            },
+        );
+    }
+    crate::memory::sync_translations();
+}
