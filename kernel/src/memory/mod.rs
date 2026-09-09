@@ -4,6 +4,7 @@ pub(crate) mod frame;
 pub(crate) mod kernel;
 mod space;
 mod user_ptr;
+#[cfg_attr(not(feature = "kernel-test"), allow(unused_imports))]
 pub use frame::available as available_frames;
 pub use frame::{finish_boot, prepare_boot};
 pub use space::AddressSpace;

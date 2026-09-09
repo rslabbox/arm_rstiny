@@ -7,6 +7,7 @@ use crate::{
     task::Disposition,
 };
 use RuntimeInvocation as R;
+
 pub(super) fn invoke(request: &Request) -> Result<Completion> {
     let a = &request.words;
     let label = request.label;
@@ -55,27 +56,30 @@ pub(super) fn invoke(request: &Request) -> Result<Completion> {
         n if n == R::Current as u64 => {
             let current = crate::task::current_id().unwrap();
             let cspace = api::current_cspace();
-            Some(with_store(|s| {
-                s.cspaces[&cspace]
+            Some(with_store(|store| {
+                store
+                    .cnode(cspace)?
+                    .slots
                     .iter()
                     .find_map(|(&slot, cap)| {
-                        matches!(s.objects.get(&cap.object),Some(Object::Tcb(id)) if *id == current)
-                            .then_some(slot)
+                        matches!(store.objects.get(cap.object), Some(Object::Tcb(id)) if *id == current)
+                            .then_some(slot as u64)
                     })
                     .ok_or(NOT_FOUND)
             })?)
         }
-        n if n == 0x1010 => Some(u64::from(log::max_level() != log::LevelFilter::Off)),
+        0x1010 => Some(u64::from(log::max_level() != log::LevelFilter::Off)),
         n if n == R::FindEmptySlot as u64 => {
             let cspace = api::current_cspace();
-            Some(with_store(|s| s.empty_slot(cspace))?)
+            Some(with_store(|store| store.empty_slot(cspace))?)
         }
         n if n == R::Create as u64 => {
             let task = api::create()?;
             let ipc = kernel_abi::USER_ADDRESS_LIMIT as usize - 4096;
             let result = (|| {
-                api::edit_space(task, |space| space.map(ipc, 4096, 3, true))?;
-                publish_task(task, api::object_space(task)?, ipc)
+                let space = create_vspace(task)?;
+                map_vspace(space, ipc, 4096, 3, true)?;
+                publish_task(task, space, ipc)
             })();
             if result.is_err() {
                 let _ = api::destroy(task);
@@ -89,20 +93,21 @@ pub(super) fn invoke(request: &Request) -> Result<Completion> {
         n if n == R::Cspace as u64 || n == R::Vspace as u64 => {
             let target = tcb(a[0])?;
             let caller = api::current_cspace();
-            Some(with_store(|s| {
+            Some(with_store(|store| {
                 let object = if n == R::Cspace as u64 {
-                    *s.task_spaces.get(&target).ok_or(INVALID_CAPABILITY)?
+                    *store.task_spaces.get(&target).ok_or(INVALID_CAPABILITY)?
                 } else {
-                    s.objects
+                    store
+                        .objects
                         .iter()
-                        .find_map(|(&id, object)| {
-                            matches!(object,Object::VSpace{owner,..} if *owner == target)
+                        .find_map(|(id, object)| {
+                            matches!(object, Object::VSpace(vspace) if vspace.owner == target)
                                 .then_some(id)
                         })
                         .ok_or(INVALID_CAPABILITY)?
                 };
-                let slot = s.empty_slot(caller)?;
-                s.insert(caller, slot, object, RIGHTS_ALL, 0)?;
+                let slot = store.empty_slot(caller)?;
+                store.insert_cap(caller, slot, object, RIGHTS_ALL, 0, 0)?;
                 Ok::<_, u64>(slot)
             })?)
         }
@@ -113,24 +118,7 @@ pub(super) fn invoke(request: &Request) -> Result<Completion> {
                 return Err(INVALID_ARGUMENT);
             }
             api::destroy(target)?;
-            with_store(|s| {
-                if let Some(cspace) = s.task_spaces.remove(&target) {
-                    s.cspaces.remove(&cspace);
-                }
-                let objects: Vec<u64> = s
-                    .objects
-                    .iter()
-                    .filter_map(|(&id, obj)| match obj {
-                        Object::Tcb(task) if *task == target => Some(id),
-                        Object::VSpace { owner, .. } if *owner == target => Some(id),
-                        _ => None,
-                    })
-                    .collect();
-                for slots in s.cspaces.values_mut() {
-                    slots.retain(|_, cap| !objects.contains(&cap.object));
-                }
-            });
-            cnode::collect();
+            release_task_objects(target);
             None
         }
         n if n == R::Wait as u64 => {
@@ -151,22 +139,24 @@ pub(super) fn invoke(request: &Request) -> Result<Completion> {
         }
         n if n == R::Exit as u64 => return Ok(Completion::park(Disposition::Exit(a[0]))),
         n if n == R::Clock as u64 => Some(time::now() / (time::frequency() / 1000).max(1)),
-        n if n == R::AvailableFrames as u64 => Some(crate::memory::available_frames() as u64),
+        n if n == R::AvailableFrames as u64 => {
+            Some((super::available_untyped() / crate::memory::PAGE_SIZE) as u64)
+        }
         n if n == R::Map as u64 => {
-            api::edit_space(tcb(a[0])?, |space| {
-                space.map(a[1] as usize, a[2] as usize, a[3], false)
-            })?;
+            let space = api::editable_vspace(tcb(a[0])?)?;
+            map_vspace(space, a[1] as usize, a[2] as usize, a[3], false)?;
             None
         }
         n if n == R::Unmap as u64 => {
-            api::edit_space(tcb(a[0])?, |space| {
-                space.unmap(a[1] as usize, a[2] as usize)
+            api::edit_space(tcb(a[0])?, |vspace| {
+                vspace.unmap(a[1] as usize, a[2] as usize)
             })?;
+            request_collect();
             None
         }
         n if n == R::Protect as u64 => {
-            api::edit_space(tcb(a[0])?, |space| {
-                space.protect(a[1] as usize, a[2] as usize, a[3])
+            api::edit_space(tcb(a[0])?, |vspace| {
+                vspace.protect(a[1] as usize, a[2] as usize, a[3])
             })?;
             None
         }

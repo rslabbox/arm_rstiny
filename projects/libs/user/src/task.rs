@@ -47,7 +47,11 @@ impl Task {
     /// Released CSpace slots may subsequently be reused.
     pub fn destroy(self) -> Result<(), Error> {
         if let Some(allocator) = self.1 {
-            // This handle uniquely owns the loader's derivation subtree.
+            // Finish the scheduler task first, while its TCB capability is
+            // still valid, then reclaim the loader's derivation subtree.
+            runtime(abi::RuntimeInvocation::Destroy, &[self.0])?;
+            // SAFETY: this handle uniquely owns the derivation subtree; the
+            // task is terminated and nothing else references it.
             unsafe {
                 let cnode = super::capability::CNode(super::capability::CPtr(abi::INIT_CNODE));
                 cnode.revoke(allocator)?;

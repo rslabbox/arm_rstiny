@@ -9,11 +9,11 @@ use crate::{
 };
 
 pub(super) fn new_user_task(
-    mut uctx: UserContext,
+    uctx: UserContext,
     mut dispatch_syscall: impl FnMut(&mut UserContext) -> Disposition + Send + 'static,
 ) -> Result<Execution, Error> {
-    Execution::new(move || {
-        run_user_thread_loop(&mut uctx, &mut dispatch_syscall);
+    Execution::start(uctx, move |uctx| {
+        run_user_thread_loop(uctx, &mut dispatch_syscall);
     })
 }
 

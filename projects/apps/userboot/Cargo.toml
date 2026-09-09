@@ -1,0 +1,18 @@
+[package]
+name = "userboot"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "userboot"
+path = "src/main.rs"
+test = false
+bench = false
+
+[dependencies]
+kernel-abi = { path = "../../libs/abi" }
+rstiny = { path = "../../libs/user" }
+rstiny-runtime = { path = "../../libs/runtime" }
+rstiny-newc = { path = "../../libs/newc" }
+rstiny-elf = { path = "../../libs/elf" }
+rstiny-protocol = { path = "../../libs/protocol" }

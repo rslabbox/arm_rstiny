@@ -18,9 +18,9 @@ pub(super) struct Region {
 
 pub(super) struct KernelLayout {
     image: [Region; 4],
-    loaded: Region,
     devices: [Region; 3],
 }
+
 impl KernelLayout {
     pub fn from_boot(info: BootInfo) -> Result<Self, MapError> {
         unsafe extern "C" {
@@ -67,15 +67,6 @@ impl KernelLayout {
             region(rodata_end, guard, MemFlags::READ | MemFlags::WRITE),
             region(guard + PAGE_SIZE, end, MemFlags::READ | MemFlags::WRITE),
         ];
-        // Loader metadata, DTB, root image and preserved program-header page.
-        // This is a discovered physical extent, not part of the kernel image VA.
-        let loaded = Region {
-            virtual_start: phys_to_virt(PhysAddr::from_usize(physical_end))
-                .expect("direct-map address"),
-            physical_start: PhysAddr::from_usize(physical_end),
-            size: loaded_end - physical_end,
-            flags: MemFlags::READ | MemFlags::WRITE,
-        };
         let device = |physical, size| Region {
             virtual_start: phys_to_virt(PhysAddr::from_usize(physical))
                 .expect("direct-map address"),
@@ -85,7 +76,6 @@ impl KernelLayout {
         };
         Ok(Self {
             image,
-            loaded,
             devices: [
                 device(config::GICD_BASE, config::GICD_SIZE),
                 device(config::GICR_BASE, config::GICR_SIZE),
@@ -94,10 +84,29 @@ impl KernelLayout {
             ],
         })
     }
+
     pub fn image_regions(&self) -> impl Iterator<Item = Region> + '_ {
         self.image.iter().copied()
     }
+
+    /// Direct-map aliases for all of RAM. Untyped objects live outside the
+    /// kernel image, so the kernel needs a writable alias for every physical
+    /// page it may zero or adopt. The image keeps its own permissions (text
+    /// stays read-only), and the rest of RAM is read-write.
     pub fn physical_regions(&self) -> impl Iterator<Item = Region> + '_ {
+        let image_start = self.image[0].physical_start.as_usize();
+        let last = &self.image[3];
+        let image_end = last.physical_start.as_usize() + last.size;
+        let direct = |physical: usize, size: usize| Region {
+            virtual_start: phys_to_virt(PhysAddr::from_usize(physical)).expect("RAM direct alias"),
+            physical_start: PhysAddr::from_usize(physical),
+            size,
+            flags: MemFlags::READ | MemFlags::WRITE,
+        };
+        let before = (image_start > config::FIRMWARE_END)
+            .then(|| direct(config::FIRMWARE_END, image_start - config::FIRMWARE_END));
+        let after =
+            (image_end < config::RAM_END).then(|| direct(image_end, config::RAM_END - image_end));
         self.image
             .iter()
             .map(|region| Region {
@@ -105,8 +114,10 @@ impl KernelLayout {
                 flags: region.flags & !MemFlags::EXECUTE,
                 ..*region
             })
-            .chain(core::iter::once(self.loaded))
+            .chain(before)
+            .chain(after)
     }
+
     pub fn device_regions(&self) -> impl Iterator<Item = Region> + '_ {
         self.devices.iter().copied()
     }

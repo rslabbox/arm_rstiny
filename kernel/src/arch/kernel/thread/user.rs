@@ -23,6 +23,11 @@ impl UserContext {
     pub fn frame(&self) -> &TrapFrame {
         &self.0
     }
+    /// Mutable saved-frame access for kernel delivery paths (IPC and fault
+    /// restart); never valid for the currently executing task.
+    pub fn frame_mut(&mut self) -> &mut TrapFrame {
+        &mut self.0
+    }
     /// seL4 AArch64 ABI: x7 is the number, x0 the cap, x1 MessageInfo.
     pub fn syscall_number(&self) -> u64 {
         self.0.r[7]

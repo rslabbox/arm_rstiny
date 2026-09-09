@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Package kernel/DTB/rootserver CPIO and link the Rust bootloader."""
+"""Package kernel/DTB/userboot CPIO and link the Rust bootloader."""
 import argparse
 import os
 from pathlib import Path
@@ -41,22 +41,30 @@ def archive_object(archive):
     return output
 
 
-def build(kernel, root, output, platform, mode):
+def build(kernel, root, output, platform, mode, modules=()):
     kernel_info, root_info = parse_elf(kernel.read_bytes()), parse_elf(root.read_bytes())
     output.mkdir(parents=True, exist_ok=True)
-    for source, name in ((kernel, 'kernel.elf'), (root, 'rootserver')):
+    for source, name in ((kernel, 'kernel.elf'), (root, 'userboot')):
         command(['rust-objcopy', '--strip-all', source, output / name])
         os.chmod(output / name, 0o644)
         os.utime(output / name, (0, 0))
+    for module in modules:
+        target, source = module.split('=', 1) if '=' in module else (module.rsplit('/', 1)[-1], module)
+        destination = output / target
+        shutil.copyfile(source, destination)
+        os.chmod(destination, 0o644)
+        os.utime(destination, (0, 0))
     dtb = output / 'kernel.dtb'
     shutil.copyfile(platform / 'kernel.dtb', dtb)
     os.chmod(dtb, 0o644)
     os.utime(dtb, (0, 0))
     validate_pair(kernel_info, root_info, int.from_bytes(dtb.read_bytes()[4:8], 'big'))
     archive = output / 'archive.cpio'
+    module_names = sorted(module.split('=', 1)[0].rsplit('/', 1)[-1] for module in modules)
+    names = ['kernel.elf', 'kernel.dtb', 'userboot'] + module_names
     contents = subprocess.check_output(
         ['cpio', '--create', '--format=newc', '--reproducible', '--owner=0:0', '--quiet'],
-        cwd=output, input=b'kernel.elf\nkernel.dtb\nrootserver\n')
+        cwd=output, input=('\n'.join(names) + '\n').encode())
     if not archive.exists() or archive.read_bytes() != contents:
         archive.write_bytes(contents)
     obj = archive_object(archive)
@@ -76,9 +84,11 @@ def main():
     parser.add_argument('output', type=Path)
     parser.add_argument('--platform', type=Path, required=True)
     parser.add_argument('--mode', choices=['debug', 'release'], default='debug')
+    parser.add_argument('--module', action='append', default=[],
+                        help='extra boot module file; NAME=PATH or PATH (basename is the archive name)')
     args = parser.parse_args()
     build(args.kernel.resolve(), args.root.resolve(), args.output.resolve(),
-          args.platform.resolve(), args.mode)
+          args.platform.resolve(), args.mode, args.module)
 
 
 if __name__ == '__main__':

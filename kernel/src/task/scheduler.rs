@@ -13,60 +13,113 @@ use crate::{
         },
         machine::{instructions, time},
     },
-    memory::AddressSpace,
+    object::ObjectId,
 };
-use alloc::rc::Rc;
-use core::cell::RefCell;
 use kernel_abi::*;
 #[path = "api.rs"]
 pub(crate) mod api;
 
 /// Scheduling decisions, independent of syscall numbers and register encoding.
+/// [`Disposition::Block`] leaves the state the syscall committed: the task
+/// waits on an endpoint, a reply or a fault handler and is woken by delivery.
 pub(crate) enum Disposition {
     Resume,
     Sleep(u64),
     Wait(u64),
     Exit(u64),
     Fault(u64),
+    Block,
+}
+
+/// A pending reply relationship. A receiver holds at most one; `Reply`
+/// consumes it. Fault senders are resumed at their restart PC instead of
+/// receiving a reply message.
+#[derive(Clone, Copy)]
+pub(crate) enum Caller {
+    Call(u64),
+    Fault(u64),
+}
+impl Caller {
+    pub(crate) fn task(self) -> u64 {
+        match self {
+            Caller::Call(id) | Caller::Fault(id) => id,
+        }
+    }
+}
+
+/// Why a task is parked inside an IPC syscall. Queued senders keep their
+/// message in their own saved context until delivery; fault senders carry it
+/// in `fault_msg`.
+#[derive(Clone, Copy)]
+pub(crate) struct Blocked {
+    pub ep: crate::object::ObjectId,
+    pub badge: u64,
+    /// The sender expects a reply: delivery grants the receiver this right.
+    pub call: bool,
+    pub grant_reply: bool,
+    /// A faulted thread delivering through its fault endpoint.
+    pub fault: bool,
+}
+
+/// A fault message held for a queued fault sender.
+#[derive(Clone, Copy)]
+pub(crate) struct FaultMsg {
+    pub label: u64,
+    pub length: usize,
+    pub mrs: [u64; 4],
 }
 
 pub(super) struct Task {
     state: u64,
     root: usize,
-    cspace: u64,
+    cspace: Option<ObjectId>,
+    vspace: Option<ObjectId>,
     ipc_buffer: usize,
     execution: Option<Execution>,
     completion: Option<u64>,
     id: u64,
     parent: u64,
-    space: Option<Rc<RefCell<AddressSpace>>>,
     deadline: u64,
     wait_for: u64,
     result: u64,
     started: bool,
     suspended_from: u64,
+    fault_ep: u64,
+    blocked: Option<Blocked>,
+    caller: Option<Caller>,
+    restart_pc: u64,
+    fault_msg: Option<FaultMsg>,
 }
 impl Task {
     const fn empty() -> Self {
         Self {
             state: TASK_CREATED,
             root: 0,
-            cspace: 0,
+            cspace: None,
+            vspace: None,
             ipc_buffer: 0,
             execution: None,
             completion: None,
             id: 0,
             parent: 0,
-            space: None,
             deadline: 0,
             wait_for: 0,
             result: 0,
             started: false,
             suspended_from: TASK_CREATED,
+            fault_ep: 0,
+            blocked: None,
+            caller: None,
+            restart_pc: 0,
+            fault_msg: None,
         }
     }
     fn terminal(&self) -> bool {
         matches!(self.state, TASK_EXITED | TASK_FAULTED)
+    }
+    /// Blocked on a wait queue: an endpoint or notification holds this task.
+    fn queued(&self) -> bool {
+        matches!(self.state, TASK_BLOCKED_SEND | TASK_BLOCKED_RECV)
     }
 }
 pub(super) struct Scheduler {
@@ -102,7 +155,7 @@ impl Scheduler {
     pub(super) fn current_id(&self) -> Option<u64> {
         self.current_slot().map(|slot| self.tasks[slot].id)
     }
-    fn create(&mut self, parent: u64, space: AddressSpace) -> Result<usize, u64> {
+    fn create(&mut self, parent: u64) -> Result<usize, u64> {
         let slot = self
             .tasks
             .iter()
@@ -117,8 +170,6 @@ impl Scheduler {
         self.tasks[slot] = Task {
             id,
             parent,
-            root: space.root(),
-            space: Some(Rc::new(RefCell::new(space))),
             ..Task::empty()
         };
         Ok(slot)
@@ -143,8 +194,13 @@ impl Scheduler {
         task.result = result;
         task.root = 0;
         task.execution = None;
-        task.space = None; // We already switched back to the kernel's page table.
+        task.vspace = None; // We already switched back to the kernel's page table.
         let id = task.id;
+        // A partner blocked on this task's reply (or a faulted thread waiting
+        // for its supervisor, whose supervisor is now gone) must not hang:
+        // completion `Some(0)` makes the blocked continuation fail its call.
+        let waiting = task.caller.take().map(Caller::task);
+        task.blocked = None;
         crate::object::retire_task(id);
         let root_id = if self.tasks[0].terminal() {
             0
@@ -154,6 +210,22 @@ impl Scheduler {
         for child in &mut self.tasks {
             if child.parent == id {
                 child.parent = root_id;
+            }
+        }
+        if let Some(waiter) = waiting {
+            if let Ok(target) = self.lookup(waiter) {
+                let task = &self.tasks[target];
+                let waiting_for_reply =
+                    matches!(task.state, TASK_BLOCKED_REPLY | TASK_BLOCKED_FAULT)
+                        || (task.state == TASK_SUSPENDED
+                            && matches!(
+                                task.suspended_from,
+                                TASK_BLOCKED_REPLY | TASK_BLOCKED_FAULT
+                            ));
+                if waiting_for_reply {
+                    self.tasks[target].completion = Some(0);
+                    self.ready(target);
+                }
             }
         }
         for waiter in 0..MAX_TASKS {
@@ -209,7 +281,12 @@ impl Scheduler {
         assert!(self.tasks[index].execution.is_none());
         self.tasks[index].execution = Some(active.execution);
         match disposition {
+            // A yielding task rejoins the queue. A task that suspended or
+            // blocked itself during the syscall keeps its committed state; a
+            // `Block` task is re-queued only by its waker.
+            Disposition::Resume if self.tasks[index].state == TASK_RUNNING => self.ready(index),
             Disposition::Resume => {}
+            Disposition::Block => {}
             Disposition::Sleep(deadline) => {
                 self.tasks[index].deadline = deadline;
                 self.tasks[index].state = TASK_SLEEPING;
@@ -221,15 +298,14 @@ impl Scheduler {
             Disposition::Exit(code) => self.finish(index, false, code),
             Disposition::Fault(code) => self.finish(index, true, code),
         }
-        if self.tasks[index].state == TASK_RUNNING {
-            self.ready(index);
-        }
     }
     pub(super) fn install_root(
         &mut self,
-        space: AddressSpace,
+        vspace: ObjectId,
+        root: usize,
         entry: u64,
         boot_info: u64,
+        untyped_start: u64,
         dispatch: impl FnMut(&mut UserContext) -> Disposition + Send + 'static,
     ) {
         let execution = new_user_task(
@@ -237,14 +313,17 @@ impl Scheduler {
             dispatch,
         )
         .expect("root kernel stack");
-        let index = self.create(0, space).expect("cannot create root task");
+        let index = self.create(0).expect("cannot create root task");
         self.tasks[index].execution = Some(execution);
         self.tasks[index].ipc_buffer = boot_info as usize - crate::memory::PAGE_SIZE;
-        self.tasks[index].cspace = crate::object::init_root(
+        self.tasks[index].root = root;
+        self.tasks[index].vspace = Some(vspace);
+        self.tasks[index].cspace = Some(crate::object::init_root(
             self.tasks[index].id,
-            self.tasks[index].space.as_ref().unwrap().clone(),
+            vspace,
             self.tasks[index].ipc_buffer,
-        );
+            untyped_start,
+        ));
         self.tasks[index].started = true;
         self.ready(index);
     }
@@ -317,6 +396,9 @@ pub(super) fn run() -> ! {
                 )
             };
             with_scheduler(|scheduler| scheduler.complete_run(active));
+            // Task exit and destruction release objects; sweep after the
+            // scheduler borrow is released so collection can inspect tasks.
+            crate::object::collect_if_requested();
         } else {
             let state = with_scheduler(|scheduler| scheduler.root_state());
             root_idle(state);

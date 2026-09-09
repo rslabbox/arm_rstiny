@@ -49,6 +49,34 @@ impl CNode {
         )
         .map(|_| ())
     }
+    /// Mint a copy carrying an endpoint/notification badge (`cap_data`).
+    /// seL4 `updateCapData`: only an unbadged source accepts a badge.
+    pub fn mint(
+        &self,
+        dest: u64,
+        source: CPtr,
+        slot: u64,
+        rights: u64,
+        cap_data: u64,
+    ) -> Result<(), Error> {
+        invoke(
+            self.0.0,
+            Invocation::CNodeMint as u64,
+            &[dest, 64, slot, 64, rights, cap_data],
+            &[source.0],
+        )
+        .map(|_| ())
+    }
+    /// Create an Endpoint object from this Untyped capability.
+    pub fn retype_endpoint(&self, untyped: CPtr, slot: u64) -> Result<(), Error> {
+        invoke(
+            untyped.0,
+            Invocation::UntypedRetype as u64,
+            &[ObjectType::Endpoint as u64, 0, 0, 0, slot, 1],
+            &[self.0.0],
+        )
+        .map(|_| ())
+    }
     /// # Safety
     /// No live references or execution may depend on mappings removed with this cap.
     pub unsafe fn delete(&self, slot: u64) -> Result<(), Error> {
@@ -109,17 +137,20 @@ impl Tcb {
     }
     /// # Safety
     /// The new roots and IPC mapping must form a valid, exclusively managed task.
+    /// `fault_ep` is a slot in the configured CSpace, resolved when a fault is
+    /// delivered (0 = unmonitored).
     pub unsafe fn configure(
         &self,
         cspace: CPtr,
         vspace: CPtr,
         ipc_frame: CPtr,
         ipc_address: usize,
+        fault_ep: u64,
     ) -> Result<(), Error> {
         invoke(
             self.0.0,
             Invocation::TcbConfigure as u64,
-            &[0, 64 - abi::CNODE_BITS, 0, ipc_address as u64],
+            &[fault_ep, 64 - abi::CNODE_BITS, 0, ipc_address as u64],
             &[cspace.0, vspace.0, ipc_frame.0],
         )
         .map(|_| ())

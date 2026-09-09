@@ -1,0 +1,10 @@
+[package]
+name = "rstiny-server"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+kernel-abi = { path = "../abi" }
+rstiny = { path = "../user" }
+rstiny-protocol = { path = "../protocol" }

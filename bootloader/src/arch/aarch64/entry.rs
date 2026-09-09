@@ -85,7 +85,7 @@ fn check_boot_context() {
         || SCTLR_EL1.is_set(SCTLR_EL1::I)
     {
         // No global state or UART access is safe to assume on this path.
-        crate::console::bootloader_halt();
+        super::bootloader_halt();
     }
 }
 

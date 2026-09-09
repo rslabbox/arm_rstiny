@@ -16,6 +16,7 @@ kernel-abi = { path = "../projects/libs/abi" }
 aarch64-cpu = "11.2.0"
 bitflags = "2.9.1"
 rstiny-elf = { path = "../projects/libs/elf" }
+rstiny-newc = { path = "../projects/libs/newc" }
 tock-registers = "0.10.1"
 
 [[bin]]

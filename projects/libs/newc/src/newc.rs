@@ -1,89 +1,21 @@
-//! Borrowed newc records and the boot image's ordered three-file contract.
-use core::fmt;
-
+//! Checked newc record decoding; no boot file names or ordering policy.
+use crate::archive::{ArchiveError, ArchiveErrorKind};
 const HEADER_SIZE: usize = 110;
 const ALIGNMENT: usize = 4;
 
-/// A malformed archive location, measured in bytes from its beginning.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ArchiveError {
-    pub offset: usize,
-    pub kind: ArchiveErrorKind,
-}
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ArchiveErrorKind {
-    Truncated,
-    Overflow,
-    InvalidMagic,
-    InvalidHex,
-    InvalidName,
-    UnexpectedFile,
-    MissingTrailer,
-    InvalidTrailer,
-    TrailingData,
-}
-impl fmt::Display for ArchiveError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "CPIO {:?} at offset {:#x}", self.kind, self.offset)
-    }
-}
-impl core::error::Error for ArchiveError {}
-
-/// Validated archive structure and file order, borrowing the original payloads.
-/// ELF and DTB contents must still be validated by their respective parsers.
-#[derive(Debug)]
-pub struct BootArchive<'a> {
-    kernel: &'a [u8],
-    device_tree: &'a [u8],
-    rootserver: &'a [u8],
-}
-impl<'a> BootArchive<'a> {
-    pub fn parse(bytes: &'a [u8]) -> Result<Self, ArchiveError> {
-        let mut cursor = Cursor { bytes, offset: 0 };
-        let kernel = cursor.expect_file(b"kernel.elf")?;
-        let device_tree = cursor.expect_file(b"kernel.dtb")?;
-        let rootserver = cursor.expect_file(b"rootserver")?;
-        if cursor.offset == bytes.len() {
-            return Err(cursor.error(ArchiveErrorKind::MissingTrailer));
-        }
-        let trailer_offset = cursor.offset;
-        if !matches!(cursor.read_record()?, Record::Trailer) {
-            return Err(ArchiveError {
-                offset: trailer_offset,
-                kind: ArchiveErrorKind::UnexpectedFile,
-            });
-        }
-        // GNU cpio pads the archive to a block boundary. Only zero fill may
-        // follow the terminal record; concatenated archives are not boot images.
-        if let Some(index) = bytes[cursor.offset..].iter().position(|byte| *byte != 0) {
-            return Err(ArchiveError {
-                offset: cursor.offset + index,
-                kind: ArchiveErrorKind::TrailingData,
-            });
-        }
-        Ok(Self {
-            kernel,
-            device_tree,
-            rootserver,
-        })
-    }
-    pub fn kernel(&self) -> &'a [u8] {
-        self.kernel
-    }
-    pub fn device_tree(&self) -> &'a [u8] {
-        self.device_tree
-    }
-    pub fn rootserver(&self) -> &'a [u8] {
-        self.rootserver
-    }
-}
-
 /// Owns checked cursor movement; parsing never dereferences archive pointers.
-struct Cursor<'a> {
+pub struct Cursor<'a> {
     bytes: &'a [u8],
     offset: usize,
 }
 impl<'a> Cursor<'a> {
+    pub fn new(bytes: &'a [u8]) -> Self {
+        Self { bytes, offset: 0 }
+    }
+    pub fn offset(&self) -> usize {
+        self.offset
+    }
+
     fn error(&self, kind: ArchiveErrorKind) -> ArchiveError {
         ArchiveError {
             offset: self.offset,
@@ -107,7 +39,7 @@ impl<'a> Cursor<'a> {
         self.take(padding)?;
         Ok(())
     }
-    fn read_record(&mut self) -> Result<Record<'a>, ArchiveError> {
+    pub fn read_record(&mut self) -> Result<Record<'a>, ArchiveError> {
         let header_offset = self.offset;
         let header = NewcHeader::parse(self.take(HEADER_SIZE)?, header_offset)?;
         let name_offset = self.offset;
@@ -133,16 +65,6 @@ impl<'a> Cursor<'a> {
         } else {
             Record::File(Entry { name, data })
         })
-    }
-    fn expect_file(&mut self, expected: &[u8]) -> Result<&'a [u8], ArchiveError> {
-        let offset = self.offset;
-        match self.read_record()? {
-            Record::File(entry) if entry.name == expected => Ok(entry.data),
-            _ => Err(ArchiveError {
-                offset,
-                kind: ArchiveErrorKind::UnexpectedFile,
-            }),
-        }
     }
 }
 
@@ -177,11 +99,11 @@ impl NewcHeader {
         })
     }
 }
-struct Entry<'a> {
-    name: &'a [u8],
-    data: &'a [u8],
+pub struct Entry<'a> {
+    pub(super) name: &'a [u8],
+    pub(super) data: &'a [u8],
 }
-enum Record<'a> {
+pub enum Record<'a> {
     File(Entry<'a>),
     Trailer,
 }
@@ -207,5 +129,100 @@ fn hex(bytes: &[u8], offset: usize) -> Result<usize, ArchiveError> {
 }
 
 #[cfg(test)]
-#[path = "../tests/archive.rs"]
-mod tests;
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cursor_alignment_and_overflow_are_checked_without_advancing() {
+        let mut cursor = Cursor {
+            bytes: &[0; 3],
+            offset: 1,
+        };
+        assert_eq!(
+            cursor.align().unwrap_err().kind,
+            ArchiveErrorKind::Truncated
+        );
+        assert_eq!(cursor.offset, 1);
+        assert_eq!(
+            cursor.take(usize::MAX).unwrap_err().kind,
+            ArchiveErrorKind::Overflow
+        );
+        assert_eq!(cursor.offset, 1);
+        assert_eq!(hex(b"aBcD", 0).unwrap(), 0xabcd);
+    }
+
+    #[test]
+    fn hex_requires_digits_and_reports_numeric_overflow() {
+        for bytes in [
+            &b"+0000001"[..],
+            b"-0000001",
+            b" 0000001",
+            b"\xff0000001",
+            b"",
+        ] {
+            assert_eq!(
+                hex(bytes, 54).unwrap_err(),
+                ArchiveError {
+                    offset: 54,
+                    kind: ArchiveErrorKind::InvalidHex,
+                }
+            );
+        }
+        assert_eq!(hex(b"00g0", 54).unwrap_err().offset, 56);
+        let overflow = "f".repeat(core::mem::size_of::<usize>() * 2 + 1);
+        assert_eq!(
+            hex(overflow.as_bytes(), 54).unwrap_err(),
+            ArchiveError {
+                offset: 54,
+                kind: ArchiveErrorKind::Overflow,
+            }
+        );
+    }
+}
+
+#[test]
+fn cursor_alignment_and_overflow_are_checked_without_advancing() {
+    let mut cursor = Cursor {
+        bytes: &[0; 3],
+        offset: 1,
+    };
+    assert_eq!(
+        cursor.align().unwrap_err().kind,
+        ArchiveErrorKind::Truncated
+    );
+    assert_eq!(cursor.offset, 1);
+    assert_eq!(
+        cursor.take(usize::MAX).unwrap_err().kind,
+        ArchiveErrorKind::Overflow
+    );
+    assert_eq!(cursor.offset, 1);
+    assert_eq!(hex(b"aBcD", 0).unwrap(), 0xabcd);
+}
+
+#[test]
+fn hex_requires_digits_and_reports_numeric_overflow() {
+    for bytes in [
+        &b"+0000001"[..],
+        b"-0000001",
+        b" 0000001",
+        b"\xff0000001",
+        b"",
+    ] {
+        assert_eq!(
+            hex(bytes, 54).unwrap_err(),
+            ArchiveError {
+                offset: 54,
+                kind: ArchiveErrorKind::InvalidHex,
+            }
+        );
+    }
+    assert_eq!(hex(b"00g0", 54).unwrap_err().offset, 56);
+    let overflow = "f".repeat(core::mem::size_of::<usize>() * 2 + 1);
+    assert_eq!(
+        hex(overflow.as_bytes(), 54).unwrap_err(),
+        ArchiveError {
+            offset: 54,
+            kind: ArchiveErrorKind::Overflow,
+        }
+    );
+}

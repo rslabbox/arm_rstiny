@@ -5,6 +5,7 @@ use core::ptr::{addr_of, addr_of_mut};
 use crate::config::{PAGE_SIZE, RAM_END, RAM_START};
 
 // seL4 ARM loader passes x0..x5 and enters an EL1 kernel with MMU/caches on.
+// x6/x7 extend the contract with the boot-module archive (0 = absent).
 #[derive(Clone, Copy, Debug, Default)]
 #[repr(C)]
 pub struct BootInfo {
@@ -15,6 +16,8 @@ pub struct BootInfo {
     pub dtb: usize,
     pub dtb_size: usize,
     pub kernel_physical: usize,
+    pub modules: usize,
+    pub modules_size: usize,
 }
 #[unsafe(no_mangle)]
 static mut LOADER_BOOT_INFO: BootInfo = BootInfo {
@@ -25,6 +28,8 @@ static mut LOADER_BOOT_INFO: BootInfo = BootInfo {
     dtb: 0,
     dtb_size: 0,
     kernel_physical: 0,
+    modules: 0,
+    modules_size: 0,
 };
 pub fn information() -> BootInfo {
     // SAFETY: initialized once before kernel startup, then immutable on this CPU.
@@ -102,6 +107,8 @@ extern "C" fn start_rust(
     entry: usize,
     dtb: usize,
     dtb_size: usize,
+    modules: usize,
+    modules_size: usize,
 ) -> ! {
     if CurrentEL.read(CurrentEL::EL) != 1
         || !SCTLR_EL1.is_set(SCTLR_EL1::M)
@@ -135,6 +142,8 @@ extern "C" fn start_rust(
         dtb,
         dtb_size,
         kernel_physical,
+        modules,
+        modules_size,
     };
     let Some(user_start) = image_start.checked_sub(phys_virt_offset) else {
         crate::utils::halt()
@@ -145,6 +154,22 @@ extern "C" fn start_rust(
     if kernel_abi::InitialTaskLayout::new(user_start as u64..user_end as u64, dtb_size as u64)
         .is_none()
         || !(user_start..user_end).contains(&entry)
+    {
+        crate::utils::halt();
+    }
+    // The boot-module archive is optional: a zero pair means absent. When
+    // present it must be page-granular RAM that is disjoint from the DTB and
+    // the loaded user image.
+    let modules_end = modules.saturating_add(modules_size);
+    let modules_disjoint = modules >= kernel_end
+        && modules_end <= RAM_END
+        && !(modules < dtb + dtb_size && dtb < modules_end)
+        && !(modules < image_end && image_start < modules_end);
+    if (modules == 0) != (modules_size == 0)
+        || (modules != 0
+            && (!modules.is_multiple_of(PAGE_SIZE)
+                || !modules_size.is_multiple_of(PAGE_SIZE)
+                || !modules_disjoint))
     {
         crate::utils::halt();
     }

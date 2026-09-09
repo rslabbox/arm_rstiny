@@ -1,4 +1,5 @@
-use super::*;
+//! Boot archive contract tests over the shared newc decoder.
+use rstiny_newc::*;
 
 fn record(bytes: &mut Vec<u8>, name: &[u8], data: &[u8]) -> usize {
     let start = bytes.len();
@@ -22,7 +23,7 @@ fn fixture() -> (Vec<u8>, usize) {
     let mut bytes = Vec::new();
     record(&mut bytes, b"kernel.elf", b"kernel");
     record(&mut bytes, b"kernel.dtb", b"dtb");
-    record(&mut bytes, b"rootserver", b"root");
+    record(&mut bytes, b"userboot", b"root");
     let trailer = record(&mut bytes, b"TRAILER!!!", b"");
     (bytes, trailer)
 }
@@ -99,11 +100,20 @@ fn rejects_wrong_order_duplicates_and_early_trailer() {
 }
 
 #[test]
-fn enforces_terminal_record_and_trailing_padding() {
+fn carries_modules_and_enforces_the_trailing_record() {
     let (original, trailer) = fixture();
     let mut bytes = original[..trailer].to_vec();
-    record(&mut bytes, b"extra", b"");
-    rejects(&bytes, ArchiveErrorKind::UnexpectedFile);
+    record(&mut bytes, b"init.elf", b"init");
+    record(&mut bytes, b"init.cfg", b"cfg");
+    record(&mut bytes, b"TRAILER!!!", b"");
+    let archive = BootArchive::parse(&bytes).unwrap();
+    let modules = archive.modules();
+    assert_eq!(modules.len(), 2);
+    assert_eq!(modules[0], (&b"init.elf"[..], &b"init"[..]));
+    assert_eq!(modules[1], (&b"init.cfg"[..], &b"cfg"[..]));
+    // The trailer still terminates the archive; truncation before it fails.
+    let mut bytes = bytes[..trailer].to_vec();
+    rejects(&bytes, ArchiveErrorKind::MissingTrailer);
     let mut bytes = original[..trailer].to_vec();
     record(&mut bytes, b"TRAILER!!!", b"x");
     rejects(&bytes, ArchiveErrorKind::InvalidTrailer);
@@ -112,52 +122,5 @@ fn enforces_terminal_record_and_trailing_padding() {
     assert_eq!(
         rejects(&bytes, ArchiveErrorKind::TrailingData).offset,
         bytes.len() - 1
-    );
-}
-
-#[test]
-fn cursor_alignment_and_overflow_are_checked_without_advancing() {
-    let mut cursor = Cursor {
-        bytes: &[0; 3],
-        offset: 1,
-    };
-    assert_eq!(
-        cursor.align().unwrap_err().kind,
-        ArchiveErrorKind::Truncated
-    );
-    assert_eq!(cursor.offset, 1);
-    assert_eq!(
-        cursor.take(usize::MAX).unwrap_err().kind,
-        ArchiveErrorKind::Overflow
-    );
-    assert_eq!(cursor.offset, 1);
-    assert_eq!(hex(b"aBcD", 0).unwrap(), 0xabcd);
-}
-
-#[test]
-fn hex_requires_digits_and_reports_numeric_overflow() {
-    for bytes in [
-        &b"+0000001"[..],
-        b"-0000001",
-        b" 0000001",
-        b"\xff0000001",
-        b"",
-    ] {
-        assert_eq!(
-            hex(bytes, 54).unwrap_err(),
-            ArchiveError {
-                offset: 54,
-                kind: ArchiveErrorKind::InvalidHex,
-            }
-        );
-    }
-    assert_eq!(hex(b"00g0", 54).unwrap_err().offset, 56);
-    let overflow = "f".repeat(core::mem::size_of::<usize>() * 2 + 1);
-    assert_eq!(
-        hex(overflow.as_bytes(), 54).unwrap_err(),
-        ArchiveError {
-            offset: 54,
-            kind: ArchiveErrorKind::Overflow,
-        }
     );
 }

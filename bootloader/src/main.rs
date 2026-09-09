@@ -1,18 +1,11 @@
 #![no_std]
 #![no_main]
 
-mod archive;
-mod boot_info;
+mod arch;
 mod console;
-mod device_tree;
-mod elf;
-mod entry;
-mod handoff;
 mod image;
-mod layout;
-mod mmu;
-mod pl011;
-
+mod loader;
+mod memory;
 mod platform;
 
 use console::bootinfo;
@@ -21,10 +14,10 @@ use console::bootinfo;
 fn boot_main() -> ! {
     console::init();
     bootinfo!("Rust bootloader started (AArch64 EL1)");
-    match image::plan() {
+    match loader::plan() {
         // SAFETY: Entry established the single-core EL1 environment;
         // the plan validated every destination before load writes physical RAM.
-        Ok(plan) => unsafe { handoff::enter(plan.load()) },
+        Ok(plan) => unsafe { arch::enter(plan.load()) },
         Err(error) => console::fail(error),
     }
 }

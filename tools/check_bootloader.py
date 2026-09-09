@@ -98,7 +98,7 @@ def main():
         data = (image.parent / 'archive.cpio').read_bytes()
         entries = archive_entries(data)
         _, kernel, _ = entries['kernel.elf']
-        _, root, _ = entries['rootserver']
+        _, root, _ = entries['userboot']
         _, dtb, _ = entries['kernel.dtb']
         phoff = struct.unpack_from('<Q', data, kernel + 32)[0]
         cases = {
@@ -107,7 +107,7 @@ def main():
             'cpio-metadata-hex': (6, b'z'),
             'cpio-name-nul': (113, b'\0'),
             'cpio-file-order': (110, b'kernel.dtb'),
-            'cpio-trailer-data': (((root + entries['rootserver'][2] + 3) & -4) + 54, b'00000001'),
+            'cpio-trailer-data': (((root + entries['userboot'][2] + 3) & -4) + 54, b'00000001'),
             'kernel-machine': (kernel + 18, struct.pack('<H', 62)),
             'kernel-entry': (kernel + 24, struct.pack('<Q', 0)),
             'kernel-virtual': (kernel + phoff + 16, struct.pack('<Q', 0x44000000)),

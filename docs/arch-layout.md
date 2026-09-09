@@ -9,6 +9,16 @@ api/
   message.rs                   # 请求校验、IPC buffer、消息和回复编解码
   debug.rs                     # 用户 debug 调用的可用性与输出策略
   faults.rs                    # 故障记录、用户故障处理策略
+object/
+  mod.rs                       # Store、Object、Cap、生命周期与按需 collect
+  id.rs                        # ObjectId、ObjectOwner 与有界对象表
+  untyped.rs                   # Untyped 物理区间、watermark 切分与启动分区算法
+  cnode.rs                     # CNode 槽、派生撤销、映射解除、Untyped Revoke
+  invoke.rs                    # 对象调用分发、Retype、Map/Unmap、TcbConfigure
+  runtime.rs                   # 托管运行时扩展（Create/Destroy/Map/...）
+memory/
+  frame.rs                     # Frame 物理页所有者与 FrameRef 非拥有引用
+  space.rs                     # AddressSpace 映射元数据（只保存 FrameRef）
 arch/
   mod.rs
   kernel/
@@ -54,11 +64,12 @@ arch/
 ## 边界
 
 - 顶级 `api` 解码共享 ABI、校验消息、调用能力对象、编码回复并决定用户故障处置。错误码与 wire 类型继续使用 `projects/libs/abi`，不复制定义。当前没有 fault endpoint，故障处理仍记录并终止任务，不表示实现了 seL4 故障投递。
+- 顶级 `object` 拥有全部内核对象 payload：对象表是唯一所有者，capability 与地址空间只保存 `ObjectId`/`FrameRef`。回收是按需触发的标记-清除，细节见 [对象内存所有权模型](object-ownership.md)。
 - `UserContext` 集中封装 AArch64 调用寄存器：x7 的调用号、x0 的 capability/badge、x1 的 MessageInfo 原始字以及 x2…x5 的消息寄存器。`MessageInfo` 的字段解释、IPC buffer 读取和零 badge 回复规则属于顶级 `api`。这些方法仍通过 `UserContext` 调用，避免在通用分发里直接索引寄存器数组。
 
 - `arch/kernel` 实现内核与 AArch64 的连接机制：启动交接、异常帧、执行上下文和页表结构。它不持有就绪队列，不分配 capability，也不决定用户地址空间的资源授权。
 - `arch/machine` 提供硬件操作，不调用调度器或 syscall 分发。GIC 和定时器是两个独立模块，通过上层中断处理和 tick 策略组合。
-- `memory/kernel` 继续持有正式内核页表并描述映射布局；`memory/address.rs` 负责基于实际加载 PA 的地址换算；`memory/space.rs` 管理用户页与地址空间所有权。
+- `memory/kernel` 继续持有正式内核页表并描述映射布局；`memory/address.rs` 负责基于实际加载 PA 的地址换算；`memory/space.rs` 管理地址空间映射元数据，只保存 `FrameRef`，不拥有物理页。
 - `task` 继续管理任务生命周期和运行循环；`api/dispatch.rs` 分发系统调用，`object` 实现能力对象接口。`task/api.rs` 是任务子系统的受控内部操作入口，继续负责当前任务身份、状态和资源访问，和顶级用户 API 职责不同。不会为了模仿 seL4 的目录名称，再建立一套空的 `arch/object`。
 
 `TrapFrame` 从 `arch::kernel::thread` 导出，`PageTableEntry` 从 `arch::kernel::vspace` 导出；异常桥接使用的 `RawTrap` 和 `KernelReturnFrame` 仅在 `arch::kernel` 内可见。

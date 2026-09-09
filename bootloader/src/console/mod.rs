@@ -1,9 +1,7 @@
 //! Polled boot diagnostics and terminal failure handling.
-use crate::{pl011, platform};
-use core::{
-    arch::asm,
-    fmt::{self, Write},
-};
+mod pl011;
+use crate::{arch::bootloader_halt, platform};
+use core::fmt::{self, Write};
 
 /// Print a boot message followed by a newline, regardless of log filtering.
 /// UART must already be initialized; output is best-effort and allocation-free.
@@ -49,15 +47,6 @@ fn put_byte(byte: u8) -> fmt::Result {
 pub(crate) fn fail(message: impl fmt::Display) -> ! {
     let _ = writeln!(Console, "bootloader: error: {message}");
     bootloader_halt()
-}
-#[unsafe(no_mangle)]
-#[inline(never)]
-pub extern "C" fn bootloader_halt() -> ! {
-    loop {
-        unsafe {
-            asm!("wfe", options(nomem, nostack));
-        }
-    }
 }
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo<'_>) -> ! {

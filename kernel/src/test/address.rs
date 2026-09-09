@@ -6,7 +6,7 @@ use crate::{
     },
     config::{MemFlags, PA_MAX_BITS, PAGE_SIZE, RAM_START},
     memory::{
-        self, AddressSpace, Error,
+        self, Error,
         address::{self, KernelImage},
     },
 };
@@ -81,38 +81,53 @@ fn kernel() {
 fn user() {
     let before = memory::available_frames();
     {
-        let mut first = AddressSpace::new().unwrap();
-        let mut second = AddressSpace::new().unwrap();
+        let first = crate::object::create_vspace(0).unwrap();
+        let second = crate::object::create_vspace(0).unwrap();
         let base = 0x1000000;
-        first.map(base, 2 * PAGE_SIZE, 3, false).unwrap();
-        second.map(base, PAGE_SIZE, 3, false).unwrap();
+        crate::object::map_vspace(first, base, 2 * PAGE_SIZE, 3, false).unwrap();
+        crate::object::map_vspace(second, base, PAGE_SIZE, 3, false).unwrap();
         let va = VirtAddr::from_usize(base + 37);
-        let mapping = first.translate(va).unwrap();
-        assert_eq!(
-            mapping.physical.as_usize(),
-            first.frame_at(base).unwrap().physical() + 37
+        let mapping = crate::object::with_vspace(first, |space| space.translate(va)).unwrap();
+        let frame = crate::object::with_vspace(first, |space| space.frame_at(base)).unwrap();
+        assert_eq!(mapping.physical.as_usize(), frame.physical() + 37);
+        assert_ne!(
+            mapping.physical,
+            crate::object::with_vspace(second, |space| space.translate(va))
+                .unwrap()
+                .physical
         );
-        assert_ne!(mapping.physical, second.translate(va).unwrap().physical);
         assert_eq!(
             mapping.flags,
             MemFlags::READ | MemFlags::WRITE | MemFlags::USER
         );
-        first.write(base + PAGE_SIZE - 3, b"cross-page").unwrap();
+        crate::object::edit_vspace(first, |space| {
+            space.write(base + PAGE_SIZE - 3, b"cross-page")
+        })
+        .unwrap();
         let mut bytes = [0; 10];
-        first.read(base + PAGE_SIZE - 3, &mut bytes).unwrap();
+        crate::object::with_vspace(first, |space| space.read(base + PAGE_SIZE - 3, &mut bytes))
+            .unwrap();
         assert_eq!(&bytes, b"cross-page");
-        first.protect(base, PAGE_SIZE, 5).unwrap();
+        crate::object::edit_vspace(first, |space| space.protect(base, PAGE_SIZE, 5)).unwrap();
         assert_eq!(
-            first.translate(va).unwrap().flags,
+            crate::object::with_vspace(first, |space| space.translate(va))
+                .unwrap()
+                .flags,
             MemFlags::READ | MemFlags::EXECUTE | MemFlags::USER
         );
-        first.unmap(base, PAGE_SIZE).unwrap();
-        assert_eq!(first.translate(va), Err(Error::NotMapped));
-        assert!(second.translate(va).is_ok());
+        crate::object::edit_vspace(first, |space| space.unmap(base, PAGE_SIZE)).unwrap();
         assert_eq!(
-            first.translate(VirtAddr::from_usize(0)),
-            Err(Error::InvalidArgument)
+            crate::object::with_vspace(first, |space| space.translate(va)),
+            Err(Error::NotMapped as u64)
+        );
+        assert!(crate::object::with_vspace(second, |space| space.translate(va)).is_ok());
+        assert_eq!(
+            crate::object::with_vspace(first, |space| space.translate(VirtAddr::from_usize(0))),
+            Err(Error::InvalidArgument as u64)
         );
     }
+    // No capability or task binding reaches these VSpaces: collection is the
+    // single point that returns their frames to the pool.
+    crate::object::collect();
     assert_eq!(memory::available_frames(), before);
 }

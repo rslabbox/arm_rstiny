@@ -81,7 +81,7 @@ W^X、平台地址窗口和装载目标由调用方检查，内存复制仍在 b
 
 ## 启动归档类型
 
-`bootloader/src/archive.rs` 将 newc 解码和启动镜像协议分开：内部 `Cursor`
+`bootloader/src/image/archive/` 将 newc 解码和启动镜像协议分开：`newc.rs` 中的 `Cursor`
 负责有界读取和四字节对齐，`NewcHeader` 解码 ASCII 十六进制字段，
 `Entry` 借用文件名和内容，`Record` 区分普通文件与结束记录。
 对外 `BootArchive::parse` 验证 `kernel.elf`、`kernel.dtb`、`rootserver` 的固定顺序，
@@ -95,7 +95,7 @@ Trailer 后仅允许零填充。`ArchiveError` 保留错误类型和归档内字
 ## 临时页表与 MMU 交接
 
 bootloader 的 `enter` 依次调用 `mmu::init_boot_page_tables`、`mmu::enable_mmu`
-和 `jump_to_kernel`。`bootloader/src/mmu.rs` 参考内核的页表项封装，以
+和 `jump_to_kernel`。`bootloader/src/arch/aarch64/mmu/tables.rs` 参考内核的页表项封装，以
 `PageTableEntry::table/block` 和具名描述符属性构造静态页表；通过
 `aarch64-cpu` 的具名 MAIR/TCR/SCTLR 字段配置寄存器，保留缓存维护、TLB 失效
 和屏障顺序。无动态分配，页表初始化只允许在启动 CPU、MMU 关闭时执行一次。
@@ -110,15 +110,20 @@ MAIR 保持原有 `0x0000aaff440c0400` 布局，槽 0 为 Device，槽 4 为普�
 ## bootloader 源码职责
 
 - `main.rs`：模块声明与启动流程编排。
-- `entry.rs`：裸入口、启动条件检查、栈设置和 BSS 清零。
-- `image.rs`：`BootImages` 解析、`LoadPlan` 校验、显式装载与交接参数构造。
-- `layout.rs`：物理范围、虚拟/物理映射类型及排除保留区的无堆分配算法。
-- `device_tree.rs`：DTB 头部与范围校验视图。
-- `boot_info.rs`：已装载镜像的交接描述。
-- `handoff.rs`：MMU 初始化编排和六寄存器跳转。
-- `mmu.rs`：临时页表和 MMU/缓存配置。
-- `console.rs`：串口格式化输出、panic 和失败停驻。
-- `archive.rs`、`elf.rs`、`pl011.rs`：归档解析、启动 ELF 策略和 UART 寄存器操作。
+- `arch/aarch64/entry.rs`：裸入口、启动条件检查、栈设置和 BSS 清零。
+- `arch/aarch64/handoff.rs`：MMU 初始化编排和六寄存器跳转；同层 `mod.rs` 提供不依赖全局状态的停驻函数。
+- `arch/aarch64/mmu/`：`tables.rs` 构造描述符和临时页表，`mod.rs` 配置 MMU/缓存寄存器及屏障。
+- `image/archive/`：`newc.rs` 解码有界记录，`mod.rs` 校验启动归档的文件顺序和结束约定。
+- `image/elf.rs`、`image/device_tree.rs`：启动 ELF 策略与段装载、DTB 头部与范围校验。
+- `loader/`：`images.rs` 解析归档中的三个镜像，`plan.rs` 纯校验与规划，`commit.rs` 消费计划并写入物理 RAM。
+- `loader/linked.rs`：链接符号、内嵌归档和构建时最低装载地址；`error.rs` 汇总错误，`mod.rs` 定义已装载镜像的交接描述。
+- `memory/`：`region.rs` 定义物理范围和虚拟/物理映射，`placement.rs` 搜索避开保留区的可用内存。
+- `console/`：`mod.rs` 处理格式化输出与 panic/失败报告，私有 `pl011.rs` 负责 UART 寄存器操作。
+- `platform.rs`：QEMU virt 固定地址与平台约束。
+
+依赖从启动编排进入 `loader`，再使用 `image` 和 `memory`；完成装载后将 `Handoff`
+交给 `arch`。`loader::plan` 是对外规划入口，链接地址读取集中在 `linked.rs`，
+宿主测试直接复用生产模块树中的解析、规划和内存分配代码，不编译链接符号适配层与 AArch64 入口。
 
 启动入口中的异常级和 MMU/cache 检查在设置 SP 后由 `entry::check_boot_context`
 通过 `aarch64_cpu` 执行，早于 BSS 清零及串口初始化；裸汇编只负责中断屏蔽、

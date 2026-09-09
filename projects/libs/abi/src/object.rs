@@ -41,7 +41,9 @@ pub const INIT_CNODE: u64 = 2;
 pub const INIT_VSPACE: u64 = 3;
 pub const INIT_ASID_POOL: u64 = 6;
 pub const INIT_IPC_BUFFER: u64 = 10;
-pub const INIT_UNTYPED: u64 = 16;
+/// First initial Untyped capability. The range continues for `BootInfo::untyped_count`
+/// slots; applications should read `BootInfo::untyped_start` instead of assuming it.
+pub const INIT_UNTYPED: u64 = 32;
 pub const INIT_RUNTIME: u64 = 17;
 pub const FIRST_FREE_SLOT: u64 = 32;
 pub const CNODE_BITS: u64 = 16;

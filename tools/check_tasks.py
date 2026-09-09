@@ -15,7 +15,7 @@ PAGE = 4096
 
 def run(qemu, kernel):
     directory = boot_image(kernel).parent
-    image = parse_elf((directory / 'rootserver').read_bytes())
+    image = parse_elf((directory / 'userboot').read_bytes())
     layout = root_layout(image, (directory / 'kernel.dtb').stat().st_size)
     entry, buffer = image['entry'], layout['ipc']
     with tempfile.TemporaryDirectory(prefix='rstiny-tasks-') as temporary:
@@ -79,16 +79,18 @@ def run(qemu, kernel):
             assert call('available') == baseline
             call('status',child,status=6)
 
-            # Quota/exhaustion rollback, including the managed IPC page.
-            large, other, filler = [call('create') for _ in range(3)]
-            call('map',large,CODE,1023*PAGE,3)
-            call('map',filler,CODE,512*PAGE,3)
+            # Quota/exhaustion rollback, including the managed IPC page. The
+            # managed region is large enough for three 1023-page tasks but not a
+            # fourth, so the failed mapping must be atomic.
+            tasks = [call('create') for _ in range(4)]
+            for task in tasks[:3]:
+                call('map',task,CODE,1023*PAGE,3)
             before = call('available')
-            call('map',other,CODE,1023*PAGE,3,status=10)
+            call('map',tasks[3],CODE,1023*PAGE,3,status=10)
             assert call('available') == before
-            call('read',other,CODE,buffer,8,status=6)
-            call('map',other,CODE,1024*PAGE,3,status=10)
-            for task in (large,other,filler): call('destroy',task)
+            call('read',tasks[3],CODE,buffer,8,status=6)
+            call('map',tasks[3],CODE,1024*PAGE,3,status=10)
+            for task in tasks: call('destroy',task)
             assert call('available') == baseline
 
             def task(code):
@@ -136,8 +138,8 @@ def run(qemu, kernel):
             assert call('status',sleeper) == 2
             client.resume(sleeper)
             assert call('wait',sleeper) == 43 and call('clock')-before >= 100
-            assert call('available') == baseline
             call('destroy',sleeper)
+            assert call('available') == baseline
 
             # Cross-CSpace authority must be granted explicitly. The waiter gets
             # a copy of its sibling's TCB cap; no global task ID is accepted.
@@ -165,8 +167,8 @@ def run(qemu, kernel):
                 start(fault)
                 assert call('wait',fault) >> 26 == ec
                 assert call('status',fault) == 3
-                assert call('available') == baseline
                 call('destroy',fault)
+                assert call('available') == baseline
 
             before_stacks = mappings(gdb)
             sleepers = [task(invoke_code('sleep',[60000])+[0x14000000]) for _ in range(31)]

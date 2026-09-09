@@ -38,6 +38,12 @@ class Client:
         write(gdb, entry, struct.pack('<I', 0xd4000001))
 
     def call(self, cap, label, args=(), caps=(), status=0):
+        actual, value = self.raw(cap, label, args, caps)
+        assert actual == status, (cap, label, args, actual, status)
+        return value
+
+    def raw(self, cap, label, args=(), caps=()):
+        """Invoke without asserting the reply label; returns (label, mr0)."""
         g = self.gdb
         for index, value in enumerate(args[4:], 4):
             write(g, self.ipc + 8 + index * 8, struct.pack('<Q', value & WORD))
@@ -51,9 +57,8 @@ class Client:
         g.write_reg('pc', self.entry)
         g.run_to(self.entry + 4)
         actual = g.reg('x1') >> 12
-        assert actual == status, (cap, label, args, actual, status)
         assert g.reg('x0') == 0 and g.reg('cpsr') & 15 == 0
-        return g.reg('x2')
+        return actual, g.reg('x2')
 
     def runtime(self, name, *args, status=0):
         return self.call(17, RUNTIME[name], args, status=status)

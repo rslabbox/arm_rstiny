@@ -59,7 +59,7 @@ def kernel_word(gdb, va):
 
 def check_handoff(gdb, kernel):
     directory = boot_image(kernel).parent
-    root_bytes = (directory / 'rootserver').read_bytes()
+    root_bytes = (directory / 'userboot').read_bytes()
     root_info = parse_elf(root_bytes)
     kernel_info = parse_elf((directory / 'kernel.elf').read_bytes())
     dtb = (directory / 'kernel.dtb').read_bytes()
@@ -69,6 +69,14 @@ def check_handoff(gdb, kernel):
     expected = (start, end, start - root_info['start'], root_info['entry'],
                 kernel_physical + kernel_info['end'] - kernel_info['start'], dtb_size)
     assert tuple(gdb.reg(f'x{i}') for i in range(6)) == expected, 'seL4 handoff arguments differ'
+    # x6/x7: the boot-module archive copy, page-rounded, bytes verbatim.
+    archive = (directory / 'archive.cpio').read_bytes()
+    modules, modules_size = gdb.reg('x6'), gdb.reg('x7')
+    assert modules_size == (len(archive) + 4095) // 4096 * 4096, 'archive size not page-rounded'
+    assert modules >= end + 4096 and modules % 4096 == 0, 'archive range placement'
+    assert gdb.memory(modules, len(archive)) == archive, 'archive copy differs'
+    assert gdb.memory(modules + len(archive), modules_size - len(archive)) == \
+        bytes(modules_size - len(archive)), 'archive padding not zeroed'
     assert gdb.reg('cpsr') & 15 == 5, 'elfloader did not enter EL1h'
     required = 1 | (1 << 2) | (1 << 12)
     assert gdb.reg('sctlr_el1') & required == required, 'loader MMU/cache contract'
@@ -268,7 +276,9 @@ def check_layout(gdb, syms):
     image_end = gdb.word(syms['LOADER_BOOT_INFO'] + 8)
     kernel_physical = gdb.word(syms['LOADER_BOOT_INFO'] + 48)
     expected = set(range(syms['skernel'], syms['ekernel'], 4096))
-    expected.update(range(KERNEL_OFFSET + kernel_physical, KERNEL_OFFSET + image_end + 4096, 4096))
+    # The kernel keeps a direct alias for RAM above the firmware window so it
+    # can zero and adopt Untyped pages outside its own image.
+    expected.update(range(KERNEL_OFFSET + 0x40200000, KERNEL_OFFSET + 0x48000000, 4096))
     expected.remove(syms['stack_guard'])
     expected.remove(KERNEL_OFFSET + kernel_physical + syms['stack_guard'] - syms['skernel'])
     devices = set(range(0x08000000, 0x08010000, 4096))
@@ -289,7 +299,10 @@ def check_layout(gdb, syms):
             physical = kernel_physical + va - syms['skernel'] if is_image else va - KERNEL_OFFSET
             assert entry & ((1 << 40) - 4096) == physical, 'wrong physical mapping'
             image_va = syms['skernel'] + physical - kernel_physical
-            writable = image_va >= syms['erodata']
+            image_physical_end = kernel_physical + syms['ekernel'] - syms['skernel']
+            in_image = kernel_physical <= physical < image_physical_end
+            # Image direct aliases keep the image permissions; free RAM is RW.
+            writable = (image_va >= syms['erodata']) if in_image else True
             executable = is_image and va < syms['etext']
             assert bool(entry & (1 << 7)) == (not writable)
             assert bool(entry & (1 << 53)) == (not executable)

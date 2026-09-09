@@ -22,7 +22,7 @@ def kernel_context(gdb, address):
 
 def run(qemu, kernel):
     syms = symbols(kernel)
-    entry = parse_elf((boot_image(kernel).parent / 'rootserver').read_bytes())['entry']
+    entry = parse_elf((boot_image(kernel).parent / 'userboot').read_bytes())['entry']
     with tempfile.TemporaryDirectory(prefix='rstiny-context-') as directory:
         directory = Path(directory)
         proc = subprocess.Popen([

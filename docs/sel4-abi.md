@@ -30,7 +30,7 @@ IPC buffer 大小与对齐均为 1024 字节：tag 在 0，120 个 msg 在 8，u
 
 初始任务拥有 TCB=1、CNode=2、VSpace=3、ASIDPool=6、IPCFrame=10；本项目额外提供 Untyped=16、Runtime=17，空闲槽从 32 开始。16/17 的分配与 BootInfo 均为本项目约定。CSpace 是固定 16 位槽索引的稀疏表，调用深度为 64，配置的根 guard 数据为 48；暂不支持任意嵌套 CNode 或 guard。
 
-capability 引用对象，并携带派生关系、权限及该 cap 的映射记录。Copy 创建派生 cap；Frame cap 可以衰减读写权限。Move 保留派生身份和映射记录。Delete 删除一个 cap；Revoke 删除它的所有后代，跨 CSpace 生效，但保留被调用的源 cap。对象在没有 capability 或任务使用关系后回收；页帧由映射与对象共同持有，不能在仍被映射时归还帧池。
+capability 引用对象，并携带派生关系、权限及该 cap 的映射记录。Copy 创建派生 cap；Frame cap 可以衰减读写权限。Move 保留派生身份和映射记录。Delete 删除一个 cap；Revoke 删除它的所有后代，跨 CSpace 生效，但保留被调用的源 cap。对象表是全部对象 payload 的唯一所有者，capability 与地址空间只保存 `ObjectId`/`FrameRef`；回收是按需触发的标记-清除，页帧在没有任何 capability 或地址空间引用它之后才归还帧池。所有权模型详见 [对象内存所有权模型](object-ownership.md)。
 
 | 对象方法 | 标签 | 请求消息字 / 额外 cap |
 | --- | --- | --- |
@@ -82,10 +82,10 @@ scratch 地址来自 BootInfo 扩展区之后的空闲页，由调用者独占�
 ## 尚未对齐的部分
 
 - Endpoint、Notification、用户 IPC 和 fault endpoint 投递未实现；保留调用号不表示具备相应服务。
-- Untyped 目前是有派生/撤销关系的帧池分配权限，不是 seL4 的物理 Untyped 区间、watermark、拆分与精确对象内存布局。
+- Untyped 目前是真实物理区间 + watermark 切分：`retype` 从父 Untyped 取内存并记录归属，`CNode_Revoke` 作用于 Untyped cap 时 finalise 子对象、清零并重置区间。它仍不是 seL4 的精确对象内存布局与完整 MDB 撤销；TCB/CNode 元数据留在对象表、不计入 Untyped 预算。
 - VSpace 内部自动创建 L1/L2；显式 PageTable 对象只对应 L3。ASID Assign 有逻辑约束，但硬件仍使用 ASID 0 和完整 TLB 失效。
 - 页表 Unmap 要求为空；没有完整的递归解除映射语义。Revoke 可能在部分解除映射后因非空页表失败，保留的 cap 会同步清除已解除的映射记录，可在处理剩余映射后重试。CSpace 不支持任意深度、badge 或完整 Mint guard 操作。
 - TCB Configure/WriteRegisters 只覆盖初始启动；ReadRegisters、SetSpace、SetIPCBuffer 虽保留标签，但尚未实现。没有共享空间线程、优先级或 MCS。
-- BootInfo 仍为本项目 64 字节、版本 4 的头部，不是 seL4_BootInfo；错误附加消息与 TLS 约定也尚未完全对齐。
+- BootInfo 仍为本项目 128 字节、版本 5 的头部，不是 seL4_BootInfo；v5 发布 `untyped_start`/`untyped_count` 与扩展记录 id=7 的 Untyped 描述列表。错误附加消息与 TLS 约定也尚未完全对齐。
 
 验证入口为 `make check`：ABI wire fixtures、实际 EL0 寄存器调用、对象配置、跨 CSpace cap 授权、权限衰减、撤销回收、资源耗尽回滚，以及 fatboot 的标准对象 ELF 装载均纳入回归。

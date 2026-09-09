@@ -23,7 +23,10 @@ KERNEL_ELF := $(BUILD_DIR)/$(TARGET)/$(MODE)/kernel
 KERNEL_BIN := $(KERNEL_ELF).bin
 PLATFORM_DIR := $(abspath target/platform/qemu-arm-virt)
 APP_DIR := target/apps/$(MODE)
-FATBOOT_ELF := $(APP_DIR)/$(TARGET)/$(MODE)/fatboot
+USERBOOT_ELF := $(APP_DIR)/$(TARGET)/$(MODE)/userboot
+INIT_ELF := $(APP_DIR)/$(TARGET)/$(MODE)/init
+CONSOLE_ELF := $(APP_DIR)/$(TARGET)/$(MODE)/console
+MODULES := $(INIT_ELF) $(CONSOLE_ELF)
 IMAGE_DIR := $(BUILD_DIR)/image
 BOOT_IMAGE := $(IMAGE_DIR)/bootloader
 CARGO_FLAGS := -p kernel --target $(TARGET) --no-default-features
@@ -40,23 +43,26 @@ QEMU_ARGS := -machine virt,gic-version=3,virtualization=off -cpu cortex-a72 \
 	-kernel $(BOOT_IMAGE)
 export LOG QEMU KERNEL_LOAD_MIN
 
-.PHONY: all build platform fatboot run run-kernel run-root debug check fmt clean
+.PHONY: all build platform userboot init console run run-kernel run-root run-userboot debug check fmt clean
 all: build
 
 platform:
 	python3 tools/build_platform.py $(PLATFORM_DIR) --qemu $(QEMU)
 
-build: fatboot platform
+build: userboot init console platform
 	PLATFORM_DIR=$(PLATFORM_DIR) cargo build $(CARGO_FLAGS) --target-dir $(BUILD_DIR)
 	rust-objcopy -O binary $(KERNEL_ELF) $(KERNEL_BIN)
-	python3 tools/build_image.py $(KERNEL_ELF) $(FATBOOT_ELF) $(IMAGE_DIR) --platform $(PLATFORM_DIR) --mode $(MODE)
+	for app in init console; do rust-objcopy --strip-all $(APP_DIR)/$(TARGET)/$(MODE)/$$app $(APP_DIR)/$$app.elf; done
+	python3 tools/build_image.py $(KERNEL_ELF) $(USERBOOT_ELF) $(IMAGE_DIR) --platform $(PLATFORM_DIR) --mode $(MODE) \
+	  --module $(APP_DIR)/init.elf --module $(APP_DIR)/console.elf --module init.cfg=apps/init.cfg
 
-fatboot:
-	python3 tools/build_app.py hello --mode $(MODE)
-	rust-objcopy --strip-all $(APP_DIR)/$(TARGET)/$(MODE)/hello $(APP_DIR)/hello.elf
-	HELLO_ELF=$(abspath $(APP_DIR)/hello.elf) python3 tools/build_app.py fatboot --mode $(MODE) $(if $(ROOT_IMAGE_BASE),--image-base $(ROOT_IMAGE_BASE))
+userboot:
+	python3 tools/build_app.py userboot --mode $(MODE) $(if $(ROOT_IMAGE_BASE),--image-base $(ROOT_IMAGE_BASE))
 
-run run-kernel run-root: build
+init console:
+	python3 tools/build_app.py $@ --mode $(MODE)
+
+run run-kernel run-root run-userboot: build
 	$(QEMU) $(QEMU_ARGS)
 
 debug: build
@@ -64,12 +70,14 @@ debug: build
 
 check:
 	cargo test -p bootloader --no-default-features --test images --target $(HOST_TARGET)
-	cargo test -p kernel-abi -p rstiny-runtime-macros -p rstiny-elf --target $(HOST_TARGET)
+	cargo test -p kernel-abi -p rstiny-runtime-macros -p rstiny-elf -p rstiny-newc --target $(HOST_TARGET)
 	python3 -m unittest discover -s tools -p 'test_*.py'
 	python3 tools/check_bootloader.py --qemu $(QEMU)
 	python3 tools/check_kernel.py --qemu $(QEMU)
-	python3 tools/check_fatboot.py --qemu $(QEMU)
+	python3 tools/check_userboot.py --qemu $(QEMU)
 	python3 tools/check_capabilities.py --qemu $(QEMU)
+	python3 tools/check_untyped.py --qemu $(QEMU)
+	python3 tools/check_ipc.py --qemu $(QEMU)
 	python3 tools/check_tasks.py --qemu $(QEMU)
 	python3 tools/check_user_context.py --qemu $(QEMU)
 	python3 tools/check_relocation.py --qemu $(QEMU)

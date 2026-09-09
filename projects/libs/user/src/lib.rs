@@ -96,6 +96,7 @@ fn runtime(method: abi::RuntimeInvocation, args: &[u64]) -> Result<u64, Error> {
 
 pub mod capability;
 pub mod elf;
+pub mod ipc;
 pub mod task;
 pub use task::{Permissions, Task, TaskState};
 

@@ -1,4 +1,5 @@
 use super::*;
+use crate::image::{device_tree::DeviceTree, elf::Elf};
 fn elf(virtual_start: usize, root: bool) -> Vec<u8> {
     let mut data = vec![0u8; 8192];
     data[..7].copy_from_slice(b"\x7fELF\x02\x01\x01");
@@ -50,6 +51,7 @@ fn images<'a>(kernel: &'a [u8], root: &'a [u8], dtb: &'a [u8]) -> BootImages<'a>
         kernel: Elf::parse(kernel).unwrap(),
         root: Elf::parse(root).unwrap(),
         dtb: DeviceTree::parse(dtb).unwrap(),
+        raw: b"modules",
     }
 }
 #[test]

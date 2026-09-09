@@ -15,142 +15,108 @@ fn descendants(store: &Store, serial: u64, ancestor: u64) -> bool {
     }
     false
 }
-fn unmap(cap: &Cap) -> Result<()> {
-    if let Some(mapping) = cap.mapping {
-        let space = with_store(|s| match s.objects.get(&mapping.space) {
-            Some(Object::VSpace { space, .. }) => space.clone(),
-            _ => None,
-        });
-        if let Some(space) = space {
-            if mapping.table {
-                space
-                    .borrow_mut()
-                    .unmap_table(mapping.address)
-                    .map_err(|e| e as u64)?;
-            } else {
-                let frame = with_store(|s| match s.objects.get(&cap.object) {
-                    Some(Object::Page(frame)) => frame.clone(),
-                    _ => unreachable!(),
-                });
-                if space
-                    .borrow()
-                    .frame_at(mapping.address)
-                    .is_ok_and(|mapped| Rc::ptr_eq(&mapped, &frame))
-                {
-                    space
-                        .borrow_mut()
-                        .unmap(mapping.address, crate::memory::PAGE_SIZE)
-                        .map_err(|e| e as u64)?;
-                }
-            }
+
+/// Remove the mapping recorded on a capability. The frame object stays owned
+/// by the object table; it becomes collectable once the capability is gone.
+fn unmap(store: &mut Store, cap: &Cap) -> Result<()> {
+    let Some(mapping) = cap.mapping else {
+        return Ok(());
+    };
+    let frame = store.frame_ref(cap.object).ok();
+    if let Some(space) = store.vspace_opt_mut(mapping.space) {
+        if mapping.table {
+            space.unmap_table(mapping.address).map_err(|e| e as u64)?;
+        } else if let Some(frame) = frame
+            && space.frame_at(mapping.address) == Ok(frame)
+        {
+            space
+                .unmap(mapping.address, crate::memory::PAGE_SIZE)
+                .map_err(|e| e as u64)?;
         }
     }
     Ok(())
 }
-pub(super) fn delete(cspace: u64, slot: u64, revoke: bool) -> Result<()> {
-    let victims = with_store(|s| {
-        let cap = s.cap(cspace, slot)?;
+
+/// Finalise every object carved from an Untyped region, then reset and clear it.
+/// Capabilities naming the children must already have been removed. Child
+/// Untyped regions are finalised depth-first, so nested service budgets tear
+/// down completely; endpoints and notifications cancel their waiters first.
+fn finalise_untyped(store: &mut Store, untyped: ObjectId) {
+    for child in store.objects.children(untyped) {
+        match store.objects.get(child) {
+            Some(Object::Untyped(_)) => finalise_untyped(store, child),
+            Some(Object::Endpoint(_)) | Some(Object::Notification(_)) => {
+                api::suspend_blocked_on(child);
+            }
+            _ => {}
+        }
+        store.objects.remove(child);
+    }
+    if let Some(Object::Untyped(region)) = store.objects.get_mut(untyped) {
+        region.reset();
+        region.clear();
+    }
+}
+
+pub(super) fn delete(cspace: ObjectId, slot: u64, revoke: bool) -> Result<()> {
+    let (target, victims) = with_store(|store| {
+        let cap = store.cap(cspace, slot)?;
         let mut victims = Vec::new();
         if revoke {
-            for (&space, slots) in &s.cspaces {
-                for (&slot, child) in slots {
-                    if descendants(s, child.serial, cap.serial) {
-                        victims.push((space, slot, child.clone()));
+            for (space, object) in store.objects.iter() {
+                if let Object::CNode(cnode) = object {
+                    for (&other_slot, child) in &cnode.slots {
+                        if descendants(store, child.serial, cap.serial) {
+                            victims.push((space, other_slot as u64, child.clone()));
+                        }
                     }
                 }
             }
         } else {
-            victims.push((cspace, slot, cap));
+            victims.push((cspace, slot, cap.clone()));
         }
-        Ok::<_, u64>(victims)
+        Ok::<_, u64>((cap.object, victims))
     })?;
     // Revoke page mappings before deleting the containing page-table caps.
     for table in [false, true] {
         for (space, slot, cap) in &victims {
             if cap.mapping.is_some_and(|m| m.table == table) {
-                unmap(cap)?;
+                with_store(|store| unmap(store, cap))?;
                 // A later nonempty page table may reject deletion. Preserve
                 // accurate cap state so retrying cannot unmap a reused VA.
-                with_store(|s| {
-                    s.cspaces
-                        .get_mut(space)
-                        .unwrap()
-                        .get_mut(slot)
-                        .unwrap()
-                        .mapping = None;
+                with_store(|store| {
+                    if let Some(stored) = store
+                        .cnode_mut(*space)
+                        .ok()
+                        .and_then(|cnode| cnode.slots.get_mut(&(*slot as u16)))
+                    {
+                        stored.mapping = None;
+                    }
                 });
             }
         }
     }
-    with_store(|s| {
-        for (space, slot, _) in victims {
-            if let Some(slots) = s.cspaces.get_mut(&space) {
-                slots.remove(&slot);
-            }
+    with_store(|store| {
+        for (space, slot, _) in &victims {
+            store.remove_cap(*space, *slot);
+        }
+        if revoke && matches!(store.objects.get(target), Some(Object::Untyped(_))) {
+            finalise_untyped(store, target);
         }
     });
-    collect();
+    super::request_collect();
     Ok(())
 }
-pub(super) fn collect() {
-    loop {
-        let (tasks, changed) = with_store(|s| {
-            let live: alloc::collections::BTreeSet<u64> = s
-                .cspaces
-                .values()
-                .flat_map(|slots| slots.values().map(|cap| cap.object))
-                .collect();
-            let dead: Vec<u64> = s
-            .objects
-            .keys()
-            .filter(|id| {
-                !live.contains(id) && !s.task_spaces.values().any(|node| node == *id) &&
-                !matches!(s.objects.get(id), Some(Object::VSpace {owner,space:Some(_),..}) if *owner != 0)
-            })
-            .copied()
-            .collect();
-            let changed = !dead.is_empty();
-            let mut tasks = Vec::new();
-            for id in dead {
-                match s.objects.remove(&id) {
-                    Some(Object::Tcb(task)) => tasks.push(task),
-                    Some(Object::CNode) => {
-                        s.cspaces.remove(&id);
-                    }
-                    _ => {}
-                }
-            }
-            // Keep deleted ancestors only while a live descendant still needs them.
-            let mut needed = alloc::collections::BTreeSet::new();
-            for cap in s.cspaces.values().flat_map(|slots| slots.values()) {
-                let mut serial = cap.serial;
-                while serial != 0 && needed.insert(serial) {
-                    serial = s.parents.get(&serial).copied().unwrap_or(0);
-                }
-            }
-            s.parents.retain(|serial, _| needed.contains(serial));
-            (tasks, changed)
-        });
-        for task in tasks {
-            // The managed runtime handles self-termination after switching stacks.
-            if Some(task) != crate::task::current_id() {
-                let _ = api::destroy(task);
-            }
-        }
-        if !changed {
-            break;
-        }
-    }
-}
-pub(super) fn invoke(cnode: u64, request: &Request) -> Result<Completion> {
+
+pub(super) fn invoke(cspace: ObjectId, request: &Request) -> Result<Completion> {
     let a = &request.words;
     request.require(2, 0)?;
     if a[1] != 64 {
         return Err(NOT_FOUND);
     }
     match request.label {
-        n if n == Invocation::CNodeDelete as u64 => delete(cnode, a[0], false)?,
-        n if n == Invocation::CNodeRevoke as u64 => delete(cnode, a[0], true)?,
+        n if n == Invocation::CNodeDelete as u64 => delete(cspace, a[0], false)?,
+        n if n == Invocation::CNodeRevoke as u64 => delete(cspace, a[0], true)?,
         n if n == Invocation::CNodeCopy as u64
             || n == Invocation::CNodeMint as u64
             || n == Invocation::CNodeMove as u64 =>
@@ -170,30 +136,35 @@ pub(super) fn invoke(cnode: u64, request: &Request) -> Result<Completion> {
             if a[3] != 64 {
                 return Err(NOT_FOUND);
             }
-            // Badge/guard mutation is not part of this flat, unbadged subset.
-            if mint && a[5] != 0 {
-                return Err(INVALID_ARGUMENT);
-            }
             let source = super::cnode(request.caps[0])?;
-            with_store(|s| {
-                let cap = s.cap(source, a[2])?;
-                let rights = if !moving && matches!(s.payload(&cap)?, Object::Page(_)) {
-                    cap.rights & a[4] & RIGHTS_ALL
-                } else {
-                    cap.rights
-                };
+            with_store(|store| {
+                let cap = store.cap(source, a[2])?;
                 if moving {
-                    if a[0] == 0 || a[0] >= CNODE_SLOTS {
-                        return Err(RANGE_ERROR);
-                    }
-                    if s.cspaces[&cnode].contains_key(&a[0]) {
-                        return Err(ALREADY_MAPPED);
-                    }
-                    s.cspaces.get_mut(&source).unwrap().remove(&a[2]);
-                    s.cspaces.get_mut(&cnode).unwrap().insert(a[0], cap);
-                    Ok(())
+                    store.move_cap(source, a[2], cspace, a[0])
                 } else {
-                    s.insert(cnode, a[0], cap.object, rights, cap.serial)
+                    // seL4 attenuation: the requested rights mask applies to
+                    // every capability kind, not only frames.
+                    let rights = cap.rights & a[4] & RIGHTS_ALL;
+                    // seL4 badge semantics: only endpoint-style caps carry a
+                    // badge, minting one requires Grant, and the result is
+                    // AND-ed with the source badge.
+                    let mut badge = cap.badge;
+                    if mint && a[5] != 0 {
+                        if !matches!(
+                            store.kind(cap.object)?,
+                            ObjectKind::Endpoint | ObjectKind::Notification
+                        ) {
+                            return Err(INVALID_ARGUMENT);
+                        }
+                        if cap.rights & RIGHTS_GRANT == 0 {
+                            return Err(PERMISSION_DENIED);
+                        }
+                        if cap.badge != 0 {
+                            return Err(UNSUPPORTED);
+                        }
+                        badge = a[5];
+                    }
+                    store.insert_cap(cspace, a[0], cap.object, rights, cap.serial, badge)
                 }
             })?;
         }

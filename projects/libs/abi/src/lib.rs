@@ -3,8 +3,11 @@
 pub const PAGE_SIZE: u64 = 4096;
 pub const MAX_DTB_SIZE: u64 = 1024 * 1024;
 pub const BOOTINFO_HEADER_FDT: u64 = 6;
+pub const BOOTINFO_HEADER_UNTYPED: u64 = 7;
+/// Boot module archive: physical range plus the root task's Frame caps for it.
+pub const BOOTINFO_HEADER_BOOT_MODULES: u64 = 8;
 pub const BOOTINFO_MAGIC: u64 = 0x5253_5449_4e59_4249;
-pub const ABI_VERSION: u64 = 4;
+pub const ABI_VERSION: u64 = 6;
 pub const FEATURE_DEBUG_CONSOLE: u64 = 1;
 mod syscall;
 pub use syscall::Syscall;
@@ -42,11 +45,48 @@ pub struct BootInfo {
     pub ipc_buffer: u64,
     pub extra: u64,
     pub extra_size: u64,
+    /// First CSpace slot of the contiguous initial Untyped capability range.
+    pub untyped_start: u64,
+    /// Number of initial Untyped capabilities.
+    pub untyped_count: u64,
+    pub reserved: [u64; 6],
+}
+
+/// One physical Untyped region published to the root task. `size_bits` is the
+/// base-2 log of the region size; the region is aligned to that size.
+#[derive(Clone, Copy, Debug)]
+#[repr(C)]
+pub struct UntypedDesc {
+    pub paddr: u64,
+    pub size_bits: u64,
+    pub is_device: u64,
+    pub reserved: u64,
+}
+
+/// Boot module archive published to the root task (BootInfo record 8). The
+/// kernel installs one read-only `Frame` capability per archive page in the
+/// initial CNode starting at `frame_start`; the root task maps them itself.
+#[derive(Clone, Copy, Debug)]
+#[repr(C)]
+pub struct BootModules {
+    pub paddr: u64,
+    pub size: u64,
+    pub frame_start: u64,
+    pub frame_count: u64,
+    pub reserved: [u64; 4],
+}
+
+impl BootModules {
+    pub const RECORD_LEN: u64 = core::mem::size_of::<Self>() as u64;
 }
 
 /// Address-space and resource limits, not an application link layout.
 pub const USER_ADDRESS_LIMIT: u64 = 128 * 1024 * 1024;
 pub const MAX_USER_PAGES: usize = 1024;
+/// First initial CNode slot reserved for boot-module Frame capabilities.
+/// High enough that the contiguous window never collides with the fixed
+/// initial caps or the Untyped range that follows them.
+pub const INIT_BOOT_MODULES: u64 = 512;
 
 /// Derived placement of the initial task's kernel-provided pages.
 #[derive(Clone, Copy, Debug)]
@@ -57,6 +97,10 @@ pub struct InitialTaskLayout {
     pub extra_size: u64,
     pub end: u64,
 }
+/// Upper bound on boot-partitioned Untyped regions published to the root task.
+/// The extra BootInfo region reserves the maximum so the loader and kernel
+/// agree on the metadata layout before the partitioner runs.
+pub const MAX_UNTYPED_REGIONS: usize = 64;
 impl InitialTaskLayout {
     /// The ELF controls its own stack. Only image bounds and resource limits
     /// participate in this layout; BootInfo does not describe a user stack.
@@ -73,7 +117,16 @@ impl InitialTaskLayout {
         let ipc_buffer = image.end;
         let boot_info = ipc_buffer.checked_add(PAGE_SIZE)?;
         let extra = boot_info.checked_add(PAGE_SIZE)?;
-        let extra_size = dtb_size.checked_add(core::mem::size_of::<BootInfoHeader>() as u64)?;
+        let header = core::mem::size_of::<BootInfoHeader>() as u64;
+        // FDT record, the worst-case Untyped list record and the fixed-size
+        // boot-module record.
+        let untyped_bytes = (MAX_UNTYPED_REGIONS * core::mem::size_of::<UntypedDesc>()) as u64;
+        let extra_size = dtb_size
+            .checked_add(header)?
+            .checked_add(header)?
+            .checked_add(untyped_bytes)?
+            .checked_add(header)?
+            .checked_add(BootModules::RECORD_LEN)?;
         let extra_pages = extra_size.checked_add(PAGE_SIZE - 1)? / PAGE_SIZE;
         let end = extra.checked_add(extra_pages * PAGE_SIZE)?;
         if end > USER_ADDRESS_LIMIT {
@@ -108,3 +161,18 @@ pub const TASK_READY: u64 = 4;
 pub const TASK_SLEEPING: u64 = 5;
 pub const TASK_EXITED: u64 = 6;
 pub const TASK_WAITING: u64 = 7;
+/// Recoverable IPC blocking states. Unlike `TASK_FAULTED` they are supervised,
+/// not terminal: a fault-endpoint reply or supervisor repair resumes them.
+pub const TASK_BLOCKED_SEND: u64 = 8;
+pub const TASK_BLOCKED_RECV: u64 = 9;
+pub const TASK_BLOCKED_REPLY: u64 = 10;
+pub const TASK_BLOCKED_FAULT: u64 = 11;
+
+/// Fault message labels, delivered on a TCB fault endpoint. Values follow the
+/// libsel4 faults.xml order for the non-hypervisor AArch64 configuration; user
+/// protocol labels must start above this range (see docs/service-manager.md).
+pub const FAULT_NULL: u64 = 0;
+pub const FAULT_CAP: u64 = 1;
+pub const FAULT_UNKNOWN_SYSCALL: u64 = 2;
+pub const FAULT_USER_EXCEPTION: u64 = 3;
+pub const FAULT_VM: u64 = 4;

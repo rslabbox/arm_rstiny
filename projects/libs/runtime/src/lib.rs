@@ -7,12 +7,42 @@ use kernel_abi as abi;
 pub struct BootInfo {
     raw: &'static abi::BootInfo,
     dtb: &'static [u8],
+    untyped: &'static [abi::UntypedDesc],
+    modules: abi::BootModules,
 }
 
 impl BootInfo {
     /// Read-only DTB forwarded by the kernel. The application chooses its parser.
     pub fn device_tree(&self) -> &'static [u8] {
         self.dtb
+    }
+
+    /// Boot-partitioned physical Untyped regions, in CSpace slot order from
+    /// [`BootInfo::untyped_start`].
+    pub fn untyped(&self) -> &'static [abi::UntypedDesc] {
+        self.untyped
+    }
+
+    /// First CSpace slot holding an initial Untyped capability.
+    pub fn untyped_start(&self) -> u64 {
+        self.raw.untyped_start
+    }
+
+    /// The boot-module archive: physical extent and the contiguous read-only
+    /// Frame capabilities in this task's CSpace (`frame_start..frame_count`).
+    pub fn boot_modules(&self) -> abi::BootModules {
+        self.modules
+    }
+
+    /// Capability slot of the largest ordinary Untyped region. A loader that
+    /// needs many pages should carve them from one region, not the smallest.
+    pub fn largest_untyped(&self) -> Option<u64> {
+        self.untyped
+            .iter()
+            .enumerate()
+            .filter(|(_, descriptor)| descriptor.is_device == 0)
+            .max_by_key(|(_, descriptor)| descriptor.size_bits)
+            .map(|(index, _)| self.raw.untyped_start + index as u64)
     }
 
     pub fn address(&self) -> usize {
@@ -65,18 +95,66 @@ pub unsafe fn start(pointer: *const (), main: fn(&mut BootInfo) -> !) -> ! {
             .is_some_and(|end| end <= abi::USER_ADDRESS_LIMIT)
     );
     let header_size = core::mem::size_of::<abi::BootInfoHeader>() as u64;
-    assert!((header_size + 40..=header_size + abi::MAX_DTB_SIZE).contains(&raw.extra_size));
+    // FDT record.
     // SAFETY: the boot contract supplies a pinned, read-only extra BootInfo mapping.
-    let header = unsafe { &*(raw.extra as *const abi::BootInfoHeader) };
-    assert_eq!(header.id, abi::BOOTINFO_HEADER_FDT);
-    assert_eq!(header.len, raw.extra_size);
+    let fdt_header = unsafe { &*(raw.extra as *const abi::BootInfoHeader) };
+    assert_eq!(fdt_header.id, abi::BOOTINFO_HEADER_FDT);
+    assert!((header_size + 40..=header_size + abi::MAX_DTB_SIZE).contains(&fdt_header.len));
     let dtb = unsafe {
         core::slice::from_raw_parts(
             (raw.extra + header_size) as *const u8,
-            (raw.extra_size - header_size) as usize,
+            (fdt_header.len - header_size) as usize,
         )
     };
-    main(&mut BootInfo { raw, dtb })
+    // Untyped descriptor list follows the FDT record.
+    let untyped_record = (raw.extra + fdt_header.len).next_multiple_of(8);
+    // SAFETY: both records live in the same validated extra mapping.
+    let untyped_header = unsafe { &*(untyped_record as *const abi::BootInfoHeader) };
+    assert_eq!(untyped_header.id, abi::BOOTINFO_HEADER_UNTYPED);
+    let untyped_bytes = untyped_header
+        .len
+        .checked_sub(header_size)
+        .expect("Untyped record length");
+    assert_eq!(
+        untyped_bytes % core::mem::size_of::<abi::UntypedDesc>() as u64,
+        0
+    );
+    let untyped = unsafe {
+        core::slice::from_raw_parts(
+            (untyped_record + header_size) as *const abi::UntypedDesc,
+            (untyped_bytes / core::mem::size_of::<abi::UntypedDesc>() as u64) as usize,
+        )
+    };
+    assert_eq!(untyped.len() as u64, raw.untyped_count);
+    // Optional boot-module record; a zero physical base means the bootloader
+    // shipped no module archive.
+    let mut modules = abi::BootModules {
+        paddr: 0,
+        size: 0,
+        frame_start: 0,
+        frame_count: 0,
+        reserved: [0; 4],
+    };
+    let modules_offset = (untyped_record + untyped_header.len).next_multiple_of(8);
+    if modules_offset + header_size <= raw.extra + raw.extra_size {
+        // SAFETY: the record lives inside the validated extra mapping.
+        let header = unsafe { &*(modules_offset as *const abi::BootInfoHeader) };
+        if header.id == abi::BOOTINFO_HEADER_BOOT_MODULES
+            && header.len == header_size + abi::BootModules::RECORD_LEN
+            && modules_offset + header.len <= raw.extra + raw.extra_size
+        {
+            // SAFETY: fixed-size, fully initialized repr(C) record.
+            modules = unsafe {
+                core::ptr::read((modules_offset + header_size) as *const abi::BootModules)
+            };
+        }
+    }
+    main(&mut BootInfo {
+        raw,
+        dtb,
+        untyped,
+        modules,
+    })
 }
 
 pub use rstiny_runtime_macros::entry;

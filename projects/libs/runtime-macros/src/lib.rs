@@ -37,6 +37,10 @@ fn expand_with_stack(
         if matches!(&*arg.ty, Type::Reference(reference) if reference.mutability.is_some()));
     let returns_never =
         matches!(&sig.output, ReturnType::Type(_, ty) if matches!(&**ty, Type::Never(_)));
+    // An ordinary supervised task may take the loader's x0 start argument.
+    let ordinary_argument = sig.inputs.len() == 1
+        && matches!(&*sig.inputs.first().unwrap(), syn::FnArg::Typed(arg)
+            if matches!(&*arg.ty, Type::Path(path) if path.path.is_ident("Argument")));
     if sig.constness.is_some()
         || sig.asyncness.is_some()
         || sig.unsafety.is_some()
@@ -44,7 +48,9 @@ fn expand_with_stack(
         || sig.variadic.is_some()
         || !sig.generics.params.is_empty()
         || sig.generics.where_clause.is_some()
-        || !(sig.inputs.is_empty() || (sig.inputs.len() == 1 && argument_valid))
+        || !(sig.inputs.is_empty()
+            || (sig.inputs.len() == 1 && argument_valid)
+            || ordinary_argument)
         || !returns_never
     {
         return Err(syn::Error::new_spanned(
@@ -53,7 +59,7 @@ fn expand_with_stack(
         ));
     }
     let name = &sig.ident;
-    if sig.inputs.is_empty() {
+    if sig.inputs.is_empty() || ordinary_argument {
         if let Some(size) = stack_size {
             return Err(syn::Error::new_spanned(
                 size,
@@ -64,15 +70,21 @@ fn expand_with_stack(
             .attrs
             .iter()
             .filter(|attr| attr.path().is_ident("cfg"));
+        // An ordinary task may take the loader's x0 start argument (the
+        // supervisor's parameter page) as `argument: usize`.
+        let call = if ordinary_argument {
+            quote! { let main: fn(Argument) -> ! = #name; main(argument) }
+        } else {
+            quote! { let main: fn() -> ! = #name; main() }
+        };
         return Ok(quote! {
             #function
             #(#cfg)*
             const _: () = {
                 #[unsafe(export_name = "_start")]
                 #[unsafe(link_section = ".text.entry")]
-                extern "C" fn entry() -> ! {
-                    let main: fn() -> ! = #name;
-                    main()
+                extern "C" fn entry(argument: usize) -> ! {
+                    #call
                 }
             };
         });

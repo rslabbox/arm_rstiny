@@ -50,7 +50,8 @@ def root_layout(root, dtb_size):
     ipc = root['end']
     boot_info = ipc + PAGE
     extra = boot_info + PAGE
-    extra_size = dtb_size + 16
+    # Mirror InitialTaskLayout: FDT record plus the worst-case Untyped list.
+    extra_size = dtb_size + 16 + 16 + 64 * 32
     end = extra + (extra_size + PAGE - 1) // PAGE * PAGE
     require(end <= 128 * 1024 * 1024, 'root metadata exceeds user address space')
     image_pages = sum((s['end'] - s['va']) // PAGE for s in root['segments'])

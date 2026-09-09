@@ -1,0 +1,8 @@
+[package]
+name = "rstiny-protocol"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+kernel-abi = { path = "../abi" }

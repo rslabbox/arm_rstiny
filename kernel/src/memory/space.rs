@@ -1,27 +1,46 @@
+//! User address space object payload.
+//!
+//! The address space never owns physical memory. Every page and page table is
+//! referenced through a [`FrameRef`] into the kernel object table; the object
+//! table is the single owner. Dropping an `AddressSpace` releases only these
+//! references, and the objects become collectable once no capability reaches
+//! them.
 use super::{
-    Error, MAX_PAGES, PAGE_SIZE, USER_END, USER_START, frame::Frame, sync_code, sync_translations,
-    validate_permissions,
+    Error, MAX_PAGES, PAGE_SIZE, USER_END, USER_START, frame::FrameRef, sync_code,
+    sync_translations, validate_permissions,
 };
 use crate::{arch::kernel::vspace::PageTableEntry, config::MemFlags};
-use alloc::{rc::Rc, vec::Vec};
+use alloc::vec::Vec;
 use memory_addr::{PhysAddr, VirtAddr};
 
 struct Page {
     va: usize,
-    frame: Rc<Frame>,
+    frame: FrameRef,
     permissions: u64,
     pinned: bool,
 }
 struct Table {
     index: usize,
-    frame: Rc<Frame>,
+    frame: FrameRef,
     managed: bool,
 }
 
+/// A validated mapping request. All fallible arithmetic and overlap checks
+/// happen in [`AddressSpace::plan_map`]; the object layer allocates the exact
+/// frame set and then calls [`AddressSpace::install`]. This keeps allocation
+/// and publication separate, so a failed mapping never leaves a partial state.
+pub struct MapPlan {
+    pub(crate) va: usize,
+    pub(crate) permissions: u64,
+    pub(crate) pinned: bool,
+    pub(crate) tables: Vec<usize>,
+    pub(crate) pages: usize,
+}
+
 pub struct AddressSpace {
-    root: Frame,
-    _l1: Frame,
-    l2: Frame,
+    root: FrameRef,
+    l1: FrameRef,
+    l2: FrameRef,
     tables: Vec<Table>,
     pages: Vec<Page>,
 }
@@ -34,7 +53,7 @@ fn store(table: usize, index: usize, entry: PageTableEntry) {
             .write_volatile(entry)
     };
 }
-fn descriptor(frame: &Frame, permissions: u64) -> PageTableEntry {
+fn descriptor(frame: FrameRef, permissions: u64) -> PageTableEntry {
     let mut flags = MemFlags::READ | MemFlags::USER;
     if permissions & 2 != 0 {
         flags |= MemFlags::WRITE;
@@ -42,15 +61,26 @@ fn descriptor(frame: &Frame, permissions: u64) -> PageTableEntry {
     if permissions & 4 != 0 {
         flags |= MemFlags::EXECUTE;
     }
+    if frame.is_device() {
+        // MMIO is Device/NX: never cacheable, never executable.
+        flags |= MemFlags::DEVICE;
+        flags -= MemFlags::EXECUTE;
+    }
     PageTableEntry::new_page(PhysAddr::from_usize(frame.physical()), flags, false)
 }
 
+/// Device frames may not be mapped executable.
+fn validate_frame(frame: FrameRef, permissions: u64) -> Result<(), Error> {
+    if frame.is_device() && permissions & 4 != 0 {
+        return Err(Error::InvalidArgument);
+    }
+    Ok(())
+}
+
 impl AddressSpace {
-    pub fn new() -> Result<Self, Error> {
-        let root = Frame::allocate()?;
-        let l1 = Frame::allocate()?;
-        let l2 = Frame::allocate()?;
-        // SAFETY: all three frames are uniquely owned, zeroed, inactive tables.
+    pub fn new(root: FrameRef, l1: FrameRef, l2: FrameRef) -> Result<Self, Error> {
+        // SAFETY: all three frames are uniquely owned by the object table,
+        // zeroed, inactive tables installed for the first time.
         unsafe {
             crate::arch::kernel::vspace::paging::prepare_user_tables(
                 root.address(),
@@ -60,7 +90,7 @@ impl AddressSpace {
         };
         Ok(Self {
             root,
-            _l1: l1,
+            l1,
             l2,
             tables: Vec::new(),
             pages: Vec::new(),
@@ -68,6 +98,15 @@ impl AddressSpace {
     }
     pub fn root(&self) -> usize {
         self.root.physical()
+    }
+    /// Every page-granular object this address space reaches. Used by the
+    /// object table to mark mapped frames live during collection.
+    pub fn frame_refs(&self) -> impl Iterator<Item = FrameRef> + '_ {
+        core::iter::once(self.root)
+            .chain(core::iter::once(self.l1))
+            .chain(core::iter::once(self.l2))
+            .chain(self.tables.iter().map(|table| table.frame))
+            .chain(self.pages.iter().map(|page| page.frame))
     }
     fn range(va: usize, len: usize) -> Result<core::ops::Range<usize>, Error> {
         let end = va.checked_add(len).ok_or(Error::InvalidArgument)?;
@@ -95,35 +134,15 @@ impl AddressSpace {
             .address()
     }
 
-    /// Stage all fallible allocations before publishing any mapping.
-    pub fn map(
-        &mut self,
+    /// Validate a whole-region mapping and report the L2 tables that must be
+    /// created. No memory is allocated and no page table is touched.
+    pub fn plan_map(
+        &self,
         va: usize,
         len: usize,
         permissions: u64,
         pinned: bool,
-    ) -> Result<(), Error> {
-        self.map_frames(va, len, permissions, pinned, None)
-    }
-
-    pub fn map_loaded(
-        &mut self,
-        va: usize,
-        physical: usize,
-        len: usize,
-        permissions: u64,
-    ) -> Result<(), Error> {
-        self.map_frames(va, len, permissions, false, Some(physical))
-    }
-
-    fn map_frames(
-        &mut self,
-        va: usize,
-        len: usize,
-        permissions: u64,
-        pinned: bool,
-        loaded: Option<usize>,
-    ) -> Result<(), Error> {
+    ) -> Result<MapPlan, Error> {
         validate_permissions(permissions)?;
         let range = Self::range(va, len)?;
         let count = len / PAGE_SIZE;
@@ -135,61 +154,72 @@ impl AddressSpace {
                 return Err(Error::AlreadyMapped);
             }
         }
-        let mut pages = Vec::new();
         let mut tables = Vec::new();
-        pages
-            .try_reserve_exact(count)
-            .map_err(|_| Error::NoMemory)?;
-        tables
-            .try_reserve_exact(((range.end - 1) >> 21) - (va >> 21) + 1)
-            .map_err(|_| Error::NoMemory)?;
-        self.pages.try_reserve(count).map_err(|_| Error::NoMemory)?;
+        tables.try_reserve(64).map_err(|_| Error::NoMemory)?;
         for index in va >> 21..=((range.end - 1) >> 21) {
-            if !self.tables.iter().any(|t| t.index == index) {
-                tables.push(Table {
-                    index,
-                    frame: Rc::new(Frame::allocate()?),
-                    managed: true,
-                });
+            if !self.tables.iter().any(|table| table.index == index) {
+                tables.push(index);
             }
         }
+        Ok(MapPlan {
+            va,
+            permissions,
+            pinned,
+            tables,
+            pages: count,
+        })
+    }
+
+    /// Publish a previously planned mapping using frames already owned by the
+    /// object table. The frame counts must match the plan exactly.
+    pub fn install(
+        &mut self,
+        plan: MapPlan,
+        tables: Vec<FrameRef>,
+        pages: Vec<FrameRef>,
+    ) -> Result<(), Error> {
+        debug_assert_eq!(tables.len(), plan.tables.len());
+        debug_assert_eq!(pages.len(), plan.pages);
         self.tables
             .try_reserve(tables.len())
             .map_err(|_| Error::NoMemory)?;
-        for address in range.step_by(PAGE_SIZE) {
-            pages.push(Page {
-                va: address,
-                frame: Rc::new(match loaded {
-                    Some(physical) => Frame::take_boot(physical + address - va)?,
-                    None => Frame::allocate()?,
-                }),
-                permissions,
-                pinned,
-            });
-        }
-        for table in tables {
+        self.pages
+            .try_reserve(pages.len())
+            .map_err(|_| Error::NoMemory)?;
+        for (index, frame) in plan.tables.iter().copied().zip(tables) {
             store(
                 self.l2.address(),
-                table.index,
-                PageTableEntry::new_table(PhysAddr::from_usize(table.frame.physical())),
+                index,
+                PageTableEntry::new_table(PhysAddr::from_usize(frame.physical())),
             );
-            self.tables.push(table);
+            self.tables.push(Table {
+                index,
+                frame,
+                managed: true,
+            });
         }
-        for page in pages {
-            if permissions & 4 != 0 {
-                sync_code(page.frame.address(), PAGE_SIZE);
+        for (offset, frame) in pages.into_iter().enumerate() {
+            let va = plan.va + offset * PAGE_SIZE;
+            if plan.permissions & 4 != 0 {
+                sync_code(frame.address(), PAGE_SIZE);
             }
             store(
-                self.table(page.va),
-                (page.va >> 12) & 511,
-                descriptor(&page.frame, permissions),
+                self.table(va),
+                (va >> 12) & 511,
+                descriptor(frame, plan.permissions),
             );
-            self.pages.push(page);
+            self.pages.push(Page {
+                va,
+                frame,
+                permissions: plan.permissions,
+                pinned: plan.pinned,
+            });
         }
         self.pages.sort_unstable_by_key(|page| page.va);
         sync_translations();
         Ok(())
     }
+
     /// Query this address space, not the currently installed TTBR0. Includes
     /// the byte offset; mapping existence does not authorize a requested access.
     pub fn translate(&self, va: VirtAddr) -> Result<super::Translation, Error> {
@@ -217,14 +247,15 @@ impl AddressSpace {
             page_size: PAGE_SIZE,
         })
     }
-    pub fn frame_at(&self, va: usize) -> Result<Rc<Frame>, Error> {
-        Ok(self.pages[self.index(va)?].frame.clone())
+    pub fn frame_at(&self, va: usize) -> Result<FrameRef, Error> {
+        Ok(self.pages[self.index(va)?].frame)
     }
     /// Install an explicitly supplied small-page object. The containing L3
-    /// table must already exist; no implicit user-object allocation occurs.
-    pub fn map_page(&mut self, va: usize, frame: Rc<Frame>, permissions: u64) -> Result<(), Error> {
+    /// table must already exist; no implicit object allocation occurs.
+    pub fn map_page(&mut self, va: usize, frame: FrameRef, permissions: u64) -> Result<(), Error> {
         Self::range(va, PAGE_SIZE)?;
         validate_permissions(permissions)?;
+        validate_frame(frame, permissions)?;
         if self.index(va).is_ok() {
             return Err(Error::AlreadyMapped);
         }
@@ -241,7 +272,7 @@ impl AddressSpace {
         store(
             self.table(va),
             (va >> 12) & 511,
-            descriptor(&frame, permissions),
+            descriptor(frame, permissions),
         );
         self.pages.push(Page {
             va,
@@ -254,7 +285,7 @@ impl AddressSpace {
         Ok(())
     }
     /// This fixed-window VSpace preinstalls L1/L2; object PageTables are L3.
-    pub fn map_table(&mut self, va: usize, frame: Rc<Frame>) -> Result<(), Error> {
+    pub fn map_table(&mut self, va: usize, frame: FrameRef) -> Result<(), Error> {
         if va >= USER_END {
             return Err(Error::InvalidArgument);
         }
@@ -309,7 +340,7 @@ impl AddressSpace {
                 PageTableEntry::empty(),
             );
         }
-        sync_translations(); // Revoke translations before releasing physical ownership.
+        sync_translations(); // Revoke translations before releasing references.
         self.pages.retain(|page| !range.contains(&page.va));
         for table in &self.tables {
             if table.managed && !self.pages.iter().any(|page| page.va >> 21 == table.index) {
@@ -344,7 +375,7 @@ impl AddressSpace {
             store(
                 table,
                 (address >> 12) & 511,
-                descriptor(&page.frame, permissions),
+                descriptor(page.frame, permissions),
             );
         }
         sync_translations();

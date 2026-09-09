@@ -45,7 +45,7 @@ def check_layout(gdb, syms, elf, level, dtb, guard_protected=False):
     phoff = struct.unpack_from('<Q', data, 32)[0]
     phnum = struct.unpack_from('<H', data, 56)[0]
     expected = {boot_info: 4, ipc: 6}
-    extra_size = len(dtb) + 16
+    extra_size = layout['extra_size']
     extra_pages = (extra_size + 4095) // 4096 * 4096
     expected.update({va: 4 for va in range(extra, extra + extra_pages, 4096)})
     for i in range(phnum):
@@ -70,12 +70,20 @@ def check_layout(gdb, syms, elf, level, dtb, guard_protected=False):
     for va in (syms['_start'], syms['boot_stack'], 0x09000000):
         assert va not in mapping, 'kernel/MMIO present in user TTBR0'
     assert (stack_bottom - 4096 not in mapping) == guard_protected
-    bi = struct.unpack('<8Q', gdb.memory(boot_info, 64))
-    assert bi == (0x525354494e594249, 4, 64, 4096, int(level != 'off'), ipc, extra, extra_size)
-    assert gdb.memory(boot_info + 64, 4096 - 64) == bytes(4096 - 64)
-    assert gdb.memory(extra, 16) == struct.pack('<QQ', 6, extra_size)
+    bi = struct.unpack('<16Q', gdb.memory(boot_info, 128))
+    assert bi[:8] == (0x525354494e594249, 5, 128, 4096, int(level != 'off'), ipc, extra, extra_size)
+    assert bi[8] == 32 and bi[9] >= 1, 'missing initial Untyped range'
+    assert bi[10:16] == (0,) * 6
+    assert gdb.memory(boot_info + 128, 4096 - 128) == bytes(4096 - 128)
+    fdt_size = 16 + len(dtb)
+    assert gdb.memory(extra, 16) == struct.pack('<QQ', 6, fdt_size)
     assert gdb.memory(extra + 16, len(dtb)) == dtb, 'DTB changed during BootInfo transfer'
-    assert gdb.memory(extra + extra_size, extra_pages - extra_size) == bytes(extra_pages - extra_size)
+    untyped_record = extra + (fdt_size + 7) // 8 * 8
+    assert struct.unpack('<Q', gdb.memory(untyped_record, 8))[0] == 7
+    untyped_len = struct.unpack('<Q', gdb.memory(untyped_record + 8, 8))[0]
+    assert untyped_len == 16 + bi[9] * 32, (untyped_len, bi[9])
+    used = fdt_size + untyped_len
+    assert gdb.memory(extra + used, extra_pages - used) == bytes(extra_pages - used)
 
 
 def run(qemu, kernel, user, level, scenario):

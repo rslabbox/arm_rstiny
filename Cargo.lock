@@ -41,7 +41,18 @@ dependencies = [
  "kernel-abi",
  "memory_addr",
  "rstiny-elf",
+ "rstiny-newc",
  "tock-registers",
+]
+
+[[package]]
+name = "console"
+version = "0.1.0"
+dependencies = [
+ "rstiny",
+ "rstiny-protocol",
+ "rstiny-runtime",
+ "rstiny-server",
 ]
 
 [[package]]
@@ -57,7 +68,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "fatboot"
+name = "hello"
 version = "0.1.0"
 dependencies = [
  "rstiny",
@@ -65,11 +76,15 @@ dependencies = [
 ]
 
 [[package]]
-name = "hello"
+name = "init"
 version = "0.1.0"
 dependencies = [
  "rstiny",
+ "rstiny-initcfg",
+ "rstiny-newc",
+ "rstiny-protocol",
  "rstiny-runtime",
+ "rstiny-server",
 ]
 
 [[package]]
@@ -151,6 +166,21 @@ name = "rstiny-elf"
 version = "0.1.0"
 
 [[package]]
+name = "rstiny-initcfg"
+version = "0.1.0"
+
+[[package]]
+name = "rstiny-newc"
+version = "0.1.0"
+
+[[package]]
+name = "rstiny-protocol"
+version = "0.1.0"
+dependencies = [
+ "kernel-abi",
+]
+
+[[package]]
 name = "rstiny-runtime"
 version = "0.1.0"
 dependencies = [
@@ -166,6 +196,15 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "rstiny-server"
+version = "0.1.0"
+dependencies = [
+ "kernel-abi",
+ "rstiny",
+ "rstiny-protocol",
 ]
 
 [[package]]
@@ -221,3 +260,15 @@ name = "unicode-ident"
 version = "1.0.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e6e4313cd5fcd3dad5cafa179702e2b244f760991f45397d14d4ebf38247da75"
+
+[[package]]
+name = "userboot"
+version = "0.1.0"
+dependencies = [
+ "kernel-abi",
+ "rstiny",
+ "rstiny-elf",
+ "rstiny-newc",
+ "rstiny-protocol",
+ "rstiny-runtime",
+]

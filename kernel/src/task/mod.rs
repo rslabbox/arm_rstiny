@@ -1,22 +1,24 @@
 //! Single-core user tasks driven by a returning execution boundary.
 mod execution;
-mod queue;
+pub(crate) mod queue;
 mod runtime;
 mod scheduler;
 mod stack;
 pub(crate) mod tick;
-pub(crate) use scheduler::{Disposition, api, park};
+pub(crate) use scheduler::{Blocked, Caller, Disposition, FaultMsg, api, park};
 
 pub fn start(
-    space: crate::memory::AddressSpace,
+    vspace: crate::object::ObjectId,
+    root: usize,
     entry: u64,
     boot_info: u64,
+    untyped_start: u64,
     dispatch: impl FnMut(&mut crate::arch::kernel::thread::user::UserContext) -> Disposition
     + Send
     + 'static,
 ) -> ! {
     scheduler::with_scheduler(|scheduler| {
-        scheduler.install_root(space, entry, boot_info, dispatch);
+        scheduler.install_root(vspace, root, entry, boot_info, untyped_start, dispatch);
     });
     crate::arch::machine::gic::init();
     #[cfg(feature = "kernel-test")]

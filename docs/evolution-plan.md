@@ -309,7 +309,11 @@ ABI_VERSION 已升为 4，旧 x8 正调用号协议已删除，不保留兼容 s
 
 ### 阶段 1：对象、CNode、Untyped、Frame
 
+该阶段的对象表与 CNode/Frame 已落地，Untyped 仍是简化版；把 Untyped 升级为真实物理区间、watermark 切分、Revoke-all 与设备内存的具体计划见 [Untyped 物理内存实现计划](untyped-plan.md)。
+
 目标：把 `Task`/`AddressSpace`/`Frame` 改成可被 capability 引用的对象。
+
+启动链与服务化（fatboot → userboot、init service manager、独立服务/appmgr）的具体设计见 [userboot 与 init 服务管理设计](service-manager.md)。
 
 - 新增 `kernel/src/object/`：`ref.rs`、`cap.rs`、`cnode.rs`、`untyped.rs`、`frame.rs`、`table.rs`（有界对象表）。
 - `Frame::allocate` 仅供内核元数据与启动期使用；用户 Frame 只能来自 `UntypedRetype`。
