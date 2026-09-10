@@ -81,8 +81,8 @@ fn kernel() {
 fn user() {
     let before = memory::available_frames();
     {
-        let first = crate::object::create_vspace(0).unwrap();
-        let second = crate::object::create_vspace(0).unwrap();
+        let first = crate::object::create_vspace().unwrap();
+        let second = crate::object::create_vspace().unwrap();
         let base = 0x1000000;
         crate::object::map_vspace(first, base, 2 * PAGE_SIZE, 3, false).unwrap();
         crate::object::map_vspace(second, base, PAGE_SIZE, 3, false).unwrap();

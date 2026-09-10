@@ -44,26 +44,37 @@ impl Task {
         self.operation(abi::Invocation::TcbResume)
     }
     /// Terminate and reap the task, revoking its ELF object group when present.
-    /// Released CSpace slots may subsequently be reused.
+    /// The handle names a process: every thread sharing its CSpace stops with
+    /// it (group destroy, docs/thread-group.md §2.2). Released CSpace slots
+    /// may subsequently be reused.
     pub fn destroy(self) -> Result<(), Error> {
         if let Some(allocator) = self.1 {
             // Finish the scheduler task first, while its TCB capability is
             // still valid, then reclaim the loader's derivation subtree.
             runtime(abi::RuntimeInvocation::Destroy, &[self.0])?;
-                                    // SAFETY: this handle uniquely owns the derivation subtree; the
+            // SAFETY: this handle uniquely owns the derivation subtree; the
             // task is terminated and nothing else references it.
             unsafe {
                 let cnode = super::capability::CNode(super::capability::CPtr(abi::INIT_CNODE));
                 cnode.revoke(allocator)?;
                 cnode.delete(allocator)?;
             }
-                        Ok(())
+            Ok(())
         } else {
             runtime(abi::RuntimeInvocation::Destroy, &[self.0]).map(|_| ())
         }
     }
+    /// Terminate and reap exactly this thread; a shared CSpace/VSpace survive
+    /// for the sibling threads of its group (docs/thread-group.md §2.2).
+    pub fn destroy_thread(self) -> Result<(), Error> {
+        runtime(abi::RuntimeInvocation::DestroyThread, &[self.0]).map(|_| ())
+    }
     pub(super) fn from_objects(tcb: u64, allocator: u64) -> Self {
         Self(tcb, Some(allocator))
+    }
+    /// Wrap an existing TCB capability slot, e.g. a thread-group member's.
+    pub fn from_tcb(slot: u64) -> Self {
+        Self(slot, None)
     }
     /// Wait for target termination. Does not reap; inspect status to distinguish faults.
     pub fn wait(&self) -> Result<u64, Error> {

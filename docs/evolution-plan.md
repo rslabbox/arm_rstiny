@@ -332,6 +332,8 @@ ABI_VERSION 已升为 4，旧 x8 正调用号协议已删除，不保留兼容 s
 
 ### 阶段 2：TCB/VSpace 分离、每线程内核栈、优先级调度
 
+状态：TCB/VSpace 分离、共享 CSpace/VSpace（线程组）、`TCB_SetSpace`/`TCB_SetIPCBuffer` 与独立内核栈/IPC buffer 已随 [独立 fault-handler 线程与线程模型](fault-handler.md) 落地并通过回归；本阶段余项只有优先级调度与 `SYS_TASK_*` shim。
+
 目标：把"任务"拆成 TCB 与 VSpace，并让内核可以阻塞。
 
 - `Tcb` 持有 `cspace`/`vspace`/`ipc_buffer`/`fault_ep`/`priority`/独立内核栈。

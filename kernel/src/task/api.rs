@@ -73,6 +73,23 @@ pub(crate) fn start(
 pub(crate) fn status(target: u64) -> Result<u64, u64> {
     with_target(target, |scheduler, _, slot| Ok(scheduler.tasks[slot].state))
 }
+
+/// Every thread id sharing `target`'s CSpace — the thread group a process
+/// handle names (docs/thread-group.md §2.1), `target` included. Terminal
+/// members are listed too so a group destroy also empties their slots.
+pub(crate) fn group_members(target: u64) -> Result<alloc::vec::Vec<u64>, u64> {
+    with_target(target, |scheduler, _, slot| {
+        let Some(cspace) = scheduler.tasks[slot].cspace else {
+            return Err(INVALID_STATE);
+        };
+        Ok(scheduler
+            .tasks
+            .iter()
+            .filter(|task| task.id != 0 && task.cspace == Some(cspace))
+            .map(|task| task.id)
+            .collect())
+    })
+}
 pub(crate) fn suspend(target: u64) -> Result<(), u64> {
     with_target(target, |scheduler, _, slot| {
         let task = &mut scheduler.tasks[slot];
@@ -113,11 +130,21 @@ pub(crate) fn destroy(target: u64) -> Result<(), u64> {
         if slot == caller {
             return Err(INVALID_ARGUMENT);
         }
+        // Captured before the slot is emptied: the object layer still needs the
+        // thread's bindings to release exactly its own references.
+        let bindings = (scheduler.tasks[slot].cspace, scheduler.tasks[slot].vspace);
+        // A sibling thread sharing this CSpace keeps it alive (thread group).
+        let shared =
+            bindings.0.is_some_and(|cspace| {
+                scheduler.tasks.iter().enumerate().any(|(index, task)| {
+                    index != slot && task.id != 0 && task.cspace == Some(cspace)
+                })
+            });
         if !scheduler.tasks[slot].terminal() {
             scheduler.finish(slot, false, u64::MAX);
         }
         scheduler.tasks[slot] = Task::empty();
-        crate::object::forget_task(target);
+        crate::object::forget_task(target, bindings.0, shared);
         Ok(())
     })
 }
@@ -160,14 +187,18 @@ pub(crate) fn edit_space<T>(
         crate::object::edit_vspace(vspace, operation)
     })
 }
-/// Every VSpace bound to a live task. Collection uses this as a root set so an
-/// address space and its mapped frames stay reachable while a task holds them.
-pub(crate) fn vspace_roots() -> alloc::vec::Vec<ObjectId> {
+/// Every CSpace and VSpace referenced by a non-terminal thread. Collection
+/// uses this as a root set, so a shared CSpace or VSpace (a thread group)
+/// stays reachable while at least one live thread — or one capability —
+/// references it. Terminal threads keep their binding fields for the destroy
+/// path but no longer root anything.
+pub(crate) fn thread_roots() -> alloc::vec::Vec<ObjectId> {
     with_scheduler(|scheduler| {
         scheduler
             .tasks
             .iter()
-            .filter_map(|task| task.vspace)
+            .filter(|task| task.rooted())
+            .flat_map(|task| [task.cspace, task.vspace].into_iter().flatten())
             .collect()
     })
 }
@@ -439,6 +470,62 @@ pub(crate) fn configure(
         s.tasks[slot].cspace = Some(cspace);
         s.tasks[slot].ipc_buffer = ipc_buffer;
         s.tasks[slot].fault_ep = fault_ep;
+        Ok(())
+    })
+}
+
+/// Bind an unstarted thread to a CSpace/VSpace pair. Both may already be in
+/// use by other threads: a thread group shares its CSpace and VSpace, so no
+/// exclusivity is enforced here (docs/fault-handler.md §3). The IPC buffer,
+/// if any, is configured separately through [`set_ipc_buffer`].
+pub(crate) fn set_space(
+    target: u64,
+    cspace: ObjectId,
+    vspace: ObjectId,
+    root: usize,
+    fault_ep: u64,
+) -> Result<(), u64> {
+    with_target(target, |s, _, slot| {
+        let task = &mut s.tasks[slot];
+        if task.started {
+            return Err(INVALID_STATE);
+        }
+        task.root = root;
+        task.vspace = Some(vspace);
+        task.cspace = Some(cspace);
+        task.fault_ep = fault_ep;
+        Ok(())
+    })
+}
+
+/// Point an unstarted thread at its own IPC buffer: the frame must already be
+/// mapped at `address` in the thread's (possibly shared) VSpace, writable for
+/// the whole 1 KiB layout. `frame == None` clears the buffer.
+pub(crate) fn set_ipc_buffer(
+    target: u64,
+    frame: Option<ObjectId>,
+    address: usize,
+) -> Result<(), u64> {
+    with_target(target, |s, _, slot| {
+        let task = &mut s.tasks[slot];
+        if task.started {
+            return Err(INVALID_STATE);
+        }
+        let vspace = task.vspace.ok_or(INVALID_STATE)?;
+        if address == 0 {
+            task.ipc_buffer = 0;
+            return Ok(());
+        }
+        if let Some(frame) = frame
+            && crate::object::vspace_frame_at(vspace, address)
+                .ok()
+                .map(|f| f.id())
+                != Some(frame)
+        {
+            return Err(INVALID_CAPABILITY);
+        }
+        crate::object::with_vspace(vspace, |space| space.check(address, 1024, 3))?;
+        task.ipc_buffer = address;
         Ok(())
     })
 }

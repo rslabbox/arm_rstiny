@@ -98,6 +98,7 @@ pub mod capability;
 pub mod elf;
 pub mod ipc;
 pub mod task;
+pub mod thread;
 pub use task::{Permissions, Task, TaskState};
 
 /// Sleep for at least the requested milliseconds; zero yields to ready tasks.

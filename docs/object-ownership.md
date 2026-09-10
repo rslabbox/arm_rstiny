@@ -44,10 +44,10 @@ ObjectTable (kernel/src/object/id.rs)
 | 来源 | 形式 | 说明 |
 | --- | --- | --- |
 | capability | `Cap.object: ObjectId` | CNode 槽内，撤销时整体消失 |
-| 任务绑定 | `Task.vspace` / `task_spaces` | 调度器持有的 CSpace 与 VSpace 根 |
+| 线程绑定 | `Task.cspace` / `Task.vspace` | 调度器线程引用的 CSpace 与 VSpace；多个线程（线程组）可引用同一对象 |
 | 地址空间映射 | `VSpace.space.frame_refs()` | 映射页与页表帧 |
 
-`collect` 从 capability、`task_spaces` 和 `api::vspace_roots()` 出发做标记，再沿 `VSpace → FrameRef` 展开，最后删除不可达对象。删除 `VSpace` 会丢弃它的 `FrameRef` 列表，下一轮扫描即可回收这些帧。
+`collect` 从 capability 和线程引用的 cspace/vspace（`task::api::thread_roots()`）出发做标记，再沿 `VSpace → FrameRef` 展开，最后删除不可达对象。删除 `VSpace` 会丢弃它的 `FrameRef` 列表，下一轮扫描即可回收这些帧。
 
 ### 3.2 映射与 capability 绑定
 
@@ -80,12 +80,14 @@ collect_if_requested() → collect()
 
 这样多步创建（Retype、Create）在发布期间不会被误回收，而释放后的帧会在下一次边界被回收。
 
-### 3.4 任务退出
+### 3.4 线程退出
 
-- `retire_task`：托管任务退出时移除 IPC capability，并清空其 VSpace 的 `space`（丢弃全部 `FrameRef`）。
-- `forget_task`：移除托管 CSpace。
-- `release_task_objects`：显式运行时策略销毁标准 TCB 时，移除 TCB 对象并清空指向它的 capability。
-- `scheduler::finish` 把 `Task.vspace` 置空，使该地址空间不再是根。
+线程（TCB）退出只回收线程自身；CSpace/VSpace 是组资源，最后一个引用消失后才回收（[独立 fault-handler 线程与线程模型](fault-handler.md) §3.3、§8）：
+
+- `retire_thread`（原 `retire_task`）：托管线程退出时移除其 IPC capability；**不再**清空 VSpace 的映射——同组的其他线程仍在使用它。非托管线程只触发一次按需收集。
+- `forget_task`：销毁托管线程时移除其私有 CSpace 对象（CSpace 从 `Task.cspace` 读取）。
+- `release_task_objects`：显式运行时策略销毁 TCB 时，移除 TCB 对象并清空指向它的 capability；目标 VSpace 若仍被其他存活线程引用（线程组场景）则保留。
+- `scheduler::finish` 把线程置为终态并丢弃其 `Execution`；`Task.cspace`/`Task.vspace` 字段保留到槽位复用或销毁（销毁路径仍需读取），但终态线程不计入 `thread_roots()`——即它的绑定不再让任何对象保持可达，独占对象自此由 `collect` 回收。
 
 帧本身由随后的 `collect` 回收，而不是依赖 `Drop` 链。
 
@@ -102,7 +104,7 @@ collect_if_requested() → collect()
 保留的简化：
 
 - Untyped 仍是帧池分配权限的抽象，没有物理区间 watermark 与精确对象布局；对象表本身不随用户请求增长。
-- TCB 状态仍在调度器中，对象表只保存 `Object::Tcb(task_id)` 标识。
+- TCB 状态仍在调度器中，对象表只保存 `Object::Tcb(task_id)` 标识；TCB 的 CSpace/VSpace 记录同样放在调度器 `Task` 上，共享性由 `collect` 的根集合表达，而不是对象内的引用计数。
 - 单核、IRQ-masked 假设不变，对象表没有锁。
 
 ## 5. 代码地图

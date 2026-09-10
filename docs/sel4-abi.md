@@ -37,6 +37,8 @@ capability 引用对象，并携带派生关系、权限及该 cap 的映射记�
 | Untyped_Retype | 1 | type, sizeBits, nodeIndex, nodeDepth, offset, count / 目标 CNode |
 | TCB_WriteRegisters | 3 | flags, count, registers… / 无 |
 | TCB_Configure | 5 | faultEP, cspaceData, vspaceData, ipcVA / CNode, VSpace, IPCFrame |
+| TCB_SetIPCBuffer | 9 | ipcVA（0 = 清除）/ IPCBufferFrame（须已映射在该 VSpace 的 ipcVA） |
+| TCB_SetSpace | 10 | faultEP, cspaceData, vspaceData / CNode, VSpace |
 | TCB_Suspend / Resume | 11 / 12 | 无 |
 | CNode_Revoke / Delete | 17 / 18 | index, depth / 无 |
 | CNode_Copy | 20 | dstIndex, dstDepth, srcIndex, srcDepth, rights / 源 CNode |
@@ -52,7 +54,7 @@ Retype 支持 TCB=1、CNode=4、VSpace=6、SmallPage=7、PageTable=9。CNode siz
 
 CapRights 为 Write=1、Read=2、Grant=4、GrantReply=8；内存映射使用 Cacheable=1、ExecuteNever=4。不要与运行时批量映射的 R=1/W=2/X=4 混淆。Frame 的最终访问权限不得超过该 cap 的权限；复制出的 cap 可以建立独立映射。执行映射维护指令缓存一致性，单个映射拒绝 RWX。
 
-TCB_Configure 校验 IPCFrame 确实映射在指定 IPC 地址。WriteRegisters 支持初始配置，寄存器顺序遵循 AArch64 seL4 UserContext：pc, sp, spsr, x0..x8, x16..x18, x29, x30, x9..x15, x19..x28, tpidr_el0, tpidrro_el0。非零 TLS 配置暂不支持；内核校验入口、栈及用户 PSTATE，拒绝特权模式。Resume 才使准备完成的任务可运行。
+TCB_Configure 校验 IPCFrame 确实映射在指定 IPC 地址。多个 TCB 允许配置/绑定同一 CNode 与 VSpace（线程组：组成员共享全部 cap 槽位与映射，`docs/fault-handler.md` §3）；`TCB_SetSpace`/`TCB_SetIPCBuffer` 只作用于未启动线程，其余生命周期语义与 Configure 一致。WriteRegisters 支持初始配置，寄存器顺序遵循 AArch64 seL4 UserContext：pc, sp, spsr, x0..x8, x16..x18, x29, x30, x9..x15, x19..x28, tpidr_el0, tpidrro_el0。非零 TLS 配置暂不支持（IPC buffer 地址由内核按任务在进入用户态时装入 TPIDRRO_EL0，组内各线程各有一份）；内核校验入口、栈及用户 PSTATE，拒绝特权模式。Resume 才使准备完成的任务可运行。
 
 ## fatboot 装载普通程序
 
@@ -75,7 +77,9 @@ scratch 地址来自 BootInfo 扩展区之后的空闲页，由调用者独占�
 | 0x1000..0x1005 | Current, Create, Start, Status, Destroy, Wait |
 | 0x1006..0x1009 | Sleep, Exit, Clock, AvailableFrames |
 | 0x100a..0x100e | Map, Unmap, Protect, WriteMemory, ReadMemory |
-| 0x100f..0x1012 | FindEmptySlot, DebugConsoleAvailable, Cspace, Vspace |
+| 0x100f..0x1013 | FindEmptySlot, DebugConsoleAvailable, Cspace, Vspace, DestroyThread |
+
+`Destroy` 是组级语义：句柄命名一个进程（共享 CSpace 的线程组），先停止全部成员线程再回收对象（[进程/线程组生命周期与组内故障监督](thread-group.md) §2.2）；`DestroyThread` 只销毁单个线程，共享 CSpace/VSpace 留给兄弟线程。
 
 参数封装见 `projects/libs/user/src/task.rs` 和 `kernel/src/object/runtime.rs`。目标参数也是调用者 CSpace 的 TCB cap，每次调用均重新解析。跨任务授权通过复制 cap 完成，不再依据“目标是不是直接子任务”。托管 Create 仍自动建立默认空间及 IPC 页；托管 Destroy 会收回对应托管 CSpace。标准对象创建的任务退出后，空间对象保留到 capability 生命周期结束。
 
@@ -85,7 +89,7 @@ scratch 地址来自 BootInfo 扩展区之后的空闲页，由调用者独占�
 - Untyped 目前是真实物理区间 + watermark 切分：`retype` 从父 Untyped 取内存并记录归属，`CNode_Revoke` 作用于 Untyped cap 时 finalise 子对象、清零并重置区间。它仍不是 seL4 的精确对象内存布局与完整 MDB 撤销；TCB/CNode 元数据留在对象表、不计入 Untyped 预算。
 - VSpace 内部自动创建 L1/L2；显式 PageTable 对象只对应 L3。ASID Assign 有逻辑约束，但硬件仍使用 ASID 0 和完整 TLB 失效。
 - 页表 Unmap 要求为空；没有完整的递归解除映射语义。Revoke 可能在部分解除映射后因非空页表失败，保留的 cap 会同步清除已解除的映射记录，可在处理剩余映射后重试。CSpace 不支持任意深度、badge 或完整 Mint guard 操作。
-- TCB Configure/WriteRegisters 只覆盖初始启动；ReadRegisters、SetSpace、SetIPCBuffer 虽保留标签，但尚未实现。没有共享空间线程、优先级或 MCS。
+- TCB Configure/SetSpace/SetIPCBuffer/WriteRegisters 只覆盖未启动线程的初始配置（fault 修复路径对 `TASK_BLOCKED_FAULT` 放开 WriteRegisters）；ReadRegisters 尚未实现。多个 TCB 可共享 CSpace/VSpace（线程组），但没有跨线程 TLS、优先级或 MCS；组销毁语义见 `Runtime::Destroy/DestroyThread`（本文档"显式运行时扩展"一节）。
 - BootInfo 仍为本项目 128 字节、版本 5 的头部，不是 seL4_BootInfo；v5 发布 `untyped_start`/`untyped_count` 与扩展记录 id=7 的 Untyped 描述列表。错误附加消息与 TLS 约定也尚未完全对齐。
 
 验证入口为 `make check`：ABI wire fixtures、实际 EL0 寄存器调用、对象配置、跨 CSpace cap 授权、权限衰减、撤销回收、资源耗尽回滚，以及 fatboot 的标准对象 ELF 装载均纳入回归。

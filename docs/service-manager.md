@@ -64,6 +64,8 @@ userboot 保留为 monitor（决策 1）：它不参与服务管理，但在 ini
 
 ### 3.2 init（service manager）
 
+实现约束：init 的 supervisor 线程是唯一的 `control_ep` 接收者，且不得对它监督的服务做阻塞 `Call`；需要同步 `Call` 的 client/logger 放在另一个线程。独立 fault-handler 线程与它所需的 TCB/VSpace/CSpace 分离见 [独立 fault-handler 线程与线程模型](fault-handler.md)；组级销毁与组内线程的 fault 监督见 [进程/线程组生命周期与组内故障监督](thread-group.md)。
+
 做：
 
 - 持有 untyped 预算（子 untyped）、设备 untyped、ROM Frame cap、自身 TCB。
@@ -718,4 +720,9 @@ appmgr 用 `FS_OPEN/FS_READ` 读应用 ELF 到自己授予的共享 Frame，再�
 - 子 untyped 预算需覆盖 CNode 记账（512KB/slot 帧额度）与加载页，init 预算 8MB、console 4MB。
 - `Runtime::Clock/Sleep/Exit` 仍在（决策 12 的过渡通道），`Runtime::FindEmptySlot` 已从 loader 路径移除（改由 `LOADER_SLOT_BASE=40000` 起的单调分配，避免与监督者固定槽冲突）。
 
-已知余项：stop 握手的超时强制回收、restart storm 的窗口统计、依赖拓扑启动顺序、check_userboot 的 crash→restart 注入用例、以及阶段 D–F 全部内容。
+已知余项：stop 握手的超时强制回收、restart storm 的窗口统计、依赖拓扑启动顺序、以及阶段 D–F 全部内容。
+
+补充实施事实（[独立 fault-handler 线程与线程模型](fault-handler.md) F4 落地时确立）：
+
+- init 的 supervisor/client 线程组已落地：supervisor 是唯一 `control_ep` 接收者，阻塞 `Call` 由 client 线程执行；`crash → supervisor reap → 重启 → console 恢复`的注入用例由 `tools/check_fault_handler.py`（`BOOT_TEST=1`）固化，不再是余项。
+- 服务回收链补一条：`stop_and_reap` 在 `Task::destroy` 之后对 init 侧设备 untyped cap 执行 `CNode_Revoke`——服务持有的设备区间派生不随其预算子 untyped 回收，必须显式撤销才能重置区间 watermark（§8 的 reset 语义），否则重启的驱动实例切不出设备帧。

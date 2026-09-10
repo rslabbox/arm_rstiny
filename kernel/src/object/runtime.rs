@@ -29,6 +29,7 @@ pub(super) fn invoke(request: &Request) -> Result<Completion> {
             R::Cspace as u64,
             R::Vspace as u64,
             R::Destroy as u64,
+            R::DestroyThread as u64,
             R::Wait as u64,
             R::Sleep as u64,
             R::Exit as u64,
@@ -77,7 +78,7 @@ pub(super) fn invoke(request: &Request) -> Result<Completion> {
             let task = api::create()?;
             let ipc = kernel_abi::USER_ADDRESS_LIMIT as usize - 4096;
             let result = (|| {
-                let space = create_vspace(task)?;
+                let space = create_vspace()?;
                 map_vspace(space, ipc, 4096, 3, true)?;
                 publish_task(task, space, ipc)
             })();
@@ -92,20 +93,13 @@ pub(super) fn invoke(request: &Request) -> Result<Completion> {
         }
         n if n == R::Cspace as u64 || n == R::Vspace as u64 => {
             let target = tcb(a[0])?;
+            let object = if n == R::Cspace as u64 {
+                api::cspace_of(target)?
+            } else {
+                api::vspace_of(target)?
+            };
             let caller = api::current_cspace();
             Some(with_store(|store| {
-                let object = if n == R::Cspace as u64 {
-                    *store.task_spaces.get(&target).ok_or(INVALID_CAPABILITY)?
-                } else {
-                    store
-                        .objects
-                        .iter()
-                        .find_map(|(id, object)| {
-                            matches!(object, Object::VSpace(vspace) if vspace.owner == target)
-                                .then_some(id)
-                        })
-                        .ok_or(INVALID_CAPABILITY)?
-                };
                 let slot = store.empty_slot(caller)?;
                 store.insert_cap(caller, slot, object, RIGHTS_ALL, 0, 0)?;
                 Ok::<_, u64>(slot)
@@ -117,8 +111,33 @@ pub(super) fn invoke(request: &Request) -> Result<Completion> {
             if Some(target) == crate::task::current_id() {
                 return Err(INVALID_ARGUMENT);
             }
+            // Group semantics: the handle names a process (a shared CSpace),
+            // so every member thread stops before any shared object is
+            // released (docs/thread-group.md §2.2, §2.3).
+            let members = api::group_members(target)?;
+            if members.contains(&crate::task::current_id().unwrap()) {
+                return Err(INVALID_ARGUMENT);
+            }
+            for member in members {
+                // Captured before destruction clears the thread's bindings; a
+                // VSpace shared with a surviving member is kept by the release
+                // and only the last member's release retires it.
+                let vspace = api::vspace_of(member).ok();
+                api::destroy(member)?;
+                release_task_objects(member, vspace);
+            }
+            None
+        }
+        n if n == R::DestroyThread as u64 => {
+            let target = tcb(a[0])?;
+            if Some(target) == crate::task::current_id() {
+                return Err(INVALID_ARGUMENT);
+            }
+            // Single-thread teardown: shared CSpace/VSpace stay with the
+            // surviving siblings (forget_task/release_task_objects check).
+            let vspace = api::vspace_of(target).ok();
             api::destroy(target)?;
-            release_task_objects(target);
+            release_task_objects(target, vspace);
             None
         }
         n if n == R::Wait as u64 => {

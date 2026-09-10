@@ -106,11 +106,7 @@ fn syscall(
             inlateout("x5") mr3,
         );
     }
-    Ok(unmarshal(
-        badge_or_cap,
-        tag,
-        [mr0, mr1, mr2, mr3],
-    ))
+    Ok(unmarshal(badge_or_cap, tag, [mr0, mr1, mr2, mr3]))
 }
 
 /// Buffered send with no receiver wait. `caps` transfer Grant-authorised caps.

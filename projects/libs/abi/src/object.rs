@@ -79,4 +79,8 @@ pub enum RuntimeInvocation {
     DebugConsoleAvailable = 0x1010,
     Cspace = 0x1011,
     Vspace = 0x1012,
+    /// Destroy exactly one thread; its shared CSpace/VSpace survive for its
+    /// siblings. `Destroy` is the group-level counterpart
+    /// (docs/thread-group.md §2.2).
+    DestroyThread = 0x1013,
 }

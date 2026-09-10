@@ -226,7 +226,7 @@ fn retype(cap: &Cap, request: &Request) -> Result<Completion> {
                         .expect("reserved capacity")
                 }
                 n if n == ObjectType::VSpace as u64 => store
-                    .new_vspace(0, Some(cap.object))
+                    .new_vspace(Some(cap.object))
                     .expect("reserved capacity"),
                 n if n == ObjectType::SmallPage as u64 => store
                     .new_untyped_frame(cap.object, false)
@@ -322,34 +322,44 @@ fn tcb_invoke(target: u64, request: &Request) -> Result<Completion> {
                     return Err(INVALID_CAPABILITY);
                 }
             }
-            let owner = with_store(|store| match store.objects.get(space) {
-                Some(Object::VSpace(vspace)) => vspace.owner,
-                _ => 0,
-            });
-            if owner != 0 && owner != target {
-                return Err(INVALID_CAPABILITY);
-            }
+            // The CSpace/VSpace pair may already be in use by other threads: a
+            // thread group shares both, so no ownership check applies
+            // (docs/fault-handler.md §3).
             let root = vspace_root(space)?;
             api::configure(target, cspace, space, root, a[3] as usize, a[0])?;
-            with_store(|store| {
-                store.task_spaces.insert(target, cspace);
-                let previous: Vec<ObjectId> = store
-                    .objects
-                    .iter()
-                    .filter_map(|(id, object)| match object {
-                        Object::VSpace(vspace) if vspace.owner == target && id != space => Some(id),
-                        _ => None,
-                    })
-                    .collect();
-                for id in previous {
-                    if let Some(Object::VSpace(vspace)) = store.objects.get_mut(id) {
-                        vspace.owner = 0;
-                    }
+        }
+        n if n == Invocation::TcbSetSpace as u64 => {
+            request.require(3, 2)?;
+            // seL4 `TCB_SetSpace`: fault-endpoint slot plus the CSpace/VSpace
+            // roots, without touching the IPC buffer. Like `Tcb_Configure`
+            // this is restricted to threads that never ran (v1 choice,
+            // docs/fault-handler.md §12.3).
+            if a[1] != 0 || a[2] != 0 {
+                return Err(INVALID_ARGUMENT);
+            }
+            let cspace = cnode(request.caps[0])?;
+            let space = vspace(request.caps[1])?;
+            let root = vspace_root(space)?;
+            api::set_space(target, cspace, space, root, a[0])?;
+        }
+        n if n == Invocation::TcbSetIpcBuffer as u64 => {
+            request.require(1, 1)?;
+            // seL4 `TCB_SetIPCBuffer`: the frame must already be mapped at the
+            // given address in the thread's VSpace. Address 0 clears the
+            // buffer; the frame capability is ignored in that case.
+            let address = a[0] as usize;
+            let mut frame = None;
+            if address != 0 {
+                if address & 1023 != 0 {
+                    return Err(INVALID_ARGUMENT);
                 }
-                if let Some(Object::VSpace(vspace)) = store.objects.get_mut(space) {
-                    vspace.owner = target;
+                let (resolved, kind) = resolve(request.caps[0])?;
+                if kind != ObjectKind::Frame {
+                    return Err(INVALID_CAPABILITY);
                 }
-            });
+                frame = Some(resolved.object);
+            }
+            api::set_ipc_buffer(target, frame, address)?;
         }
         n if n == Invocation::TcbWriteRegisters as u64 => {
             request.require(2, 0)?;

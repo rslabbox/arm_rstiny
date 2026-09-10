@@ -155,6 +155,39 @@ impl Tcb {
         )
         .map(|_| ())
     }
+    /// Bind an unstarted thread to a CSpace/VSpace pair without touching its
+    /// IPC buffer. Both may already be in use by other threads: a thread group
+    /// shares its CSpace and VSpace (docs/fault-handler.md §3). `fault_ep` is
+    /// a slot in the configured CSpace (0 = unmonitored).
+    ///
+    /// # Safety
+    /// The thread must not have run yet, and the pair must form a usable
+    /// execution environment for it.
+    pub unsafe fn set_space(&self, cspace: CPtr, vspace: CPtr, fault_ep: u64) -> Result<(), Error> {
+        invoke(
+            self.0.0,
+            Invocation::TcbSetSpace as u64,
+            &[fault_ep, 0, 0],
+            &[cspace.0, vspace.0],
+        )
+        .map(|_| ())
+    }
+    /// Point an unstarted thread at its own IPC buffer: `frame` must already
+    /// be mapped at `address` (1 KiB aligned) in the thread's VSpace.
+    /// `address == 0` clears the buffer.
+    ///
+    /// # Safety
+    /// The thread must not have run yet, and the mapping must stay valid for
+    /// the thread's lifetime.
+    pub unsafe fn set_ipc_buffer(&self, frame: CPtr, address: usize) -> Result<(), Error> {
+        invoke(
+            self.0.0,
+            Invocation::TcbSetIpcBuffer as u64,
+            &[address as u64],
+            &[frame.0],
+        )
+        .map(|_| ())
+    }
     /// # Safety
     /// Entry and stack must be initialized and satisfy the task's startup contract.
     pub unsafe fn write_initial_registers(

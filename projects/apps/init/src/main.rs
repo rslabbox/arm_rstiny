@@ -7,14 +7,17 @@
 //! handshake before forced teardown (docs/service-manager.md §7, §9, §10).
 extern crate alloc;
 
+mod logger;
+
 use alloc::vec::Vec;
 use core::alloc::{GlobalAlloc, Layout};
 use core::fmt::Write as _;
 use core::ptr::addr_of_mut;
-use rstiny_protocol::{Argument, SpawnInfo, console, control};
-use rstiny_runtime::entry;
 use rstiny::elf::ChildCap;
-use rstiny::{capability::*, ipc, Error, Task};
+use rstiny::thread::ThreadGroup;
+use rstiny::{Error, Task, capability::*, ipc};
+use rstiny_protocol::{Argument, SpawnInfo, control};
+use rstiny_runtime::entry;
 
 const CONSOLE: &str = "console";
 
@@ -26,12 +29,18 @@ const UART_DEV_OWN: u64 = 161; // first device Untyped copy (from userboot)
 // window granted to init (200..200+512) and below the loader's own range.
 const SUB_UNTYPED_BASE: u64 = 5000; // + i*8: per-service budget slots
 const SVC_EP_BASE: u64 = 5004; // + i*8: service main endpoint slots
+const THREAD_SLOT_BASE: u64 = 6000; // thread-group caps (16 per thread)
+const LOGGER_FAULT_SLOT: u64 = 144; // logger's badged fault-endpoint cap
 const CHILD_SCRATCH: usize = 0x07E0_0000; // loader scratch while spawning
 const ROM_VA: usize = 0x0200_0000;
 
 const SERVICE_BADGE_BASE: u64 = 1; // console = 1; others follow config order
+const INTERNAL_BADGE_BASE: u64 = 0x8000; // group-internal threads (logger …)
 const STOP_TIMEOUT_MS: u64 = 500;
 const BACKOFF_SHIFT_CAP: u32 = 5;
+/// Supervision drill: init hands itself back to userboot with this exit code,
+/// exercising the group destroy and the level-1 restart (BOOT_TEST builds).
+const INIT_EXIT_DRILL_CODE: u64 = 7;
 
 const DEVICE_NAMES: [&str; 1] = ["uart0"];
 
@@ -102,7 +111,6 @@ fn main(argument: Argument) -> ! {
 }
 
 fn run(info: SpawnInfo) -> ! {
-    rstiny::debug_println!("[init] boot_test={}", boot_test());
     let rom = match map_rom(&info) {
         Ok(rom) => rom,
         Err(_) => fail_reason(&info, 1),
@@ -129,14 +137,66 @@ fn run(info: SpawnInfo) -> ! {
     }
 
     let cnode = CNode(CPtr(INIT_CNODE));
-    // Shared service infrastructure: init's supervision endpoint and the
-    // console service endpoint object (its only client is init for now).
-    if cnode.retype_endpoint(CPtr(INIT_UNTYPED), CONTROL_OBJ).is_err() {
+    // Shared service infrastructure: init's supervision endpoint, the console
+    // service endpoint object (its only client is init for now) and the
+    // supervisor→logger endpoint of init's own thread group.
+    if cnode
+        .retype_endpoint(CPtr(INIT_UNTYPED), CONTROL_OBJ)
+        .is_err()
+    {
         fail_reason(&info, 18);
     }
-    if cnode.retype_endpoint(CPtr(INIT_UNTYPED), CONSOLE_EP_OWN).is_err() {
+    if cnode
+        .retype_endpoint(CPtr(INIT_UNTYPED), CONSOLE_EP_OWN)
+        .is_err()
+    {
         fail_reason(&info, 21);
     }
+    if cnode
+        .retype_endpoint(CPtr(INIT_UNTYPED), logger::LOG_EP)
+        .is_err()
+    {
+        fail_reason(&info, 22);
+    }
+    // The supervision drill only runs in the first incarnation: userboot hands
+    // a restart generation through SpawnInfo::extra (thread-group.md §7).
+    let drill_enabled = boot_test() && info.extra[5] == 0;
+    rstiny::debug_println!(
+        "[init] boot_test={} generation={}",
+        boot_test(),
+        info.extra[5]
+    );
+    // init is a thread group sharing one CSpace/VSpace (docs/fault-handler.md
+    // §6): the supervisor below only Recvs `control_ep` and issues non-blocking
+    // kernel object calls, while the client thread owns every blocking Call to
+    // a supervised service. That is what breaks the §1 deadlock: the thread
+    // blocked in a Call is not the thread that must receive the fault.
+    let mut group = ThreadGroup::new(
+        CPtr(INIT_CNODE),
+        CPtr(INIT_VSPACE),
+        CPtr(INIT_UNTYPED),
+        THREAD_SLOT_BASE,
+    );
+    // SAFETY: logger::run reads only its own stack/IPC buffer and the shared
+    // CSpace; entry and stack are mapped by spawn_thread before the resume.
+    let logger_entry = logger::run as fn(usize) -> !;
+    // The logger is itself supervised: its faults carry an internal badge to
+    // this thread's control endpoint (docs/thread-group.md §4).
+    let logger_fault = rstiny::thread::FaultSupervision {
+        source: CONTROL_OBJ,
+        slot: LOGGER_FAULT_SLOT,
+        badge: INTERNAL_BADGE_BASE,
+    };
+    let mut logger = match unsafe {
+        group.spawn_thread(
+            logger_entry as usize,
+            CONSOLE_EP_OWN as u64,
+            Some(logger_fault),
+        )
+    } {
+        Ok(thread) => Some(thread),
+        Err(_) => fail_reason(&info, 23),
+    };
 
     let mut services: Vec<ServiceState> = Vec::new();
     for (index, cfg) in config.services.iter().enumerate() {
@@ -157,6 +217,8 @@ fn run(info: SpawnInfo) -> ! {
 
     let console_ep = CONSOLE_EP_OWN;
     let mut console_running = false;
+    let mut drill_armed = false;
+    let mut logger_drill_armed = false;
     loop {
         // Start every service whose dependencies are all Running.
         for index in 0..services.len() {
@@ -173,7 +235,9 @@ fn run(info: SpawnInfo) -> ! {
             if !services[index].infra {
                 let (svc_ep_obj, budget_slot) =
                     (services[index].svc_ep_obj, services[index].budget_slot);
-                if cnode.retype_endpoint(CPtr(INIT_UNTYPED), svc_ep_obj).is_err()
+                if cnode
+                    .retype_endpoint(CPtr(INIT_UNTYPED), svc_ep_obj)
+                    .is_err()
                     || Untyped(CPtr(INIT_UNTYPED))
                         .retype(
                             ObjectType::Untyped,
@@ -197,6 +261,66 @@ fn run(info: SpawnInfo) -> ! {
         let Ok(received) = ipc::recv(CONTROL_OBJ) else {
             continue;
         };
+        if received.badge >= INTERNAL_BADGE_BASE {
+            // Group-internal thread fault (docs/thread-group.md §4.3): reap
+            // exactly that TCB — never the whole group — and rebuild it with
+            // the same entry and fault endpoint. Only non-blocking kernel
+            // object calls happen here; the fault-handler.md §7 invariant
+            // still holds.
+            rstiny::debug_println!(
+                "[init] internal thread faulted: badge={:#x} label={}",
+                received.badge,
+                received.label
+            );
+            if let Some(thread) = logger.take() {
+                let _ = Task::from_tcb(thread.tcb).destroy_thread();
+                // Release the dead thread's per-thread caps and its fault cap
+                // so the rebuild can reuse both (docs/thread-group.md §4.3).
+                // SAFETY: the thread is terminated and nothing references its
+                // stack, IPC buffer or cap slots.
+                unsafe {
+                    thread.release();
+                    let _ = cnode.delete(LOGGER_FAULT_SLOT);
+                }
+            }
+            let logger_fault = rstiny::thread::FaultSupervision {
+                source: CONTROL_OBJ,
+                slot: LOGGER_FAULT_SLOT,
+                badge: INTERNAL_BADGE_BASE,
+            };
+            // SAFETY: as for the initial spawn.
+            let logger_entry = logger::run as fn(usize) -> !;
+            match unsafe {
+                group.spawn_thread(
+                    logger_entry as usize,
+                    CONSOLE_EP_OWN as u64,
+                    Some(logger_fault),
+                )
+            } {
+                Ok(thread) => {
+                    // A just-spawned logger has no Call in flight, so this
+                    // one reliable send is bounded by scheduling only — the
+                    // supervisor never waits on a service here.
+                    post_log_flags(true, 0, true, "[init] logger rebuilt", "logging recovered");
+                    logger = Some(thread);
+                    if drill_enabled {
+                        // Let the logger finish the verification write, then
+                        // hand the whole group back to userboot: the level-1
+                        // supervisor destroys it with a group destroy and
+                        // rebuilds init (docs/thread-group.md §7, G2 chained).
+                        for _ in 0..10_000 {
+                            let _ = rstiny::yield_now();
+                        }
+                        let _ = ipc::call(info.control_ep, control::EXIT, &[INIT_EXIT_DRILL_CODE]);
+                        loop {
+                            core::hint::spin_loop();
+                        }
+                    }
+                }
+                Err(_) => rstiny::debug_println!("[init] logger rebuild failed"),
+            }
+            continue;
+        }
         let Some(index) = (0..services.len()).position(|i| badge_for(i) == received.badge) else {
             continue;
         };
@@ -209,18 +333,34 @@ fn run(info: SpawnInfo) -> ! {
                 if services[index].cfg.name == CONSOLE {
                     console_running = true;
                 }
-                clog(console_running, CONSOLE_EP_OWN, "[init] service started", &services[index].cfg.name);
-                // Supervision drill (test builds only): a console write with
-                // the magic length faults the service so the restart path
-                // from §10 runs end to end.
-                if boot_test()
+                // Supervision drill (test builds only, first incarnation):
+                // the crash write rides the same log post, issued by the
+                // *client* thread, so the fault-receiving supervisor never
+                // blocks on the service it supervises (fault-handler.md §10).
+                // After the console restarts, the drill continues with a
+                // logger self-crash to exercise group-internal supervision
+                // (thread-group.md §4.3).
+                let mut flags = 0;
+                let drill = drill_enabled
                     && services[index].cfg.name == CONSOLE
-                    && services[index].restarts == 0
+                    && services[index].restarts == 0;
+                if drill {
+                    flags |= logger::FLAG_CRASH_DRILL;
+                } else if drill_enabled
+                    && services[index].cfg.name == CONSOLE
+                    && services[index].restarts == 1
+                    && !logger_drill_armed
                 {
-                    let mut drill_words = [0u64; 16];
-                    drill_words[0] = 0xCAFE_BABE;
-                    let _ = ipc::call(console_ep, console::WRITE, &drill_words[..1]);
+                    flags |= logger::FLAG_CRASH_SELF;
+                    logger_drill_armed = true;
                 }
+                post_log(
+                    console_running,
+                    flags,
+                    "[init] service started",
+                    &services[index].cfg.name,
+                );
+                drill_armed = drill;
             }
             control::REPORT if received.badge == badge_for(index) => {
                 let _ = ipc::reply(0, &[]);
@@ -230,8 +370,34 @@ fn run(info: SpawnInfo) -> ! {
             _ => {
                 let graceful = received.label == control::EXIT && received.word(0) == 0;
                 let crashed = matches!(received.label, 0..=4);
+                if services[index].cfg.name == CONSOLE {
+                    // The console is gone until it announces READY again;
+                    // logs fall back to the debug console in the meantime.
+                    console_running = false;
+                }
                 stop_and_reap(&mut services[index], graceful);
-                apply_policy(&info, &mut services, index, console_running, graceful, crashed);
+                if drill_armed {
+                    drill_armed = false;
+                    // The client thread publishes the drill outcome once its
+                    // Call returned; waiting on it here cannot deadlock — the
+                    // logger is not blocked on any service, and this thread
+                    // has already reaped the one that crashed.
+                    if logger::take_drill_result() == 1 {
+                        rstiny::debug_println!(
+                            "[init] client drill call failed as designed: the reaped service freed the call"
+                        );
+                    } else {
+                        rstiny::debug_println!("[init] client drill call unexpectedly succeeded");
+                    }
+                }
+                apply_policy(
+                    &info,
+                    &mut services,
+                    index,
+                    console_running,
+                    graceful,
+                    crashed,
+                );
             }
         }
     }
@@ -251,6 +417,18 @@ fn stop_and_reap(service: &mut ServiceState, graceful_exit: bool) {
     // task, and the derivation-subtree revoke resets the budget watermark.
     if let Some(task) = service.task.take() {
         let _ = task.destroy();
+        // The ordinary budget comes back through the allocator revoke above;
+        // device regions are shared with the supervisor's own copy, so the
+        // service's derivation must be revoked explicitly for the watermark
+        // to reset and the next instance to re-carve its frames (§8).
+        let cnode = CNode(CPtr(INIT_CNODE));
+        for (device_index, _) in service.cfg.devices.iter().enumerate() {
+            // SAFETY: the terminated service's copies are the only descendants
+            // and its task is already gone.
+            unsafe {
+                let _ = cnode.revoke(UART_DEV_OWN + device_index as u64);
+            }
+        }
         rstiny::debug_println!("[init] teardown done");
     }
 }
@@ -281,11 +459,20 @@ fn apply_policy(
     let within_budget = (service.restart_times.len() as u32) < service.cfg.max_restarts;
     if !allowed || !within_budget {
         // No restart: clean exits settle as Terminated, everything else Failed.
-        service.status = if failed_run { Status::Failed } else { Status::Terminated };
+        service.status = if failed_run {
+            Status::Failed
+        } else {
+            Status::Terminated
+        };
         if service.cfg.critical && failed_run {
             fail_reason(info, 30 + index as u64);
         }
-        clog(console_running, CONSOLE_EP_OWN, "[init] service stopped", &service.cfg.name);
+        post_log(
+            console_running,
+            0,
+            "[init] service stopped",
+            &service.cfg.name,
+        );
         return;
     }
     // Backoff grows with the consecutive restart count.
@@ -302,18 +489,18 @@ fn apply_policy(
     service.restart_times.push(now);
     service.status = Status::Waiting; // dependencies may need rechecking
     if console_running {
-        clog(true, CONSOLE_EP_OWN, "[init] service restart scheduled", &service.cfg.name);
+        post_log(
+            true,
+            0,
+            "[init] service restart scheduled",
+            &service.cfg.name,
+        );
     }
 }
 
 /// Spawn one service: budget, endpoints, devices, console client cap and the
 /// ELF from ROM, all before its first instruction.
-fn spawn_service(
-    services: &mut Vec<ServiceState>,
-    index: usize,
-    console_ep: u64,
-    rom: &[u8],
-) {
+fn spawn_service(services: &mut Vec<ServiceState>, index: usize, console_ep: u64, rom: &[u8]) {
     let Some(elf) = find_module(rom, &services[index].cfg.elf) else {
         services[index].status = Status::Failed;
         return;
@@ -343,12 +530,36 @@ fn spawn_service(
     // Per-service fixed child caps: control, console client, budget, ASID
     // pool, then the service's devices.
     let (budget_slot, badge) = (service.budget_slot, badge_for(index));
-    let mut caps =
-        [ChildCap { slot: 0, source: 0, rights: 0, badge: 0 }; 4 + DEVICE_NAMES.len()];
-    caps[0] = ChildCap { slot: 140, source: CONTROL_OBJ, rights: RIGHTS_ALL, badge };
-    caps[1] = ChildCap { slot: 51, source: console_ep, rights: RIGHTS_ALL, badge: 0 };
-    caps[2] = ChildCap { slot: 32, source: budget_slot, rights: RIGHTS_ALL, badge: 0 };
-    caps[3] = ChildCap { slot: 6, source: INIT_ASID_POOL, rights: RIGHTS_ALL, badge: 0 };
+    let mut caps = [ChildCap {
+        slot: 0,
+        source: 0,
+        rights: 0,
+        badge: 0,
+    }; 4 + DEVICE_NAMES.len()];
+    caps[0] = ChildCap {
+        slot: 140,
+        source: CONTROL_OBJ,
+        rights: RIGHTS_ALL,
+        badge,
+    };
+    caps[1] = ChildCap {
+        slot: 51,
+        source: console_ep,
+        rights: RIGHTS_ALL,
+        badge: 0,
+    };
+    caps[2] = ChildCap {
+        slot: 32,
+        source: budget_slot,
+        rights: RIGHTS_ALL,
+        badge: 0,
+    };
+    caps[3] = ChildCap {
+        slot: 6,
+        source: INIT_ASID_POOL,
+        rights: RIGHTS_ALL,
+        badge: 0,
+    };
     for (device_index, _) in service.cfg.devices.iter().enumerate() {
         caps[4 + device_index] = ChildCap {
             slot: 33 + device_index as u64,
@@ -446,27 +657,42 @@ fn clock_ms() -> u64 {
     rstiny::clock_milliseconds().unwrap_or(0)
 }
 
-/// Best-effort log through the console protocol (§12); falls back to the
-/// kernel debug console before the console service is Running.
-fn clog(via_console: bool, console_ep: u64, prefix: &str, name: &str) {
-    let mut buffer = [0u8; 128];
+/// Post a log line to the client thread: an asynchronous `NBSend`, best
+/// effort, with the payload carried in the message registers so the two
+/// threads share no mutable memory (docs/fault-handler.md §6.1). The line is
+/// dropped when the logger is busy: the supervisor must never wait on the
+/// client thread — a fault arriving while it cannot receive would deadlock
+/// the whole group (the very §1 loop this structure removes).
+fn post_log(via_console: bool, extra_flags: u64, prefix: &str, name: &str) {
+    post_log_flags(via_console, extra_flags, false, prefix, name);
+}
+
+/// `reliable` blocks in `Send` until the logger takes the request. Only valid
+/// right after a (re)spawn, when the logger provably has no service `Call` in
+/// flight — otherwise the supervisor could miss a fault delivery while it
+/// waits.
+fn post_log_flags(via_console: bool, extra_flags: u64, reliable: bool, prefix: &str, name: &str) {
+    let mut buffer = [0u8; logger::MAX_LINE];
     let used = {
-        let mut writer = LineWriter { buffer: &mut buffer, used: 0 };
+        let mut writer = LineWriter {
+            buffer: &mut buffer,
+            used: 0,
+        };
         let _ = writer.write_str(prefix);
         let _ = writer.write_str(": ");
         let _ = writer.write_str(name);
         writer.used
     };
-    let bytes = &buffer[..used];
-    if via_console && console_ep != 0 {
-        let mut words = [0u64; 16];
-        words[0] = bytes.len() as u64;
-        for (index, byte) in bytes.iter().enumerate() {
-            words[1 + index / 8] |= (*byte as u64) << (8 * (index % 8));
-        }
-        let _ = ipc::call(console_ep, console::WRITE, &words[..1 + bytes.len().div_ceil(8)]);
+    let mut flags = extra_flags;
+    if via_console && CONSOLE_EP_OWN != 0 {
+        flags |= logger::FLAG_CONSOLE;
+    }
+    let mut words = [0u64; 16];
+    let length = logger::pack(&buffer[..used], flags, &mut words);
+    if reliable {
+        let _ = ipc::send(logger::LOG_EP, logger::POST, &words[..length]);
     } else {
-        rstiny::debug_println!("[init] {} {}", prefix, name);
+        let _ = ipc::nbsend(logger::LOG_EP, logger::POST, &words[..length]);
     }
 }
 

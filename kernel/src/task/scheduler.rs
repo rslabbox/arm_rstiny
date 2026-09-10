@@ -117,6 +117,12 @@ impl Task {
     fn terminal(&self) -> bool {
         matches!(self.state, TASK_EXITED | TASK_FAULTED)
     }
+    /// A thread whose bindings still count as collection roots: any slot that
+    /// has not terminated. Terminal threads keep their `cspace`/`vspace`
+    /// fields for the destroy path, but no longer keep objects alive.
+    fn rooted(&self) -> bool {
+        self.id != 0 && !matches!(self.state, TASK_EXITED | TASK_FAULTED)
+    }
     /// Blocked on a wait queue: an endpoint or notification holds this task.
     fn queued(&self) -> bool {
         matches!(self.state, TASK_BLOCKED_SEND | TASK_BLOCKED_RECV)
@@ -192,16 +198,23 @@ impl Scheduler {
         let task = &mut self.tasks[slot];
         task.state = if fault { TASK_FAULTED } else { TASK_EXITED };
         task.result = result;
+        let id = task.id;
+        // A thread only retires itself: the Execution/kernel stack dies here,
+        // while a shared CSpace/VSpace survives for its sibling threads and is
+        // reclaimed by collection once the last reference disappears. The
+        // binding fields stay (terminal threads are excluded from the
+        // collection roots) so a later destroy can still release exactly this
+        // thread's objects.
+        let cspace = task.cspace;
         task.root = 0;
         task.execution = None;
-        task.vspace = None; // We already switched back to the kernel's page table.
-        let id = task.id;
+        // We already switched back to the kernel's page table.
         // A partner blocked on this task's reply (or a faulted thread waiting
         // for its supervisor, whose supervisor is now gone) must not hang:
         // completion `Some(0)` makes the blocked continuation fail its call.
         let waiting = task.caller.take().map(Caller::task);
         task.blocked = None;
-        crate::object::retire_task(id);
+        crate::object::retire_thread(id, cspace);
         let root_id = if self.tasks[0].terminal() {
             0
         } else {

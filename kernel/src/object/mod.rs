@@ -114,10 +114,12 @@ impl CNode {
     }
 }
 
-/// VSpace payload: the address space plus its binding metadata. The address
-/// space references page frames by identity; it never owns them.
+/// VSpace payload: the address space plus its ASID binding. The address space
+/// references page frames by identity; it never owns them. A VSpace is not
+/// tied to one thread: any number of TCBs (a thread group) may reference the
+/// same object, and collection keeps it alive until the last TCB or
+/// capability reference disappears.
 pub(crate) struct VSpace {
-    owner: u64,
     assigned: bool,
     space: Option<AddressSpace>,
 }
@@ -154,7 +156,6 @@ impl Object {
 pub(crate) struct Store {
     objects: ObjectTable,
     parents: BTreeMap<u64, u64>,
-    task_spaces: BTreeMap<u64, ObjectId>,
     managed: BTreeSet<u64>,
     next_serial: u64,
     caps: usize,
@@ -169,7 +170,6 @@ pub(crate) struct Store {
 static STORE: SingleCore<Store> = SingleCore::new(Store {
     objects: ObjectTable::new(),
     parents: BTreeMap::new(),
-    task_spaces: BTreeMap::new(),
     managed: BTreeSet::new(),
     next_serial: 1,
     caps: 0,
@@ -409,7 +409,7 @@ impl Store {
         let frame = Frame::take_boot(physical).map_err(|e| e as u64)?;
         self.insert_page(frame, false)
     }
-    fn new_vspace(&mut self, owner: u64, untyped: Option<ObjectId>) -> Result<ObjectId> {
+    fn new_vspace(&mut self, untyped: Option<ObjectId>) -> Result<ObjectId> {
         let root = self.new_frame(untyped, false)?;
         let l1 = match self.new_frame(untyped, false) {
             Ok(frame) => frame,
@@ -435,7 +435,6 @@ impl Store {
         self.objects
             .insert_owned(
                 Object::VSpace(VSpace {
-                    owner,
                     assigned: false,
                     space: Some(space),
                 }),
@@ -666,19 +665,18 @@ pub(crate) fn vspace_frame_at(id: ObjectId, va: usize) -> Result<FrameRef> {
     with_store(|store| store.vspace(id)?.frame_at(va).map_err(|e| e as u64))
 }
 
-/// Create a standalone VSpace object owned by `owner` (0 = unbound). The caller
-/// must bind it to a capability or task before collection runs.
-pub(crate) fn create_vspace(owner: u64) -> Result<ObjectId> {
+/// Create a standalone VSpace object. The caller must bind it to a capability
+/// or thread before collection runs.
+pub(crate) fn create_vspace() -> Result<ObjectId> {
     with_store(|store| {
         let untyped = store.managed_untyped;
-        store.new_vspace(owner, untyped)
+        store.new_vspace(untyped)
     })
 }
 
 pub(crate) fn init_root(task: u64, vspace: ObjectId, ipc: usize, untyped_start: u64) -> ObjectId {
     with_store(|store| {
         if let Some(Object::VSpace(v)) = store.objects.get_mut(vspace) {
-            v.owner = task;
             v.assigned = true;
         }
         let tcb = store.objects.insert(Object::Tcb(task)).expect("root TCB");
@@ -743,7 +741,6 @@ pub(crate) fn init_root(task: u64, vspace: ObjectId, ipc: usize, untyped_start: 
         // The largest ordinary region also backs the transitional managed
         // runtime, so its allocations are billed like any other Untyped use.
         store.managed_untyped = managed.map(|(id, _)| id);
-        store.task_spaces.insert(task, cnode);
         store.managed.insert(task);
         cnode
     })
@@ -763,9 +760,6 @@ pub(crate) fn publish_task(task: u64, vspace: ObjectId, ipc: usize) -> Result<u6
         }
         let slot = store.empty_slot(parent)?;
         let runtime = store.cap(parent, INIT_RUNTIME)?;
-        if let Some(Object::VSpace(v)) = store.objects.get_mut(vspace) {
-            v.owner = task;
-        }
         let tcb = store.objects.insert(Object::Tcb(task)).ok_or(NO_MEMORY)?;
         let cnode = store
             .objects
@@ -792,7 +786,6 @@ pub(crate) fn publish_task(task: u64, vspace: ObjectId, ipc: usize) -> Result<u6
             .map_err(|e| e as u64)?
             .id();
         store.insert_cap(cnode, INIT_IPC_BUFFER, page, RIGHTS_ALL, 0, 0)?;
-        store.task_spaces.insert(task, cnode);
         store.managed.insert(task);
         Ok::<_, u64>((slot, cnode))
     })?;
@@ -800,35 +793,35 @@ pub(crate) fn publish_task(task: u64, vspace: ObjectId, ipc: usize) -> Result<u6
     Ok(slot)
 }
 
-/// Managed runtime policy releases a terminated task's private address space.
-/// Explicit frame capabilities retain their independent ownership until their
-/// own collection point.
-pub(crate) fn retire_task(task: u64) {
+/// Thread retirement. Only the thread's own execution state dies with it (the
+/// scheduler drops the `Execution`/kernel stack before calling this); the
+/// CSpace and VSpace it referenced stay reachable for sibling threads and
+/// capabilities, and collection reclaims them after the last reference
+/// disappears (docs/fault-handler.md §3.3, §8). Managed tasks additionally
+/// release the runtime-installed IPC buffer capability from their CSpace.
+pub(crate) fn retire_thread(task: u64, cspace: Option<ObjectId>) {
     with_store(|store| {
         if !store.managed.contains(&task) {
             return;
         }
-        log::info!("DBG retire_task strips task={:#x}", task);
-        if let Some(cspace) = store.task_spaces.get(&task).copied() {
+        log::info!("DBG retire_thread strips task={:#x}", task);
+        if let Some(cspace) = cspace {
             store.remove_cap(cspace, INIT_IPC_BUFFER);
-        }
-        for id in store.objects.ids() {
-            if let Some(Object::VSpace(vspace)) = store.objects.get_mut(id)
-                && vspace.owner == task
-            {
-                vspace.owner = 0;
-                vspace.space = None;
-            }
         }
     });
     request_collect();
 }
 
-pub(crate) fn forget_task(task: u64) {
+/// Release a destroyed thread's CSpace binding. `shared` must be computed by
+/// the caller (which holds the scheduler borrow): `true` when another live
+/// thread references the same CSpace. A thread group shares one CSpace, and
+/// destroying one member must not leave its siblings with a dangling identity
+/// (docs/thread-group.md §2.4).
+pub(crate) fn forget_task(task: u64, cspace: Option<ObjectId>, shared: bool) {
     with_store(|store| {
-        let cspace = store.task_spaces.remove(&task);
         if store.managed.remove(&task)
             && let Some(cspace) = cspace
+            && !shared
         {
             store.objects.remove(cspace);
         }
@@ -836,16 +829,21 @@ pub(crate) fn forget_task(task: u64) {
     request_collect();
 }
 
-/// Destroy the object payloads a terminated task owned. Used by the explicit
-/// runtime policy, which owns standard TCBs as well as managed ones.
-pub(crate) fn release_task_objects(task: u64) {
+/// Destroy the object payloads a terminated thread owned. Used by the explicit
+/// runtime policy, which owns standard TCBs as well as managed ones. A VSpace
+/// still referenced by a surviving thread — a thread-group sibling — is left
+/// in place; the thread itself is fully retired.
+pub(crate) fn release_task_objects(task: u64, vspace: Option<ObjectId>) {
+    // After `api::destroy` the target no longer references anything, so any
+    // remaining thread root naming `vspace` belongs to a surviving sibling.
+    let shared = vspace.is_some_and(|id| api::thread_roots().contains(&id));
     with_store(|store| {
         let ids: Vec<ObjectId> = store
             .objects
             .iter()
             .filter_map(|(id, object)| match object {
                 Object::Tcb(owner) if *owner == task => Some(id),
-                Object::VSpace(vspace) if vspace.owner == task => Some(id),
+                Object::VSpace(_) if !shared && vspace.is_some_and(|v| v == id) => Some(id),
                 _ => None,
             })
             .collect();
@@ -871,7 +869,6 @@ pub(crate) fn release_task_objects(task: u64) {
     request_collect();
 }
 
-/// Mark-and-sweep collection. Roots are capabilities, managed CSpaces and live
 /// Collection is demand-driven: releasing references marks the store dirty and
 /// the next safe boundary sweeps unreachable objects. This keeps the bounded
 /// but non-trivial mark-and-sweep cost off the syscall fast path.
@@ -896,13 +893,14 @@ pub(crate) fn collect_if_requested() {
     }
 }
 
-/// Mark-and-sweep collection. Roots are capabilities, managed CSpaces and live
-/// task bindings; an address space keeps its mapped frames reachable. Dead
-/// objects are removed in waves, which frees frames only after their last
-/// reference disappears.
+/// Mark-and-sweep collection. Roots are capabilities plus the CSpace/VSpace
+/// referenced by scheduler threads (a thread group keeps its shared objects
+/// alive while any member, or any capability, survives); an address space
+/// keeps its mapped frames reachable. Dead objects are removed in waves, which
+/// frees frames only after their last reference disappears.
 pub(crate) fn collect() {
     loop {
-        let vspaces = api::vspace_roots();
+        let thread_roots = api::thread_roots();
         let (tasks, changed) = with_store(|store| {
             let mut live = BTreeSet::new();
             for (_, object) in store.objects.iter() {
@@ -912,11 +910,8 @@ pub(crate) fn collect() {
                     }
                 }
             }
-            for cspace in store.task_spaces.values() {
-                live.insert(*cspace);
-            }
-            for vspace in vspaces.iter().copied() {
-                live.insert(vspace);
+            for id in thread_roots.iter().copied() {
+                live.insert(id);
             }
             let mut queue: Vec<ObjectId> = live.iter().copied().collect();
             while let Some(id) = queue.pop() {
@@ -1043,7 +1038,7 @@ pub(crate) fn available_untyped() -> usize {
 }
 
 pub(crate) fn boot_vspace() -> Result<ObjectId> {
-    with_store(|store| store.new_vspace(0, None))
+    with_store(|store| store.new_vspace(None))
 }
 pub(crate) fn boot_map_loaded(
     vspace: ObjectId,

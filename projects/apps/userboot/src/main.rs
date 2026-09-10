@@ -118,6 +118,9 @@ fn main(info: &mut BootInfo) -> ! {
                 extra[1] = INIT_DEV_SLOT;
                 extra[3] = device_count as u64;
                 extra[4] = u64::from(boot_test());
+                // Restart generation: test drills only run in the first
+                // incarnation (docs/thread-group.md §7).
+                extra[5] = u64::from(restarts);
                 extra
             },
         };
@@ -219,6 +222,11 @@ fn main(info: &mut BootInfo) -> ! {
         // SAFETY: init's derivation subtree was already revoked by destroy().
         unsafe {
             let _ = cnode.revoke(INIT_BUDGET_OBJ);
+            // The device region is shared with userboot's own copy and is not
+            // covered by init's budget revoke: without this the restarted
+            // console cannot re-carve its UART frame.
+            // SAFETY: init's device derivation subtree is already dead.
+            let _ = cnode.revoke(UART_DEV_COPY);
         }
     }
 }

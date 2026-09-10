@@ -76,6 +76,7 @@ check:
 	python3 tools/check_bootloader.py --qemu $(QEMU)
 	python3 tools/check_kernel.py --qemu $(QEMU)
 	python3 tools/check_userboot.py --qemu $(QEMU)
+	BOOT_TEST=1 python3 tools/check_fault_handler.py --qemu $(QEMU)
 	python3 tools/check_capabilities.py --qemu $(QEMU)
 	python3 tools/check_untyped.py --qemu $(QEMU)
 	python3 tools/check_ipc.py --qemu $(QEMU)
