@@ -12,9 +12,9 @@ use rstiny_protocol::console;
 
 /// Supervisor→logger endpoint slot in init's shared CSpace.
 pub const LOG_EP: u64 = 143;
-/// Internal logger label. Fault labels own 0..=4 and the control protocol owns
-/// 0x100..=0x106 (docs/service-manager.md §10, decision 14).
-pub const POST: u64 = 0x110;
+/// Internal logger label, in its own protocol segment
+/// (`rstiny_protocol::internal`, docs/service-manager.md decision 14).
+pub use rstiny_protocol::internal::POST;
 /// Deliver the line through the console service instead of the debug console.
 pub const FLAG_CONSOLE: u64 = 1;
 /// Perform the supervision-drill crash write after the line is delivered.

@@ -200,26 +200,26 @@ boot 分区把这些 MMIO 区间作为**设备 Untyped** 发布（当前只发�
 
 ## 8. 协议
 
-沿用 [service-manager.md](service-manager.md) 的 label 约定：fault 占 `0..=4`，协议 label ≥ `0x100`。数据不塞消息寄存器，走共享 Frame；IPC 只传描述。
+沿用 [service-manager.md](service-manager.md) 的 label 约定：fault 占 `0..=4`，每个用户协议占一个 256 宽的独立段（block `0x400`、fs `0x500`；control `0x200`、console `0x100`、internal `0x300`）。数据不塞消息寄存器，走共享 Frame；IPC 只传描述。
 
 ### 8.1 Block 协议（`block_ep`）
 
 | label | 方向 | 参数 | 返回 |
 | --- | --- | --- | --- |
-| `BIND` = 0x100 | client → server | 一个可写 Frame cap（共享缓冲） | `max_sectors` |
-| `READ` = 0x101 | client → server | `lba`、`sectors` | 状态 |
-| `CAPACITY` = 0x102 | client → server | 无 | 扇区总数 |
-| `INFO` = 0x103 | client → server | 无 | `sector_size`、`max_sectors` |
+| `BIND` = 0x400 | client → server | 一个可写 Frame cap（共享缓冲） | `max_sectors` |
+| `READ` = 0x401 | client → server | `lba`、`sectors` | 状态 |
+| `CAPACITY` = 0x402 | client → server | 无 | 扇区总数 |
+| `INFO` = 0x403 | client → server | 无 | `sector_size`、`max_sectors` |
 
 ### 8.2 FS 协议（`fs_ep`）
 
 | label | 方向 | 参数 | 返回 |
 | --- | --- | --- | --- |
-| `BIND` = 0x100 | client → server | 共享缓冲 Frame cap | `max_bytes` |
-| `OPEN` = 0x101 | client → server | 8.3 短名（打包进 2 个 MR） | `file_id`、`size` |
-| `READ` = 0x102 | client → server | `file_id`、`offset`、`length` | 实际读取字节数 |
-| `CLOSE` = 0x103 | client → server | `file_id` | 状态 |
-| `STAT` = 0x104 | client → server | 短名 | `size`、`is_dir` |
+| `BIND` = 0x500 | client → server | 共享缓冲 Frame cap | `max_bytes` |
+| `OPEN` = 0x501 | client → server | 8.3 短名（打包进 2 个 MR） | `file_id`、`size` |
+| `READ` = 0x502 | client → server | `file_id`、`offset`、`length` | 实际读取字节数 |
+| `CLOSE` = 0x503 | client → server | `file_id` | 状态 |
+| `STAT` = 0x504 | client → server | 短名 | `size`、`is_dir` |
 
 ## 9. 共享内存、DMA 与安全边界
 

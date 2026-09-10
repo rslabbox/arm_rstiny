@@ -382,9 +382,13 @@ fn main(argument: Argument) -> ! {
                 logln!(service, "[fs] dependency lost; exiting");
                 service.exit(9);
             }
-            // control::STOP shares label 0x104 with fs::STAT on this
-            // endpoint; v1 supervisors reap without a handshake (the
-            // DEPENDENCY_LOST path above covers graceful rebuilds).
+            control::STOP => {
+                // Graceful stop. `control` and `fs` are disjoint label
+                // segments, so this arm is reachable (previously shadowed by
+                // `fs::STAT` when both were 0x104).
+                let _ = ipc::reply(control::STOP_ACK, &[]);
+                service.exit(0);
+            }
             _ => {
                 let _ = ipc::reply(status::ERROR, &[]);
             }

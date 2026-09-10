@@ -90,7 +90,7 @@ debug: build
 
 check:
 	cargo test -p bootloader --no-default-features --test images --target $(HOST_TARGET)
-	cargo test -p kernel-abi -p rstiny-runtime-macros -p rstiny-elf -p rstiny-newc --target $(HOST_TARGET)
+	cargo test -p kernel-abi -p rstiny-runtime-macros -p rstiny-elf -p rstiny-newc -p rstiny-protocol --target $(HOST_TARGET)
 	python3 -m unittest discover -s tools -p 'test_*.py'
 	python3 tools/check_bootloader.py --qemu $(QEMU)
 	python3 tools/check_kernel.py --qemu $(QEMU)

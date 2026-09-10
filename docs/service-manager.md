@@ -287,7 +287,7 @@ NBRecv:     有发送者才接收，否则立即返回 badge=0、length=0。
 - badge 交付在 x0（seL4 AArch64 badge 寄存器约定）；接收者的 x1 为接收 tag：`label = 发送者 label`、`extraCaps = 实收 cap 数`、`capsUnwrapped = 0`、`length = 发送 length`。
 - 两个任务都必须有已配置的 IPC buffer（`Task.ipc_buffer` 非 0 且映射有效）才允许 `length > 4` 或带 cap 的消息；纯寄存器消息不要求 buffer。
 - 跨地址空间复制用现成原语：`AddressSpace::read/write`（`memory/space.rs`，`Runtime::ReadMemory/WriteMemory` 同路径），每次 ≤ 1024 字节并做边界检查。
-- **协议 label 空间**：seL4 中 fault 消息与普通消息共用 MessageInfo.label。fault 占用 label 0..=4（见 7.7），因此所有用户协议 label 从 `0x100` 起。原提纲中 `READY = 1` 与 `CapFault = 1` 冲突，在此修正。
+- **协议 label 空间**：seL4 中 fault 消息与普通消息共用 MessageInfo.label，且内核按对象类型分配连续 invocation label 段。这里照搬该纪律：fault 占用 `0..=4`（见 7.7），每个用户协议占一个 256 宽的段（console `0x100`、control `0x200`、internal `0x300`、block `0x400`、fs `0x500`），内核 Runtime 扩展占 `0x1000` 段。段之间不得重叠——否则同端点处理两个协议时会互相遮蔽（原提纲 `READY = 1` 与 `CapFault = 1`、以及 fs `STAT` 与 control `STOP` 都属这类冲突）。`projects/libs/protocol` 用编译期断言加宿主测试 `tests/segments.rs` 守住。
 
 ### 7.5 cap 传递
 
@@ -425,14 +425,16 @@ service appmgr {
 
 | label | 方向 | 语义 | MR |
 | --- | --- | --- | --- |
-| `0x100 READY` | service → init | 启动完成 | 无 |
-| `0x101 REPORT` | service → init | 状态/指标 | mr0 = status code，mr1.. 自定义 |
-| `0x102 EXIT` | service → init | 正常退出 | mr0 = exit code |
-| `0x103 STOP_ACK` | service → init | 停止握手确认（`Reply` 回执） | 无 |
-| `0x104 STOP` | init → service | 请求优雅停止 | mr0 = 超时 ms |
-| `0x105 PING` | init → service | 健康检查 | 无 |
-| `0x106 DEPENDENCY_LOST` | init → service | 依赖者失效，自行退出或降级 | mr0 = 依赖服务 badge |
+| `0x200 READY` | service → init | 启动完成 | 无 |
+| `0x201 REPORT` | service → init | 状态/指标 | mr0 = status code，mr1.. 自定义 |
+| `0x202 EXIT` | service → init | 正常退出 | mr0 = exit code |
+| `0x203 STOP_ACK` | service → init | 停止握手确认（`Reply` 回执） | 无 |
+| `0x204 STOP` | init → service | 请求优雅停止 | mr0 = 超时 ms |
+| `0x205 PING` | init → service | 健康检查 | 无 |
+| `0x206 DEPENDENCY_LOST` | init → service | 依赖者失效，自行退出或降级 | mr0 = 依赖服务 badge |
 | `0..=4` | kernel → init | fault 消息（7.7） | 按 fault 类型 |
+
+`control` 独占 `0x200` 段；console/block/fs 各自的段见 [disk-driver.md](disk-driver.md) §8 与 `projects/libs/protocol`。同端点收到两个协议时不再互相遮蔽。
 
 - service 侧：`Call(control_ep, READY)`，init `Reply` 确认；`REPORT`/`EXIT` 同理。
 - init 侧：`ReplyRecv(control_ep)` 同时收 report 和 fault，靠 label 区分、badge 识别来源（badge 0 不可能出现：badge 从 1 分配）。
@@ -698,7 +700,7 @@ appmgr 用 `FS_OPEN/FS_READ` 读应用 ELF 到自己授予的共享 Frame，再�
 | 11 | 设备 Untyped 切分 | 不允许；设备区间整段授予驱动 |
 | 12 | 时间源 | 阶段 F 前保留 `Runtime::Clock/Sleep/Exit` 作为用户态时间/退出通道，之后随 IRQ Notification 退役 |
 | 13 | Reply 语义 | 隐式一次性 reply 关系（seL4 non-MCS caller 语义的简化），不引入可转移 reply cap |
-| 14 | 协议 label 空间 | 用户协议 label 从 0x100 起，0..=4 保留给 fault（与 seL4 共用 label 空间的事实一致） |
+| 14 | 协议 label 空间 | 0..=4 归 fault；每个用户协议一个 256 宽段（console 0x100/control 0x200/internal 0x300/block 0x400/fs 0x500），Runtime 扩展 0x1000 段；照搬 seL4 按对象类型分连续 invocation label 段的纪律。编译期断言加宿主测试守不重叠 |
 
 
 ## 24. 实施记录（阶段 A–C）
@@ -713,7 +715,7 @@ appmgr 用 `FS_OPEN/FS_READ` 读应用 ELF 到自己授予的共享 Frame，再�
 
 实施中确立的语义（与原稿的差异已回写正文）：
 
-- 协议 label 从 0x100 起（0..=4 归 fault，决策 14）。
+- 协议 label 按 seL4 每个对象/协议一个连续段的纪律划分：fault `0..=4`，用户协议各占一段（决策 14）；宿主测试 `projects/libs/protocol/tests/segments.rs` 断言段不重叠。
 - `Mint` badge 遵循 seL4：仅未 badged 源可烙；badged 源派生直接报错（决策回写 §6.4）。
 - Call 发送方保持 parked 直到 reply（无中间唤醒），避免调度改写阻塞态（§7.3）。
 - 归还队列条目惰性剪枝；`Task::destroy` 先 `Runtime::Destroy` 收尾调度任务再 revoke 子树，保证 slot 释放与对象回收（§14.1）。
