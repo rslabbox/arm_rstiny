@@ -16,7 +16,7 @@ const INIT_BUDGET_OBJ: u64 = 160; // init's Untyped budget carved from our pool
 const UART_DEV_COPY: u64 = 161; // UART device Untyped copy for init
 const INIT_CONTROL_SLOT: u64 = 140; // init's control endpoint slot
 const INIT_BUDGET_SLOT: u64 = 32; // init's budget slot in its own CSpace
-const INIT_UART_SLOT: u64 = 161; // init's UART device slot in its CSpace
+const INIT_DEV_SLOT: u64 = 161; // init's first device Untyped slot in its CSpace
 const INIT_ASID_SLOT: u64 = 6; // init's ASID pool slot (the standard slot)
 const INIT_ROM_FIRST: u64 = 200; // init's ROM Frame caps (clear of 161)
 const ROM_GRANT_MAX: usize = 512; // ROM pages granted to init (covers the whole archive)
@@ -24,6 +24,10 @@ const ROM_GRANT_MAX: usize = 512; // ROM pages granted to init (covers the whole
 const INIT_ELF: &str = "init.elf";
 const SERVICE_BADGE: u64 = 1;
 const MAX_INIT_RESTARTS: u32 = 5;
+/// Device Untyped copies handed to init (there is exactly one: the UART).
+fn boot_test() -> bool {
+    option_env!("BOOT_TEST").is_some_and(|value| value == "1")
+}
 
 #[entry(stack_size = 64 * 1024)]
 fn main(info: &mut BootInfo) -> ! {
@@ -39,11 +43,17 @@ fn main(info: &mut BootInfo) -> ! {
     let Some(init_elf) = find_module(&rom, INIT_ELF) else {
         root_failed();
     };
-    // The UART device Untyped: the one device region in the boot partition.
     let scratch = info.first_free_address();
-
-    // The UART device Untyped: the one device region in the boot partition.
-    let Some(uart_slot) = info
+    // Device Untyped copies for init: the boot partition has exactly one
+    // device region (the UART) today.
+    let device_count = info.untyped().iter().filter(|d| d.is_device != 0).count();
+    let first_device = info
+        .untyped()
+        .iter()
+        .position(|d| d.is_device != 0)
+        .map(|index| info.untyped_start() + index as u64)
+        .unwrap_or(0);
+    let Some(_uart_slot) = info
         .untyped()
         .iter()
         .position(|descriptor| descriptor.is_device != 0)
@@ -63,7 +73,7 @@ fn main(info: &mut BootInfo) -> ! {
     // Grant the UART device Untyped itself so the console driver can retype
     // its MMIO frame (the device region is passed through, never retyped).
     if cnode
-        .copy(UART_DEV_COPY, CPtr(INIT_CNODE), uart_slot, RIGHTS_ALL)
+        .copy(UART_DEV_COPY, CPtr(INIT_CNODE), first_device, RIGHTS_ALL)
         .is_err()
     {
         rstiny::debug_println!("[userboot] uart device copy failed");
@@ -105,7 +115,9 @@ fn main(info: &mut BootInfo) -> ! {
             rom_count: rom.frame_count.min(ROM_GRANT_MAX as u64),
             extra: {
                 let mut extra = [0; 8];
-                extra[1] = INIT_UART_SLOT;
+                extra[1] = INIT_DEV_SLOT;
+                extra[3] = device_count as u64;
+                extra[4] = u64::from(boot_test());
                 extra
             },
         };
@@ -135,7 +147,7 @@ fn main(info: &mut BootInfo) -> ! {
             badge: 0,
         };
         caps[2] = ChildCap {
-            slot: INIT_UART_SLOT,
+            slot: INIT_DEV_SLOT,
             source: UART_DEV_COPY,
             rights: RIGHTS_ALL,
             badge: 0,
@@ -192,7 +204,6 @@ fn main(info: &mut BootInfo) -> ! {
                         control::EXIT | 0..=4 => break,
                         _ => {}
                     }
-                    break;
                 }
                 let _ = task.destroy();
             }
@@ -263,11 +274,6 @@ fn map_rom(
         bytes,
         frame_count: modules.frame_count,
     })
-}
-
-fn init_elf_entry(image: &[u8]) -> usize {
-    use rstiny_elf::Elf;
-    Elf::parse(image).map(|elf| elf.entry()).unwrap_or(0)
 }
 
 fn find_module<'a>(rom: &Rom<'a>, name: &str) -> Option<&'a [u8]> {

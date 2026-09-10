@@ -1,6 +1,6 @@
 #![no_std]
 #![no_main]
-use rstiny_protocol::{Argument, console};
+use rstiny_protocol::{Argument, console, control};
 use rstiny_runtime::entry;
 use rstiny_server::Service;
 
@@ -71,15 +71,11 @@ fn main(argument: Argument) -> ! {
     let cnode = CNode(CPtr(rstiny::capability::INIT_CNODE));
     let page_slot = 40u64;
     let table_slot = 41u64;
-    let budget = service
-        .extra
-        .get(UART_UNTYPED_SLOT + 1)
-        .copied()
-        .unwrap_or(0);
     Untyped(CPtr(untyped))
         .retype(ObjectType::SmallPage, 0, cnode.0, page_slot, 1)
         .unwrap();
-    Untyped(CPtr(budget))
+    // The covering L3 comes from the service's own budget (slot 32).
+    Untyped(CPtr(rstiny::capability::INIT_UNTYPED))
         .retype(ObjectType::PageTable, 0, cnode.0, table_slot, 1)
         .unwrap();
     unsafe {
@@ -139,6 +135,13 @@ fn main(argument: Argument) -> ! {
             }
             console::BIND => {
                 let _ = rstiny::ipc::reply(0, &[1, console::MAX_WRITE as u64]);
+            }
+            control::STOP => {
+                // Graceful stop: flush, acknowledge, exit. The supervisor
+                // tears the task down if the ack never arrives.
+                flush(CONSOLE_VA);
+                let _ = rstiny::ipc::reply(control::STOP_ACK, &[]);
+                service.exit(0);
             }
             _ => {
                 let _ = rstiny::ipc::reply(1, &[]);

@@ -606,6 +606,8 @@ appmgr 用 `FS_OPEN/FS_READ` 读应用 ELF 到自己授予的共享 Frame，再�
 | B | `fatboot → userboot`；bootloader 透传 archive + x6/x7；userboot 从 archive 起 init；init 空转并 READY；userboot 监督 init | A |
 | C | init 从 ROM 起 `console_server`；report；杀 console → init 重启 → console 恢复 | B |
 | D | `block_server` + `fs_server` + `appmgr`；加磁盘；应用从 fs 加载 | C |
+
+阶段 D 的磁盘分层、VirtIO MMIO 驱动、FAT32 解析、共享内存与验收见 [磁盘与 FAT32 用户态驱动设计](disk-driver.md)。
 | E | 删除内核 `Runtime` 托管标签 / `managed_untyped` / `collect` 降级；userboot 变纯 monitor | D |
 | F | report 服务化、依赖重启、backoff、restart storm guard、STOP 全面接入、优先级/IRQ Notification 候选项 | E |
 

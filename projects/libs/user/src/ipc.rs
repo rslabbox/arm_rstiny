@@ -55,7 +55,7 @@ fn marshal(words: &[u64], caps: &[u64]) -> Result<(), Error> {
     Ok(())
 }
 
-fn unmarshal(badge: u64, tag: u64) -> Received {
+fn unmarshal(badge: u64, tag: u64, registers: [u64; 4]) -> Received {
     let info = abi::MessageInfo::from_word(tag);
     let mut received = Received {
         badge,
@@ -63,6 +63,7 @@ fn unmarshal(badge: u64, tag: u64) -> Received {
         length: info.length().min(MAX_WORDS),
         words: [0; MAX_WORDS],
     };
+    received.words[..4].copy_from_slice(&registers);
     if received.length > 4 {
         let address = ipc_address();
         // SAFETY: a received message implies the kernel wrote this buffer.
@@ -105,8 +106,11 @@ fn syscall(
             inlateout("x5") mr3,
         );
     }
-    let _ = (mr0, mr1, mr2, mr3);
-    Ok(unmarshal(badge_or_cap, tag))
+    Ok(unmarshal(
+        badge_or_cap,
+        tag,
+        [mr0, mr1, mr2, mr3],
+    ))
 }
 
 /// Buffered send with no receiver wait. `caps` transfer Grant-authorised caps.

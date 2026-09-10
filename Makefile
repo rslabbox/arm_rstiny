@@ -1,5 +1,6 @@
 MODE ?= debug
 KERNEL_TEST ?= 0
+BOOT_TEST ?= 0
 LOG ?= info
 KERNEL_LOAD_MIN ?= 0
 TARGET := aarch64-unknown-none-softfloat
@@ -41,7 +42,7 @@ endif
 QEMU_ARGS := -machine virt,gic-version=3,virtualization=off -cpu cortex-a72 \
 	-smp 1 -m 128M -display none -monitor none -serial stdio -nic none \
 	-kernel $(BOOT_IMAGE)
-export LOG QEMU KERNEL_LOAD_MIN
+export LOG QEMU KERNEL_LOAD_MIN BOOT_TEST
 
 .PHONY: all build platform userboot init console run run-kernel run-root run-userboot debug check fmt clean
 all: build

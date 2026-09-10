@@ -50,14 +50,14 @@ impl Task {
             // Finish the scheduler task first, while its TCB capability is
             // still valid, then reclaim the loader's derivation subtree.
             runtime(abi::RuntimeInvocation::Destroy, &[self.0])?;
-            // SAFETY: this handle uniquely owns the derivation subtree; the
+                                    // SAFETY: this handle uniquely owns the derivation subtree; the
             // task is terminated and nothing else references it.
             unsafe {
                 let cnode = super::capability::CNode(super::capability::CPtr(abi::INIT_CNODE));
                 cnode.revoke(allocator)?;
                 cnode.delete(allocator)?;
             }
-            Ok(())
+                        Ok(())
         } else {
             runtime(abi::RuntimeInvocation::Destroy, &[self.0]).map(|_| ())
         }
