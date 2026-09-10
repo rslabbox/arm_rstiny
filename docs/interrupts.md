@@ -24,7 +24,7 @@ GIC 模块独占 `arm-gic-driver` 的 `Gic` 和 `CpuInterface`。公开的内核
 
 `claim()` 读取 IAR，特殊/伪中断返回 None，不执行 EOI。有效中断返回不可复制、不可由外部构造的 `ActiveInterrupt`。控制器记录当前 active ID，拒绝尚未完成时再次领取；`complete` 消费凭证并核对 ID，发布设备写操作后执行 EOI，再清除 active 状态。
 
-使用 combined EOI 模式，完成时同时降优先级和 deactivate。若以后实现 seL4 风格用户 IRQ 投递及延迟 deactivate，需要相应修改协议，不能把当前模式直接视作完整用户 IRQ 支持。
+使用 combined EOI 模式，完成时同时降优先级和 deactivate。用户 IRQ 投递需要 split EOI（EOIR 与 DIR 分离）来提供“active 直到 Ack”的隐式屏蔽，见 [设备 IRQ 授权与用户态投递](irq.md) §5；在此之前不能把当前模式直接视作完整用户 IRQ 支持。
 
 每个控制器操作只短暂借用 `SingleCore`。`claim` 返回前借用已经结束；设备 handler 可安全调用其他控制器操作。任何 active 凭证都必须在 park、eret、WFI 之前完成。没有在 Drop 中隐式 EOI，避免将中断完成隐藏在析构顺序里。
 
