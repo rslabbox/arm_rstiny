@@ -2,7 +2,7 @@
 
 日期：2026-09-10。状态：阶段 D（D0–D5）已实施，验收见 `tools/check_block.py`、`check_fat32.py`、`check_appmgr.py`、`check_services.py`、`check_restart.py`；实施记录见文末 §15。
 
-本文定义从启动链到"从磁盘加载用户程序"的完整路径：`boot_server`/`fs_server` 的用户态分层、VirtIO MMIO 块设备、FAT32 只读解析、共享内存搬运，以及 appmgr 加载应用。分层参考 Zircon（Fuchsia）的 `userboot → component_manager → 驱动/文件系统 → 应用`，但沿用本项目的对象/capability/Untyped 机制。相关文档：[userboot 与 init 服务管理设计](service-manager.md)、[Untyped 物理内存实现计划](untyped-plan.md)、[内核映射与页表构建](kernel-mapping.md)、[内核实现与验证记录](kernel-implementation.md)。
+本文定义从启动链到"从磁盘加载用户程序"的完整路径：`block-server`/`fs-server` 的用户态分层、VirtIO MMIO 块设备、FAT32 只读解析、共享内存搬运，以及 appmgr 加载应用。分层参考 Zircon（Fuchsia）的 `userboot → component_manager → 驱动/文件系统 → 应用`，但沿用本项目的对象/capability/Untyped 机制。相关文档：[userboot 与 init 服务管理设计](service-manager.md)、[Untyped 物理内存实现计划](untyped-plan.md)、[内核映射与页表构建](kernel-mapping.md)、[内核实现与验证记录](kernel-implementation.md)。
 
 ## 1. 目的与范围
 
@@ -10,7 +10,7 @@
 
 - 说明 Zircon 与本项目在"应用从哪里加载"上的差别，避免按错误模型设计。
 - 给出本项目的启动路径图：现状与目标。
-- 规划 `block_server`（VirtIO MMIO 块驱动）与 `fs_server`（FAT32 只读）两个独立用户态服务。
+- 规划 `block-server`（VirtIO MMIO 块驱动）与 `fs-server`（FAT32 只读）两个独立用户态服务。
 - 定义块/文件协议、共享内存搬运、DMA 与安全边界。
 - 规划 `appmgr` 从 FAT32 加载应用，并给出分阶段验收。
 
@@ -68,8 +68,8 @@ Bootloader
        └─ userboot                 ≈ Zircon userboot
             └─ init                ≈ Zircon component_manager
                  ├─ console_server
-                 ├─ block_server   (VirtIO MMIO 轮询)   ≈ virtio-block 驱动
-                 ├─ fs_server      (FAT32 只读)         ≈ minfs / fatfs
+                 ├─ block-server   (VirtIO MMIO 轮询)   ≈ virtio-block 驱动
+                 ├─ fs-server      (FAT32 只读)         ≈ minfs / fatfs
                  └─ appmgr         ≈ pkgfs / loader
                       └─ hello     (从 FAT32 读 ELF, supervised spawn)
 ```
@@ -82,8 +82,8 @@ Bootloader
 | data 分区（blobfs/minfs） | FAT32 磁盘镜像 |
 | `userboot` | `userboot` |
 | `component_manager` | `init` |
-| `virtio-block` 驱动 | `block_server` |
-| `minfs`/`fatfs` | `fs_server` |
+| `virtio-block` 驱动 | `block-server` |
+| `minfs`/`fatfs` | `fs-server` |
 | `pkgfs` / loader | `appmgr` |
 
 ### 3.3 加载流程（目标）
@@ -92,7 +92,7 @@ Bootloader
 disk.img (FAT32)
    │  QEMU virtio-blk-device (MMIO)
    ▼
-block_server  ── Block 协议 ──▶ fs_server ── FS 协议 ──▶ appmgr ──▶ hello
+block-server  ── Block 协议 ──▶ fs-server ── FS 协议 ──▶ appmgr ──▶ hello
 (设备 Untyped)                 (FAT32 解析)            (ELF 装载)
 ```
 
@@ -100,9 +100,9 @@ block_server  ── Block 协议 ──▶ fs_server ── FS 协议 ──▶
 
 | 组件 | 依赖 | 持有 | 职责 |
 | --- | --- | --- | --- |
-| `block_server` | 无 | VirtIO MMIO 设备 Untyped、子 Untyped | 初始化 virtqueue、扇区读写、容量 |
-| `fs_server` | `block_server` | 子 Untyped、Block client cap | FAT32 只读：BPB/FAT/目录/文件 |
-| `appmgr` | `fs_server` | 应用 untyped 预算、FS client cap | 读应用 ELF、`spawn_supervised`、应用级重启 |
+| `block-server` | 无 | VirtIO MMIO 设备 Untyped、子 Untyped | 初始化 virtqueue、扇区读写、容量 |
+| `fs-server` | `block-server` | 子 Untyped、Block client cap | FAT32 只读：BPB/FAT/目录/文件 |
+| `appmgr` | `fs-server` | 应用 untyped 预算、FS client cap | 读应用 ELF、`spawn_supervised`、应用级重启 |
 
 - 三个组件都由 `init` 按 `init.cfg` 启动与监督（见 [service-manager.md](service-manager.md) §7/§10）。
 - `appmgr` 是普通服务，`depends = [fs]`；应用崩溃由 appmgr 处理，appmgr 崩溃由 init 处理。
@@ -130,7 +130,7 @@ boot 分区把这些 MMIO 区间作为**设备 Untyped** 发布（当前只发�
 
 先用**裸 FAT32 镜像**（不做 GPT/MBR），由 `tools/make_disk.py` 生成，里面放 `hello.elf`。可用 `mtools`（`mformat`/`mcopy`）或自写 FAT32 writer；产物路径纳入构建产物（如 `target/apps/<MODE>/disk.img`）。
 
-## 6. block_server（VirtIO MMIO，轮询）
+## 6. block-server（VirtIO MMIO，轮询）
 
 ### 6.1 初始化序列
 
@@ -157,10 +157,10 @@ boot 分区把这些 MMIO 区间作为**设备 Untyped** 发布（当前只发�
 ### 6.4 资源与所有权
 
 - MMIO 来自设备 Untyped（只允许 retype 成 Frame，映射 Device/NX）。
-- virtqueue 与数据缓冲来自 block_server 的子 Untyped；缓冲**物理地址**交给设备，故必须连续且不被移动。
+- virtqueue 与数据缓冲来自 block-server 的子 Untyped；缓冲**物理地址**交给设备，故必须连续且不被移动。
 - 先只支持 512 B 逻辑扇区（QEMU virtio-blk 默认）。
 
-## 7. fs_server（FAT32 只读）
+## 7. fs-server（FAT32 只读）
 
 ### 7.1 挂载
 
@@ -224,10 +224,10 @@ boot 分区把这些 MMIO 区间作为**设备 Untyped** 发布（当前只发�
 ## 9. 共享内存、DMA 与安全边界
 
 - **共享缓冲**：由服务端在子 Untyped 里 retype 一块 Frame，`BIND` 时把 cap 授给客户端；双方映射同一物理页。所有权与最大并发写入协议；一个 client 一个缓冲，避免交叉。
-- **DMA**：block_server 把 virtqueue 与数据缓冲的**物理地址**写进 VirtIO 寄存器，设备直接读写这些页。因此这些页在 DMA 期间不能被 revoke/复用；服务重启前必须先停设备并确认 DMA 静止。
-- **无 IOMMU**：QEMU virt 没有 SMMU，block_server 是总线主控，属于**受信组件**。文档必须保留该边界，不能宣称其崩溃/恶意一定被隔离。
-- **设备 Untyped 只给对应驱动**：VirtIO MMIO 只授予 block_server；GIC/timer 永不发布给用户态。
-- **fs_server 面向不可信数据**：解析有界、可重启；不要把它合进 `userboot`/`init`。
+- **DMA**：block-server 把 virtqueue 与数据缓冲的**物理地址**写进 VirtIO 寄存器，设备直接读写这些页。因此这些页在 DMA 期间不能被 revoke/复用；服务重启前必须先停设备并确认 DMA 静止。
+- **无 IOMMU**：QEMU virt 没有 SMMU，block-server 是总线主控，属于**受信组件**。文档必须保留该边界，不能宣称其崩溃/恶意一定被隔离。
+- **设备 Untyped 只给对应驱动**：VirtIO MMIO 只授予 block-server；GIC/timer 永不发布给用户态。
+- **fs-server 面向不可信数据**：解析有界、可重启；不要把它合进 `userboot`/`init`。
 
 ## 10. appmgr 与应用加载
 
@@ -241,8 +241,8 @@ boot 分区把这些 MMIO 区间作为**设备 Untyped** 发布（当前只发�
 | 阶段 | 内容 | 前置 |
 | --- | --- | --- |
 | D0 | 平台生成 VirtIO MMIO + 设备 Untyped；QEMU 加盘 | 现有设备 Untyped |
-| D1 | `block_server`：VirtIO 初始化 + 轮询读扇区 | D0 |
-| D2 | `fs_server`：FAT32 挂载 + 短名 open/read | D1 |
+| D1 | `block-server`：VirtIO 初始化 + 轮询读扇区 | D0 |
+| D2 | `fs-server`：FAT32 挂载 + 短名 open/read | D1 |
 | D3 | `appmgr`：从 FAT32 读 `hello.elf` 并 supervised spawn | D2 |
 | D4 | init 配置驱动化：把 block/fs/appmgr 写进 `init.cfg`、依赖拓扑、按策略重启 | D3 |
 | D5 | 服务崩溃重启：杀 fs/block → init 重启 → appmgr 重连；补端到端验收 | D4 |
@@ -254,7 +254,7 @@ boot 分区把这些 MMIO 区间作为**设备 Untyped** 发布（当前只发�
 - **D2**：短名 `OPEN`/`READ` 与镜像内容逐字节一致；坏 BPB、坏 FAT、循环簇链、越界读返回错误且不 panic。
 - **D3**：hello 是独立 EL0 进程，正常输出、退出、被回收；替换镜像里的 ELF 后运行内容改变。
 - **D4**：`init.cfg` 增加 block/fs/appmgr 后按依赖顺序启动；console 未 READY 前不启动依赖者。
-- **D5**：杀 fs_server → init 重启 → appmgr 收到 `DEPENDENCY_LOST`/重连；无内存泄漏（`available` 回到基线）。
+- **D5**：杀 fs-server → init 重启 → appmgr 收到 `DEPENDENCY_LOST`/重连；无内存泄漏（`available` 回到基线）。
 - 全部纳入 `tools/check_*`，覆盖 debug/release × LOG=off/info。
 
 ## 13. 开放决策
@@ -281,17 +281,17 @@ boot 分区把这些 MMIO 区间作为**设备 Untyped** 发布（当前只发�
 - `kernel/src/boot.rs`：普通 region 仍按 size 降序（`INIT_UNTYPED` 指向最大普通区），**设备 region 独立按 paddr 升序追加**（uart0=12 位 @0x09000000，virtio-mmio-0=14 位 @0x0a000000）——若混入全局降序，virtio 会排到 UART 前，userboot 的首设备授予就会错位。
 - QEMU 加盘：`-global virtio-mmio.force-legacy=false -drive ... -device virtio-blk-device`；`tools/make_disk.py` 用 mtools 生成裸 FAT32（无分区表），支持 `--corrupt-bpb`/`--cycle-fat`/`--truncate` 坏镜像注入。
 
-### D1 block_server（第三方库 virtio-drivers）
+### D1 block-server（第三方库 virtio-drivers）
 
 - 驱动采用 **`virtio-drivers` 0.13**（不移植参考 C 代码）：`MmioTransport::new` 逐 0x200 槽探测 DeviceType::Block；`VirtIOBlk::new` 完成握手/建队；`read_blocks` 经 `Hal::share` 直达 DMA。
 - **内核新增 `ArmVspaceTranslate = 47`**：任务在自己的 VSpace cap 上查询任意 VA 的物理地址（限本人 VSpace）。原因是 `Hal::share` 收到的缓冲可能在驱动堆或栈上（BlkReq/BlkResp 是栈上局部量），仅有 DMA 页记录表不够； virtio-drivers 开 alloc 特性时还走 indirect 描述符（表在 BSS 池）。
 - `Hal::dma_alloc` 从服务预算 retype 连续 Frame 映射到保留 VA 窗（dealloc 空实现，回收归监督者 revoke）；共享缓冲帧 BIND 时经 `reply_cap` 授予客户端。
 - 用户库补 `Page::address()`（ArmPageGetAddress 已有内核实现）。
 
-### D2 fs_server（第三方库 hadris-fat）
+### D2 fs-server（第三方库 hadris-fat）
 
 - FAT32 解析采用 **`hadris-fat` 2.4.0**（`default-features = false, features = ["read","sync","alloc"]`）。`fatfs` 0.3.6 的 no_std 路径依赖 `core_io`（锁死 2021 nightly）在当前工具链不可编译，且上游久未更新——弃用。
-- fs_server 实现 `embedded_io::Read/Seek` 适配器把块协议（BIND 收共享缓冲 cap → READ IPC）伪装成块设备；`FatVolume::open` 挂载，`FatVolumeReadExt::read_file` 读文件。
+- fs-server 实现 `embedded_io::Read/Seek` 适配器把块协议（BIND 收共享缓冲 cap → READ IPC）伪装成块设备；`FatVolume::open` 挂载，`FatVolumeReadExt::read_file` 读文件。
 - 协议约定统一：**回复 label 承载状态码（status::OK=0），MR 承载数据**。
 
 ### D3 appmgr 与磁盘加载

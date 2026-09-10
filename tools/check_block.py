@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Phase D1 acceptance: the block_server probes the VirtIO MMIO device,
+"""Phase D1 acceptance: the block-server probes the VirtIO MMIO device,
 reports the disk capacity, and reads sector 0 into the shared buffer. The
 checksum is compared against a host-side read of the same image
 (docs/disk-driver.md section 12, D1)."""
@@ -39,13 +39,13 @@ def run(qemu, kernel, disk):
                 time.sleep(0.2)
             else:
                 print(text, flush=True)
-                raise AssertionError('block_server never completed its test read')
+                raise AssertionError('block-server never completed its test read')
             assert f'[block] test capacity={len(disk.read_bytes()) // 512}' in text, \
                 'capacity does not match the image'
             assert f'[block] test sum={expected_sum:#x}' in text, 'sector 0 checksum mismatch'
             assert f'head={expected_head:#x}' in text, 'sector 0 head mismatch'
             assert proc.poll() is None, 'system exited early'
-            print(f'PASS: block_server capacity + sector 0 DMA verified ({disk.name}).', flush=True)
+            print(f'PASS: block-server capacity + sector 0 DMA verified ({disk.name}).', flush=True)
         finally:
             proc.terminate()
             proc.wait(timeout=5)

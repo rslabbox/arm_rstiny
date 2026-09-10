@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Build a bare FAT32 disk image with mtools (no partition table): sector 0 is
-the BPB the fs_server mounts (docs/disk-driver.md section 5.3).
+the BPB the fs-server mounts (docs/disk-driver.md section 5.3).
 
     python3 tools/make_disk.py disk.img --file HELLO.ELF=path/to/hello.elf
 
 Names must be valid 8.3 short names. Corruption switches build images for the
-fs_server failure-path acceptance:
+fs-server failure-path acceptance:
   --corrupt-bpb  invalidates the boot sector signature
   --cycle-fat    makes the first cluster of HELLO.ELF point at itself
   --truncate     cuts the image short so late reads fall off the end

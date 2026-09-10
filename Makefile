@@ -29,7 +29,8 @@ APP_DIR := target/apps/$(MODE)
 USERBOOT_ELF := $(APP_DIR)/$(TARGET)/$(MODE)/userboot
 INIT_ELF := $(APP_DIR)/$(TARGET)/$(MODE)/init
 CONSOLE_ELF := $(APP_DIR)/$(TARGET)/$(MODE)/console
-BLOCK_ELF := $(APP_DIR)/$(TARGET)/$(MODE)/block_server
+BLOCK_ELF := $(APP_DIR)/$(TARGET)/$(MODE)/block-server
+FS_ELF := $(APP_DIR)/$(TARGET)/$(MODE)/fs-server
 HELLO_ELF := $(APP_DIR)/$(TARGET)/$(MODE)/hello
 DISK_IMG := $(APP_DIR)/disk.img
 MODULES := $(INIT_ELF) $(CONSOLE_ELF)
@@ -53,18 +54,18 @@ QEMU_ARGS := -machine virt,gic-version=3,virtualization=off -cpu cortex-a72 \
 	-kernel $(BOOT_IMAGE)
 export LOG QEMU KERNEL_LOAD_MIN BOOT_TEST BLK_TEST
 
-.PHONY: all build platform userboot init console block_server fs_server appmgr hello disk run run-kernel run-root run-userboot debug check fmt clean
+.PHONY: all build platform userboot init console block-server fs-server appmgr hello disk run run-kernel run-root run-userboot debug check fmt clean
 all: build
 
 platform:
 	python3 tools/build_platform.py $(PLATFORM_DIR) --qemu $(QEMU)
 
-build: userboot init console block_server fs_server appmgr platform
+build: userboot init console block-server fs-server appmgr platform
 	PLATFORM_DIR=$(PLATFORM_DIR) cargo build $(CARGO_FLAGS) --target-dir $(BUILD_DIR)
 	rust-objcopy -O binary $(KERNEL_ELF) $(KERNEL_BIN)
 	for app in init console; do rust-objcopy --strip-all $(APP_DIR)/$(TARGET)/$(MODE)/$$app $(APP_DIR)/$$app.elf; done
 	rust-objcopy --strip-all $(BLOCK_ELF) $(APP_DIR)/block.elf
-	rust-objcopy --strip-all $(APP_DIR)/$(TARGET)/$(MODE)/fs_server $(APP_DIR)/fs.elf
+	rust-objcopy --strip-all $(FS_ELF) $(APP_DIR)/fs.elf
 	rust-objcopy --strip-all $(APP_DIR)/$(TARGET)/$(MODE)/appmgr $(APP_DIR)/appmgr.elf
 	python3 tools/build_image.py $(KERNEL_ELF) $(USERBOOT_ELF) $(IMAGE_DIR) --platform $(PLATFORM_DIR) --mode $(MODE) \
 	  --module $(APP_DIR)/init.elf --module $(APP_DIR)/console.elf --module $(APP_DIR)/block.elf \
@@ -73,7 +74,7 @@ build: userboot init console block_server fs_server appmgr platform
 userboot:
 	python3 tools/build_app.py userboot --mode $(MODE) $(if $(ROOT_IMAGE_BASE),--image-base $(ROOT_IMAGE_BASE))
 
-init console hello block_server fs_server appmgr:
+init console hello block-server fs-server appmgr:
 	python3 tools/build_app.py $@ --mode $(MODE)
 
 # The application disk: bare FAT32 with the app manifest and its ELFs.

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Phase D2 acceptance: fs_server mounts the FAT32 image through the block
+"""Phase D2 acceptance: fs-server mounts the FAT32 image through the block
 service and reads HELLO.ELF byte-for-byte. Corrupted images (bad BPB signature,
 a self-looping FAT chain) must surface as bounded service errors — never a
 kernel panic (docs/disk-driver.md section 12, D2)."""
@@ -40,7 +40,7 @@ def run(qemu, kernel, disk, expectation):
                 time.sleep(0.2)
             else:
                 print(text, flush=True)
-                raise AssertionError('expected fs_server output never appeared')
+                raise AssertionError('expected fs-server output never appeared')
             assert 'panicked' not in text and 'kernel panic' not in text, \
                 'the kernel panicked on a corrupt image'
             assert proc.poll() is None, 'system exited early'

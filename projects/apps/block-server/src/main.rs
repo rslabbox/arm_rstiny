@@ -1,6 +1,6 @@
 #![no_std]
 #![no_main]
-//! block_server: the VirtIO MMIO block driver as a supervised user service
+//! block-server: the VirtIO MMIO block driver as a supervised user service
 //! (docs/disk-driver.md section 6), built on the maintained `virtio-drivers`
 //! crate. One bound client at a time; sector data is DMAd directly into a
 //! server-owned shared buffer frame granted on BIND.

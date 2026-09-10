@@ -10,7 +10,7 @@
 
 - `fatboot` 改名 `userboot`，职责收缩为 bootstrap + 监督 init，不含任何驱动或文件系统。
 - 新增 `init`（service manager）：按文本配置起服务、收集 report、按策略重启崩溃的服务。
-- 新增独立的 `appmgr`：在 `fs_server` 就绪后从文件系统加载应用。
+- 新增独立的 `appmgr`：在 `fs-server` 就绪后从文件系统加载应用。
 - 服务（console/block/fs）与应用各自独立地址空间，通过 IPC 通信。
 - 沿用现有对象/capability/Untyped/设备 Untyped 模型，内核机制按 seL4 non-MCS（AArch64、单核、无 MCS/SMP/SMMU）语义对齐，不引入 seL4 二进制兼容。
 
@@ -24,8 +24,8 @@ bootloader
        └─ userboot        (root task, EL0)      bootstrap + 监督 init
             └─ init       (service manager)      起服务 + 收 report + 重启
                  ├─ console_server
-                 ├─ block_server
-                 ├─ fs_server
+                 ├─ block-server
+                 ├─ fs-server
                  └─ appmgr                        从 fs 加载应用
 ```
 
@@ -90,8 +90,8 @@ userboot 保留为 monitor（决策 1）：它不参与服务管理，但在 ini
 ### 3.4 appmgr（独立应用管理器，决策 6）
 
 - 作为 init 的一个普通服务启动，`depends = [fs]`。
-- 持有应用所需的 untyped 预算和 `fs_server` 的 client cap。
-- 从 `fs_server` 读取应用 ELF，用同一套 ELF loader 创建应用进程。
+- 持有应用所需的 untyped 预算和 `fs-server` 的 client cap。
+- 从 `fs-server` 读取应用 ELF，用同一套 ELF loader 创建应用进程。
 - 对应用执行与 init 类似的生命周期管理（READY/report/重启），但策略属于应用域。
 - init 不直接加载应用；应用崩溃由 appmgr 处理，appmgr 崩溃由 init 处理。
 
@@ -582,7 +582,7 @@ appmgr 用 `FS_OPEN/FS_READ` 读应用 ELF 到自己授予的共享 Frame，再�
 ## 15. appmgr 与应用生命周期
 
 - `appmgr` 是 init 的普通服务，`depends = [fs]`。
-- 应用来源：`fs_server` 的只读文件；应用清单文件（`apps.cfg`，语法同 `init.cfg`）由 appmgr 从 fs 读取。
+- 应用来源：`fs-server` 的只读文件；应用清单文件（`apps.cfg`，语法同 `init.cfg`）由 appmgr 从 fs 读取。
 - appmgr 负责：解析清单、切应用子 untyped、ELF 装载、READY/report、应用级重启策略。
 - 应用与系统服务使用同一套 `libs/server` 协议，但控制端点是 appmgr 的 `control_ep`；应用不接触系统服务的 endpoint（console 例外，经 appmgr Copy）。
 - init 不感知具体应用；只监督 appmgr。
@@ -609,7 +609,7 @@ appmgr 用 `FS_OPEN/FS_READ` 读应用 ELF 到自己授予的共享 Frame，再�
 | A | Endpoint、Notification、fault endpoint、Untyped 切分、用户态 slot/untyped 分配器、boot module archive（内核侧） | 现有对象模型 |
 | B | `fatboot → userboot`；bootloader 透传 archive + x6/x7；userboot 从 archive 起 init；init 空转并 READY；userboot 监督 init | A |
 | C | init 从 ROM 起 `console_server`；report；杀 console → init 重启 → console 恢复 | B |
-| D | `block_server` + `fs_server` + `appmgr`；加磁盘；应用从 fs 加载 | C |
+| D | `block-server` + `fs-server` + `appmgr`；加磁盘；应用从 fs 加载 | C |
 
 阶段 D 的磁盘分层、VirtIO MMIO 驱动、FAT32 解析、共享内存与验收见 [磁盘与 FAT32 用户态驱动设计](disk-driver.md)。
 | E | 删除内核 `Runtime` 托管标签 / `managed_untyped` / `collect` 降级；userboot 变纯 monitor | D |

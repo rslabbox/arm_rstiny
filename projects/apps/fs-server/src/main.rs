@@ -1,6 +1,6 @@
 #![no_std]
 #![no_main]
-//! fs_server: a read-only FAT32 service on top of the block protocol
+//! fs-server: a read-only FAT32 service on top of the block protocol
 //! (docs/disk-driver.md section 7), built on the maintained `hadris-fat`
 //! crate. One bound client at a time; file data is served through a
 //! server-owned shared buffer frame granted on BIND.

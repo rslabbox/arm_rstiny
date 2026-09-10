@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Phase D5 acceptance: killing fs_server exercises the whole dependency
+"""Phase D5 acceptance: killing fs-server exercises the whole dependency
 chain — init reaps the crashed service, notifies and restarts its dependents,
 appmgr tears down its apps, and the rebuilt chain loads hello from the disk a
 second time with no frame budget leaked (docs/disk-driver.md section 12, D5)."""

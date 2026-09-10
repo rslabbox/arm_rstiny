@@ -1,10 +1,10 @@
 [package]
-name = "block_server"
+name = "block-server"
 version = "0.1.0"
 edition = "2024"
 
 [[bin]]
-name = "block_server"
+name = "block-server"
 path = "src/main.rs"
 test = false
 bench = false

@@ -1,10 +1,10 @@
 [package]
-name = "fs_server"
+name = "fs-server"
 version = "0.1.0"
 edition = "2024"
 
 [[bin]]
-name = "fs_server"
+name = "fs-server"
 path = "src/main.rs"
 test = false
 bench = false
