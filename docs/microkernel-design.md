@@ -351,6 +351,8 @@ hello → 完成协议 → fatboot 监管与回收
 
 ## 14. 设备中断与服务拆分：设备 IRQ 与进一步拆服务
 
+实现设计（对象、ABI、GIC 时序、block-server 迁移、验收）见 [设备 IRQ 授权与用户态投递](irq.md)。
+
 多线程与抢占 已实现调度 timer IRQ；此阶段实现的是用户设备 IRQ 授权与交付。
 
 root task 通过 IRQControl 为目标线路创建 IRQHandler，绑定到驱动 Notification。硬件中断发生后，内核按 GIC/触发类型协议确认并屏蔽或保持受控状态，发送通知；驱动读写设备清除源，再调用 Ack 请求重新开放。EOI、deactivate 和屏蔽的顺序由实际 GIC 版本明确规定。

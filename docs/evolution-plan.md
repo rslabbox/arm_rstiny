@@ -385,6 +385,8 @@ ABI_VERSION 已升为 4，旧 x8 正调用号协议已删除，不保留兼容 s
 
 ### 阶段 5：IRQ 授权与用户态串口
 
+具体设计（`IRQControl`/`IRQHandler`、GIC mask/signal/Ack 时序、block-server 从轮询迁到通知）见 [设备 IRQ 授权与用户态投递](irq.md)。
+
 目标：用户态驱动闭环。
 
 - `IRQControl`/`IRQHandler` 对象与 GIC ack/mask/notify/Ack 流程。

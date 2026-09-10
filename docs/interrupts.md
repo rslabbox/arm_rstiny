@@ -52,3 +52,5 @@ GIC 模块独占 `arm-gic-driver` 的 `Gic` 和 `CpuInterface`。公开的内核
 `kernel-test` 在 GIC 初始化后、tick 启动前运行实际硬件测试：软件置 pending 的 SGI 和 SPI、禁用源不可领取、重复领取/完成周期、未知源被屏蔽且完成、伪中断、长单次定时器和已过期源停止。
 
 `tools/check_user_context.py` 使用测试构建并检查 `IRQ_SELF_TEST_PASSED`，随后执行每配置 2048 次上下文返回，以及 pending-before-WFI 唤醒测试。任务测试验证纯 EL0 循环的定时器抢占、sleep/wait 和暂停恢复。覆盖 debug/release × LOG=off/info。
+
+设备中断的用户态投递（`IRQControl`/`IRQHandler`/Notification 授权）尚未实现，设计见 [设备 IRQ 授权与用户态投递](irq.md)。

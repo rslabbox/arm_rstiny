@@ -92,6 +92,7 @@ info registers cpsr sp x0
 - [磁盘与 FAT32 用户态驱动设计](docs/disk-driver.md)
 - [独立 fault-handler 线程与线程模型](docs/fault-handler.md)
 - [进程/线程组生命周期与组内故障监督](docs/thread-group.md)
+- [设备 IRQ 授权与用户态投递](docs/irq.md)
 - [seL4 ABI 与内核对象接口](docs/sel4-abi.md)
 - [fatboot 启动、ABI 与验证](docs/fatboot.md)
 - [内核实现与验证记录](docs/kernel-implementation.md)

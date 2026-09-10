@@ -68,7 +68,7 @@ Bootloader
        └─ userboot                 ≈ Zircon userboot
             └─ init                ≈ Zircon component_manager
                  ├─ console_server
-                 ├─ block-server   (VirtIO MMIO 轮询)   ≈ virtio-block 驱动
+                 ├─ block-server   (VirtIO MMIO)   ≈ virtio-block 驱动
                  ├─ fs-server      (FAT32 只读)         ≈ minfs / fatfs
                  └─ appmgr         ≈ pkgfs / loader
                       └─ hello     (从 FAT32 读 ELF, supervised spawn)
@@ -130,7 +130,7 @@ boot 分区把这些 MMIO 区间作为**设备 Untyped** 发布（当前只发�
 
 先用**裸 FAT32 镜像**（不做 GPT/MBR），由 `tools/make_disk.py` 生成，里面放 `hello.elf`。可用 `mtools`（`mformat`/`mcopy`）或自写 FAT32 writer；产物路径纳入构建产物（如 `target/apps/<MODE>/disk.img`）。
 
-## 6. block-server（VirtIO MMIO，轮询）
+## 6. block-server（VirtIO MMIO）
 
 ### 6.1 初始化序列
 
@@ -150,7 +150,7 @@ boot 分区把这些 MMIO 区间作为**设备 Untyped** 发布（当前只发�
 ### 6.3 请求
 
 - 一条 block 请求由三段描述符组成：`{ type: u32, reserved: u32, sector: u64 }`（type 0 = IN / 1 = OUT）+ 数据缓冲 + 状态字节。
-- 写 `QueueNotify` 后**轮询 used ring**（阶段 D 不用 IRQ；后续接设备 IRQ → Notification）。
+- 写 `QueueNotify` 后轮询 used ring（阶段 D；用户态中断投递见 [设备 IRQ 授权与用户态投递](irq.md)，落地后改为等设备完成中断）。
 - `InterruptStatus` 读后写 `InterruptACK`。
 - 容量：config 区 offset `0x100` 读 64-bit `capacity`（sectors，512 B）。
 
