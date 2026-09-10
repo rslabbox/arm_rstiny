@@ -82,6 +82,22 @@ def generate(output, qemu='qemu-system-aarch64'):
     (gicd, gicd_size), (gicr, gicr_size) = regions(gic)[:2]
     if (uart_base, uart_size, gicd, gicd_size, gicr) != (0x09000000, 0x1000, 0x08000000, 0x10000, 0x080a0000) or gicr_size < 0x20000:
         raise ValueError('unsupported QEMU MMIO layout')
+    # The whole VirtIO MMIO window is published to user drivers as one device
+    # Untyped: individual slots are 0x200 bytes and cannot satisfy the 4 KiB
+    # minimum of an Untyped region (docs/disk-driver.md section 5.1).
+    virtio = [node for node in all_nodes if 'virtio,mmio' in compat.get(node, [])]
+    slots = sorted(regions(node)[0] for node in virtio)
+    if not slots or len(slots) != len(virtio):
+        raise ValueError(f'invalid virtio,mmio nodes: {virtio}')
+    if any(size != 0x200 for _, size in slots):
+        raise ValueError(f'unexpected virtio-mmio slot size: {slots}')
+    if any(base != slots[0][0] + index * 0x200 for index, (base, _) in enumerate(slots)):
+        raise ValueError(f'non-contiguous virtio-mmio slots: {slots}')
+    virtio_base = slots[0][0]
+    span = slots[-1][0] + slots[-1][1] - virtio_base
+    virtio_size_log2 = max(12, (span - 1).bit_length())
+    if virtio_base % (1 << virtio_size_log2):
+        raise ValueError(f'virtio-mmio window is not aligned: {slots}')
     irq = words(timer, 'interrupts')[3:6]  # Non-secure physical timer.
     if len(irq) != 3 or irq[0] != 1 or irq[1] >= 16 or irq[2] & 15 != 4:
         raise ValueError('expected a level-triggered physical timer PPI')
@@ -89,14 +105,16 @@ def generate(output, qemu='qemu-system-aarch64'):
     if len(cpus) != 1 or words(cpus[0], 'reg') != [0]:
         raise ValueError('only one Cortex-A72 CPU is supported')
     constants = dict(UART_BASE=uart_base, GICD_BASE=gicd, GICD_SIZE=gicd_size,
-                     GICR_BASE=gicr, GICR_SIZE=0x20000, RAM_START=0x40000000, RAM_END=0x48000000)
+                     GICR_BASE=gicr, GICR_SIZE=0x20000, RAM_START=0x40000000, RAM_END=0x48000000,
+                     VIRTIO_MMIO_BASE=virtio_base, VIRTIO_MMIO_SIZE=1 << virtio_size_log2)
     rust = '// Generated from QEMU kernel.dtb; do not edit.\n'
     rust += ''.join(f'pub const {name}: usize = {value:#x};\n' for name, value in constants.items())
+    rust += f'pub const VIRTIO_MMIO_SIZE_LOG2: u8 = {virtio_size_log2};\n'
     rust += f'pub const TIMER_IRQ: u32 = {irq[1] + 16};\npub const PSCI_SMC: bool = {str(method == "smc").lower()};\n'
     (output / 'platform.rs').write_text(rust)
     (output / 'platform.json').write_text(json.dumps(dict(constants, timer_irq=irq[1] + 16,
-        psci_method=method, machine=machine, kernel_devices=kernel_devices,
-        loader_devices=loader_devices), indent=2) + '\n')
+        virtio_slots=len(slots), psci_method=method, machine=machine,
+        kernel_devices=kernel_devices, loader_devices=loader_devices), indent=2) + '\n')
     stamp.write_text(key)
 
 

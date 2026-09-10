@@ -75,6 +75,22 @@ fn dispatch(slot: u64, message: &Request) -> Result<Completion> {
             // Logical assignment is explicit; the UP backend flushes ASID 0.
             Ok(Completion::done(None))
         }
+        ObjectKind::VSpace if message.label == Invocation::ArmVspaceTranslate as u64 => {
+            // Self-translation only: a task may resolve virtual to physical
+            // for its own address space (DMA setup), never for another task's.
+            message.require(1, 0)?;
+            let current = crate::task::current_id().ok_or(INVALID_CAPABILITY)?;
+            if crate::task::api::vspace_of(current)? != cap.object {
+                return Err(PERMISSION_DENIED);
+            }
+            let address = message.words[0] as usize;
+            let physical = crate::object::edit_vspace(cap.object, |space| {
+                space
+                    .translate(memory_addr::VirtAddr::from_usize(address))
+                    .map(|translation| translation.physical.as_usize())
+            })?;
+            Ok(Completion::done(Some(physical as u64)))
+        }
         _ => Err(UNSUPPORTED),
     }
 }

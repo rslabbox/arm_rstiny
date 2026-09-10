@@ -1,6 +1,6 @@
 # 磁盘与 FAT32 用户态驱动设计
 
-日期：2026-09-12。状态：设计提案，阶段 D 尚未实施。
+日期：2026-09-10。状态：阶段 D（D0–D5）已实施，验收见 `tools/check_block.py`、`check_fat32.py`、`check_appmgr.py`、`check_services.py`、`check_restart.py`；实施记录见文末 §15。
 
 本文定义从启动链到"从磁盘加载用户程序"的完整路径：`boot_server`/`fs_server` 的用户态分层、VirtIO MMIO 块设备、FAT32 只读解析、共享内存搬运，以及 appmgr 加载应用。分层参考 Zircon（Fuchsia）的 `userboot → component_manager → 驱动/文件系统 → 应用`，但沿用本项目的对象/capability/Untyped 机制。相关文档：[userboot 与 init 服务管理设计](service-manager.md)、[Untyped 物理内存实现计划](untyped-plan.md)、[内核映射与页表构建](kernel-mapping.md)、[内核实现与验证记录](kernel-implementation.md)。
 
@@ -270,3 +270,57 @@ boot 分区把这些 MMIO 区间作为**设备 Untyped** 发布（当前只发�
 - 本地 seL4 参考：`../seL4/projects/sel4test/apps/boot/`（VirtIO + FAT32 在 rootserver 内）、`apps/serial/`（独立服务）、`scripts/make_disk.py`（FAT32 镜像）。
 - Zircon/Fuchsia：`userboot` → `component_manager` → `virtio-block`/`minfs` → 应用；bootfs 在 boot 分区，应用在 data 分区。
 - 项目内：[userboot 与 init 服务管理设计](service-manager.md)、[Untyped 物理内存实现计划](untyped-plan.md)、[seL4 ABI 与内核对象接口](sel4-abi.md)。
+
+## 15. 实施记录（阶段 D0–D5）
+
+已实施并通过验收（`make check` 含全部新脚本，debug/release × LOG=off/info）。与原设计的差异与关键事实：
+
+### D0 平台与设备 Untyped
+
+- `tools/build_platform.py` 新增枚举逻辑：QEMU virt 导出 **32 个** `virtio,mmio` 节点（各 0x200，无 status 属性），整窗 0x0a000000..0x0a004000 共 **16 KiB**，发布为 `VIRTIO_MMIO_BASE/SIZE/SIZE_LOG2`（14 位，按跨度取 2 的幂，非预估的 64K）。单个 0x200 槽不满足 Untyped 最小 4 KiB 对齐，故整窗一个设备 Untyped。
+- `kernel/src/boot.rs`：普通 region 仍按 size 降序（`INIT_UNTYPED` 指向最大普通区），**设备 region 独立按 paddr 升序追加**（uart0=12 位 @0x09000000，virtio-mmio-0=14 位 @0x0a000000）——若混入全局降序，virtio 会排到 UART 前，userboot 的首设备授予就会错位。
+- QEMU 加盘：`-global virtio-mmio.force-legacy=false -drive ... -device virtio-blk-device`；`tools/make_disk.py` 用 mtools 生成裸 FAT32（无分区表），支持 `--corrupt-bpb`/`--cycle-fat`/`--truncate` 坏镜像注入。
+
+### D1 block_server（第三方库 virtio-drivers）
+
+- 驱动采用 **`virtio-drivers` 0.13**（不移植参考 C 代码）：`MmioTransport::new` 逐 0x200 槽探测 DeviceType::Block；`VirtIOBlk::new` 完成握手/建队；`read_blocks` 经 `Hal::share` 直达 DMA。
+- **内核新增 `ArmVspaceTranslate = 47`**：任务在自己的 VSpace cap 上查询任意 VA 的物理地址（限本人 VSpace）。原因是 `Hal::share` 收到的缓冲可能在驱动堆或栈上（BlkReq/BlkResp 是栈上局部量），仅有 DMA 页记录表不够； virtio-drivers 开 alloc 特性时还走 indirect 描述符（表在 BSS 池）。
+- `Hal::dma_alloc` 从服务预算 retype 连续 Frame 映射到保留 VA 窗（dealloc 空实现，回收归监督者 revoke）；共享缓冲帧 BIND 时经 `reply_cap` 授予客户端。
+- 用户库补 `Page::address()`（ArmPageGetAddress 已有内核实现）。
+
+### D2 fs_server（第三方库 hadris-fat）
+
+- FAT32 解析采用 **`hadris-fat` 2.4.0**（`default-features = false, features = ["read","sync","alloc"]`）。`fatfs` 0.3.6 的 no_std 路径依赖 `core_io`（锁死 2021 nightly）在当前工具链不可编译，且上游久未更新——弃用。
+- fs_server 实现 `embedded_io::Read/Seek` 适配器把块协议（BIND 收共享缓冲 cap → READ IPC）伪装成块设备；`FatVolume::open` 挂载，`FatVolumeReadExt::read_file` 读文件。
+- 协议约定统一：**回复 label 承载状态码（status::OK=0），MR 承载数据**。
+
+### D3 appmgr 与磁盘加载
+
+- appmgr 读盘上 `APPS.CFG`（复用 `rstiny-initcfg` 解析器）→ `fs::OPEN/READ` 载入 ELF → `spawn_supervised` 逐应用创建进程；应用的 control cap 由 appmgr 的 self_ep **mint**（badged per app），console cap 复制，预算从 appmgr 自己的预算再切子 Untyped（teardown revoke 复位）。
+- hello 改用标准服务协议（READY → 经 console 协议输出 → EXIT(0)）；`HELLO_MSG` 编译期变量支撑"换盘换行为"验收。
+- 应用 ELF 与清单放磁盘、系统服务 ELF 放 boot archive：替换磁盘文件即改变运行内容。
+
+### D4 init 接入与预算
+
+- `spawn_service` 重写：每服务授予 self_ep（52）、依赖 ep（53..，badge 化）、设备专用副本（init 先 copy 母本再授予，teardown 先 revoke 副本——修复设备 region 水位不复位的泄漏）、控制/console/预算/ASID。
+- spawn 状态机细化：`Waiting → Starting（spawn 完成）→ Running（READY）`；依赖仅看 Running。
+- **loader 槽位窗口化**：`Supervision` 增加 `slot_base`（`LOADER_SLOT_BASE + index * LOADER_SLOT_STRIDE`），否则并发服务的 spawn 在监督者 CSpace 的 40000+ 槽互踩。
+- 预算：userboot 从独立于 root 自用 region 的另一个 ≥24 位 region 整块切出 init 预算（16 MiB，fail-fast），四服务合计 8 MiB（console 1M/block 1M/fs 2M/appmgr 4M）。
+- 子进程栈从 16 KiB 提到 **64 KiB**：debug 构建下 virtio/文件栈深度叠加会溢出 16 KiB（现象为 SP 落入镜像与栈之间的未映射空隙）。
+
+### D5 崩溃重启与依赖失效
+
+- 内核修复第三个 IPC 缺陷：**等待队列的角色混淆剪枝**。`peek_valid`/`enqueue` 原以"状态不等于本次扫描/入队的角色"为陈旧判据，导致排队的故障发送者被后续普通发送**挤出队列丢弃**（表现：监督者永远收不到故障，依赖链死亡）。现统一为 `stale_entry`（任务已不存在或不再等待本端点才算陈旧），角色不匹配的活条目保留。
+- init 新增 `detach_dependents`：依赖服务死亡时 nbsend `DEPENDENCY_LOST` 通知依赖者（best effort）并强制回收重启依赖者（重启计数共享窗口/退避），重建后依赖链从头 BIND。
+- fs/appmgr 处理 `DEPENDENCY_LOST`：清理后退出，由 init 按策略重建；appmgr 退出前先逐个销毁应用，避免应用成为孤儿。
+- 验收：`tools/check_restart.py`（KILL_FS=1）断言 hello 前后运行两次、`[appmgr] frames=N` 前后一致（无泄漏）；`check_services.py` 断言依赖序启动与 block 失败时 fs/appmgr 不启动。
+
+### 与设计文档的偏差汇总
+
+| 项 | 原设计 | 实施 |
+| --- | --- | --- |
+| VirtIO 驱动 | 自研（参考 seL4 C 移植） | `virtio-drivers` 0.13 crate + Hal 适配 |
+| FAT32 | 自研解析器 | `hadris-fat` 2.4.0 只读挂载 |
+| 设备 Untyped | 64K 窗口（预估） | 实测 16K（32×0x200），size_bits=14 |
+| 内核新增调用 | 无 | `ArmVspaceTranslate`（DMA VA→PA 自翻译） |
+| SpawnInfo | extra[0..3] | extra[0..7] 全占用（self ep/依赖数/依赖 ep 槽） |

@@ -1,8 +1,10 @@
 MODE ?= debug
 KERNEL_TEST ?= 0
 BOOT_TEST ?= 0
+BLK_TEST ?= 0
 LOG ?= info
 KERNEL_LOAD_MIN ?= 0
+DISK ?= 1
 TARGET := aarch64-unknown-none-softfloat
 HOST_TARGET ?= $(shell rustc -vV | sed -n 's/^host: //p')
 QEMU ?= qemu-system-aarch64
@@ -27,6 +29,9 @@ APP_DIR := target/apps/$(MODE)
 USERBOOT_ELF := $(APP_DIR)/$(TARGET)/$(MODE)/userboot
 INIT_ELF := $(APP_DIR)/$(TARGET)/$(MODE)/init
 CONSOLE_ELF := $(APP_DIR)/$(TARGET)/$(MODE)/console
+BLOCK_ELF := $(APP_DIR)/$(TARGET)/$(MODE)/block_server
+HELLO_ELF := $(APP_DIR)/$(TARGET)/$(MODE)/hello
+DISK_IMG := $(APP_DIR)/disk.img
 MODULES := $(INIT_ELF) $(CONSOLE_ELF)
 IMAGE_DIR := $(BUILD_DIR)/image
 BOOT_IMAGE := $(IMAGE_DIR)/bootloader
@@ -38,30 +43,44 @@ ifeq ($(KERNEL_TEST),1)
 CARGO_FLAGS += --features kernel-test
 endif
 
-# Fixed platform contract; no disks or network backends.
+# Fixed platform contract; no network backends. The VirtIO block device and
+# its FAT32 image back the userland disk stack (docs/disk-driver.md).
 QEMU_ARGS := -machine virt,gic-version=3,virtualization=off -cpu cortex-a72 \
 	-smp 1 -m 128M -display none -monitor none -serial stdio -nic none \
+	-global virtio-mmio.force-legacy=false \
+	$(if $(filter 1,$(DISK)),-drive file=$(DISK_IMG),if=none,format=raw,id=hd0,readonly=on \
+	-device virtio-blk-device,drive=hd0) \
 	-kernel $(BOOT_IMAGE)
-export LOG QEMU KERNEL_LOAD_MIN BOOT_TEST
+export LOG QEMU KERNEL_LOAD_MIN BOOT_TEST BLK_TEST
 
-.PHONY: all build platform userboot init console run run-kernel run-root run-userboot debug check fmt clean
+.PHONY: all build platform userboot init console block_server fs_server appmgr hello disk run run-kernel run-root run-userboot debug check fmt clean
 all: build
 
 platform:
 	python3 tools/build_platform.py $(PLATFORM_DIR) --qemu $(QEMU)
 
-build: userboot init console platform
+build: userboot init console block_server fs_server appmgr platform
 	PLATFORM_DIR=$(PLATFORM_DIR) cargo build $(CARGO_FLAGS) --target-dir $(BUILD_DIR)
 	rust-objcopy -O binary $(KERNEL_ELF) $(KERNEL_BIN)
 	for app in init console; do rust-objcopy --strip-all $(APP_DIR)/$(TARGET)/$(MODE)/$$app $(APP_DIR)/$$app.elf; done
+	rust-objcopy --strip-all $(BLOCK_ELF) $(APP_DIR)/block.elf
+	rust-objcopy --strip-all $(APP_DIR)/$(TARGET)/$(MODE)/fs_server $(APP_DIR)/fs.elf
+	rust-objcopy --strip-all $(APP_DIR)/$(TARGET)/$(MODE)/appmgr $(APP_DIR)/appmgr.elf
 	python3 tools/build_image.py $(KERNEL_ELF) $(USERBOOT_ELF) $(IMAGE_DIR) --platform $(PLATFORM_DIR) --mode $(MODE) \
-	  --module $(APP_DIR)/init.elf --module $(APP_DIR)/console.elf --module init.cfg=apps/init.cfg
+	  --module $(APP_DIR)/init.elf --module $(APP_DIR)/console.elf --module $(APP_DIR)/block.elf \
+	  --module $(APP_DIR)/fs.elf --module $(APP_DIR)/appmgr.elf --module init.cfg=apps/init.cfg
 
 userboot:
 	python3 tools/build_app.py userboot --mode $(MODE) $(if $(ROOT_IMAGE_BASE),--image-base $(ROOT_IMAGE_BASE))
 
-init console:
+init console hello block_server fs_server appmgr:
 	python3 tools/build_app.py $@ --mode $(MODE)
+
+# The application disk: bare FAT32 with the app manifest and its ELFs.
+disk: hello
+	rust-objcopy --strip-all $(HELLO_ELF) $(APP_DIR)/hello.elf
+	python3 tools/make_disk.py $(DISK_IMG) \
+	  --file HELLO.ELF=$(APP_DIR)/hello.elf --file APPS.CFG=apps/APPS.CFG
 
 run run-kernel run-root run-userboot: build
 	$(QEMU) $(QEMU_ARGS)
@@ -83,6 +102,11 @@ check:
 	python3 tools/check_tasks.py --qemu $(QEMU)
 	python3 tools/check_user_context.py --qemu $(QEMU)
 	python3 tools/check_relocation.py --qemu $(QEMU)
+	python3 tools/check_block.py --qemu $(QEMU)
+	python3 tools/check_fat32.py --qemu $(QEMU)
+	python3 tools/check_appmgr.py --qemu $(QEMU)
+	python3 tools/check_services.py --qemu $(QEMU)
+	python3 tools/check_restart.py --qemu $(QEMU)
 
 fmt:
 	cargo fmt --all --check

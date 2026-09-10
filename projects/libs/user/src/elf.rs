@@ -3,7 +3,7 @@ use crate::{Error, Task, abi, capability::*, runtime};
 use rstiny_elf::Elf;
 
 const PAGE: usize = 4096;
-const STACK_SIZE: usize = 16 * 1024;
+const STACK_SIZE: usize = 64 * 1024;
 
 fn empty_slot() -> Result<u64, Error> {
     runtime(abi::RuntimeInvocation::FindEmptySlot, &[])
@@ -103,6 +103,7 @@ pub unsafe fn spawn(image: &[u8], scratch: usize, source_untyped: u64) -> Result
         let tcb = retype_at(&allocator, ObjectType::Tcb, &mut loader_slot)?;
         let space = CPtr(retype(&allocator, ObjectType::VSpace)?);
         let child_node = CPtr(retype(&allocator, ObjectType::CNode)?);
+
         // Assign this root before any page-table/frame invocation can use it.
         unsafe {
             CPtr(INIT_ASID_POOL).call(Invocation::ArmAsidPoolAssign, &[], &[space.0])?;
@@ -254,12 +255,19 @@ pub struct Supervision<'a> {
     pub fault_ep: u64,
     /// Capabilities minted or copied into the child CNode.
     pub caps: &'a [ChildCap],
+    /// First CSpace slot (in the *supervisor's* CSpace) this spawn allocates
+    /// from. Concurrent spawns of sibling services need disjoint windows;
+    /// [`LOADER_SLOT_BASE`] plus a per-service stride is the convention.
+    pub slot_base: u64,
 }
 
-/// First CSpace slot the supervised loader allocates from. Well below the
-/// supervisor's ChildCap window (see docs/service-manager.md) so the two never
-/// collide; the loader climbs monotonically from here.
-const LOADER_SLOT_BASE: u64 = 40_000;
+/// First CSpace slot the supervised loader allocates from by default. Well
+/// below the supervisor's ChildCap window (see docs/service-manager.md) so
+/// the two never collide; the loader climbs monotonically from here.
+pub const LOADER_SLOT_BASE: u64 = 40_000;
+/// Slot window reserved per supervised spawn, so sibling services loading
+/// concurrently in one supervisor never overlap.
+pub const LOADER_SLOT_STRIDE: u64 = 4_000;
 
 /// Load a static ELF under a supervisor: the child receives a read-only
 /// parameter page (its start argument), the listed capabilities and a fault
@@ -299,7 +307,7 @@ pub unsafe fn spawn_supervised(
     }
 
     let cnode = CNode(CPtr(INIT_CNODE));
-    let mut next_slot = LOADER_SLOT_BASE;
+    let mut next_slot = spec.slot_base;
     let mut loader_slot = || {
         let slot = next_slot;
         next_slot += 1;
@@ -313,6 +321,7 @@ pub unsafe fn spawn_supervised(
         let tcb = retype_at(&allocator, ObjectType::Tcb, &mut loader_slot)?;
         let space = CPtr(retype(&allocator, ObjectType::VSpace)?);
         let child_node = CPtr(retype(&allocator, ObjectType::CNode)?);
+
         // Assign this root before any page-table/frame invocation can use it.
         unsafe {
             CPtr(INIT_ASID_POOL).call(Invocation::ArmAsidPoolAssign, &[], &[space.0])?;

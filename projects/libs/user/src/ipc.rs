@@ -8,6 +8,33 @@ use core::arch::asm;
 /// Message words carried beyond the four register MRs.
 pub const MAX_WORDS: usize = 16;
 
+/// Where the kernel lands caps carried by an incoming message: a CNode slot in
+/// the receiver's own CSpace. The spec is sticky in the IPC buffer (the kernel
+/// never rewrites it), so set it once per landing slot; the slot must be empty
+/// at delivery time or the transfer fails (`ALREADY_MAPPED`).
+#[derive(Clone, Copy, Debug)]
+pub struct ReceiveSpec {
+    pub cnode: u64,
+    pub index: u64,
+    pub depth: u64,
+}
+
+/// Publish the landing spec at IPC buffer offset 1000 (kernel ABI).
+pub fn set_receive_spec(spec: ReceiveSpec) -> Result<(), Error> {
+    let address = ipc_address();
+    if address == 0 {
+        return Err(Error::TruncatedMessage);
+    }
+    // SAFETY: the task's runtime owns this IPC buffer; no alias exists.
+    unsafe {
+        for (offset, word) in [(0usize, spec.cnode), (8, spec.index), (16, spec.depth)] {
+            let slot = (address + 1000 + offset) as *mut u64;
+            slot.write_volatile(word);
+        }
+    }
+    Ok(())
+}
+
 /// One received message: badge, label and the first `length` message registers.
 #[derive(Clone, Copy)]
 pub struct Received {
@@ -124,6 +151,11 @@ pub fn call(cap: u64, label: u64, words: &[u64]) -> Result<Received, Error> {
     syscall(abi::Syscall::Call as i64, cap, label, words, &[])
 }
 
+/// Call that transfers Grant-authorised caps (client-provided resources).
+pub fn call_cap(cap: u64, label: u64, words: &[u64], caps: &[u64]) -> Result<Received, Error> {
+    syscall(abi::Syscall::Call as i64, cap, label, words, caps)
+}
+
 /// Buffered receive; blocks until a sender or fault arrives.
 pub fn recv(cap: u64) -> Result<Received, Error> {
     syscall(abi::Syscall::Recv as i64, cap, 0, &[], &[])
@@ -138,6 +170,12 @@ pub fn nbrecv(cap: u64) -> Result<Option<Received>, Error> {
 /// Reply to the caller or faulted thread recorded by the last delivery.
 pub fn reply(label: u64, words: &[u64]) -> Result<(), Error> {
     syscall(abi::Syscall::Reply as i64, 0, label, words, &[]).map(|_| ())
+}
+
+/// Reply that transfers Grant-authorised caps (server-provided resources,
+/// e.g. a shared buffer granted during a BIND handshake).
+pub fn reply_cap(label: u64, words: &[u64], caps: &[u64]) -> Result<(), Error> {
+    syscall(abi::Syscall::Reply as i64, 0, label, words, caps).map(|_| ())
 }
 
 /// Reply to the pending partner, then receive the next message.

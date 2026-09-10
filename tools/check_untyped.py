@@ -51,10 +51,12 @@ def run(qemu, kernel):
             client = Client(gdb, entry, ipc)
             untyped_start, descriptors = read_bootinfo(gdb, boot_info)
             assert descriptors, 'no Untyped regions published'
-            # GIC/timer are kernel-reserved; only UART is a device region.
+            # GIC/timer are kernel-reserved; the UART and the VirtIO MMIO
+            # window are the device regions, published in ascending physical
+            # order regardless of size (docs/disk-driver.md section 5.1).
             devices = [d for d in descriptors if d[2] == 1]
             assert all(d[0] != 0x08000000 and d[0] != 0x080A0000 for d in descriptors)
-            assert any(d[0] == 0x09000000 for d in devices), devices
+            assert [(d[0], d[1]) for d in devices] == [(0x09000000, 12), (0x0a000000, 14)], devices
             normal = [i for i, d in enumerate(descriptors) if d[2] == 0]
             assert normal, 'no ordinary Untyped regions'
             # Retype a frame from the largest ordinary region.

@@ -1,10 +1,10 @@
 [package]
-name = "hello"
+name = "block_server"
 version = "0.1.0"
 edition = "2024"
 
 [[bin]]
-name = "hello"
+name = "block_server"
 path = "src/main.rs"
 test = false
 bench = false
@@ -14,3 +14,6 @@ rstiny = { path = "../../libs/user" }
 rstiny-runtime = { path = "../../libs/runtime" }
 rstiny-server = { path = "../../libs/server" }
 rstiny-protocol = { path = "../../libs/protocol" }
+# "alloc" only buys indirect descriptors, which cost a heap allocation per
+# request; without it every request uses the ring's own descriptor table.
+virtio-drivers = { version = "0.13.0", default-features = false }

@@ -13,18 +13,22 @@ use rstiny_runtime::{BootInfo, entry};
 
 const CONTROL_EP: u64 = 130; // root's supervision endpoint object for init
 const INIT_BUDGET_OBJ: u64 = 160; // init's Untyped budget carved from our pool
-const UART_DEV_COPY: u64 = 161; // UART device Untyped copy for init
+const DEVICE_COPY_BASE: u64 = 161; // device Untyped copies, +k per device region
+const MAX_DEVICES: usize = 4;
 const INIT_CONTROL_SLOT: u64 = 140; // init's control endpoint slot
 const INIT_BUDGET_SLOT: u64 = 32; // init's budget slot in its own CSpace
 const INIT_DEV_SLOT: u64 = 161; // init's first device Untyped slot in its CSpace
 const INIT_ASID_SLOT: u64 = 6; // init's ASID pool slot (the standard slot)
 const INIT_ROM_FIRST: u64 = 200; // init's ROM Frame caps (clear of 161)
 const ROM_GRANT_MAX: usize = 512; // ROM pages granted to init (covers the whole archive)
+/// init's budget: console + block + fs + appmgr service budgets (8 MiB) plus
+/// init's own objects. Achieving it is a boot precondition, not best effort.
+const INIT_BUDGET_BITS: u64 = 24;
 
 const INIT_ELF: &str = "init.elf";
 const SERVICE_BADGE: u64 = 1;
 const MAX_INIT_RESTARTS: u32 = 5;
-/// Device Untyped copies handed to init (there is exactly one: the UART).
+
 fn boot_test() -> bool {
     option_env!("BOOT_TEST").is_some_and(|value| value == "1")
 }
@@ -44,25 +48,22 @@ fn main(info: &mut BootInfo) -> ! {
         root_failed();
     };
     let scratch = info.first_free_address();
-    // Device Untyped copies for init: the boot partition has exactly one
-    // device region (the UART) today.
-    let device_count = info.untyped().iter().filter(|d| d.is_device != 0).count();
-    let first_device = info
-        .untyped()
-        .iter()
-        .position(|d| d.is_device != 0)
-        .map(|index| info.untyped_start() + index as u64)
-        .unwrap_or(0);
-    let Some(_uart_slot) = info
-        .untyped()
-        .iter()
-        .position(|descriptor| descriptor.is_device != 0)
-        .map(|index| info.untyped_start() + index as u64)
-    else {
-        root_failed();
-    };
+    // Device Untyped copies for init, one per device region in ascending
+    // physical order (boot.rs publishes UART before the VirtIO window).
+    let mut devices = [0u64; MAX_DEVICES]; // source cap slots in our CSpace
+    let mut device_count = 0usize;
+    for (index, descriptor) in info.untyped().iter().enumerate() {
+        if descriptor.is_device == 0 {
+            continue;
+        }
+        if device_count == MAX_DEVICES {
+            rstiny::debug_println!("[userboot] too many device regions");
+            root_failed();
+        }
+        devices[device_count] = info.untyped_start() + index as u64;
+        device_count += 1;
+    }
     let cnode = CNode(CPtr(INIT_CNODE));
-    let allocator = Untyped(CPtr(INIT_UNTYPED));
     if cnode
         .retype_endpoint(CPtr(INIT_UNTYPED), CONTROL_EP)
         .is_err()
@@ -70,36 +71,51 @@ fn main(info: &mut BootInfo) -> ! {
         rstiny::debug_println!("[userboot] control ep retype failed");
         root_failed();
     }
-    // Grant the UART device Untyped itself so the console driver can retype
-    // its MMIO frame (the device region is passed through, never retyped).
-    if cnode
-        .copy(UART_DEV_COPY, CPtr(INIT_CNODE), first_device, RIGHTS_ALL)
+    // Grant every device Untyped so drivers can retype their MMIO frames
+    // (device regions are passed through, never retyped or split).
+    for (index, &slot) in devices[..device_count].iter().enumerate() {
+        if cnode
+            .copy(
+                DEVICE_COPY_BASE + index as u64,
+                CPtr(INIT_CNODE),
+                slot,
+                RIGHTS_ALL,
+            )
+            .is_err()
+        {
+            rstiny::debug_println!("[userboot] device copy failed");
+            root_failed();
+        }
+    }
+    // init's budget: carve a whole sub-Untyped from a region big enough that
+    // root's own allocations (ROM tables, endpoints) are untouched. The boot
+    // partition yields several max-sized regions; pick one other than the
+    // first, which backs root's own allocations.
+    let budget_source = info
+        .untyped()
+        .iter()
+        .enumerate()
+        .find(|(index, descriptor)| {
+            descriptor.is_device == 0
+                && descriptor.size_bits >= INIT_BUDGET_BITS
+                && info.untyped_start() + *index as u64 != INIT_UNTYPED
+        })
+        .map(|(index, _)| info.untyped_start() + index as u64);
+    let Some(source) = budget_source else {
+        rstiny::debug_println!("[userboot] init budget ({INIT_BUDGET_BITS} bits) unavailable");
+        root_failed();
+    };
+    if Untyped(CPtr(source))
+        .retype(
+            ObjectType::Untyped,
+            INIT_BUDGET_BITS,
+            cnode.0,
+            INIT_BUDGET_OBJ,
+            1,
+        )
         .is_err()
     {
-        rstiny::debug_println!("[userboot] uart device copy failed");
-        root_failed();
-    }
-    // init's budget: carve a sub-Untyped after the small allocations above so
-    // the rest of the region stays available to the root task.
-    let largest_bits = info.untyped().first().map(|d| d.size_bits).unwrap_or(0);
-    let mut budget_bits = 23u64.min(largest_bits.saturating_sub(1));
-    while budget_bits >= 12 {
-        if allocator
-            .retype(
-                ObjectType::Untyped,
-                budget_bits,
-                cnode.0,
-                INIT_BUDGET_OBJ,
-                1,
-            )
-            .is_ok()
-        {
-            break;
-        }
-        budget_bits -= 1;
-    }
-    if budget_bits < 12 {
-        rstiny::debug_println!("[userboot] budget retype failed");
+        rstiny::debug_println!("[userboot] init budget retype failed");
         root_failed();
     }
 
@@ -130,13 +146,13 @@ fn main(info: &mut BootInfo) -> ! {
                 core::mem::size_of::<SpawnInfo>(),
             )
         };
-        // Fixed-capability prefix plus the ROM window, on the stack.
+        // Fixed-capability prefix, device grants, then the ROM window.
         let mut caps = [ChildCap {
             slot: 0,
             source: 0,
             rights: 0,
             badge: 0,
-        }; 4 + ROM_GRANT_MAX];
+        }; 4 + MAX_DEVICES + ROM_GRANT_MAX];
         caps[0] = ChildCap {
             slot: INIT_CONTROL_SLOT,
             source: CONTROL_EP,
@@ -150,19 +166,24 @@ fn main(info: &mut BootInfo) -> ! {
             badge: 0,
         };
         caps[2] = ChildCap {
-            slot: INIT_DEV_SLOT,
-            source: UART_DEV_COPY,
-            rights: RIGHTS_ALL,
-            badge: 0,
-        };
-        caps[3] = ChildCap {
             slot: INIT_ASID_SLOT,
             source: INIT_ASID_POOL,
             rights: RIGHTS_ALL,
             badge: 0,
         };
+        for (index, cap) in caps[3..3 + device_count].iter_mut().enumerate() {
+            *cap = ChildCap {
+                slot: DEVICE_COPY_BASE + index as u64,
+                source: DEVICE_COPY_BASE + index as u64,
+                rights: RIGHTS_ALL,
+                badge: 0,
+            };
+        }
         let granted = (modules.frame_count as usize).min(ROM_GRANT_MAX);
-        for (index, cap) in caps[4..4 + granted].iter_mut().enumerate() {
+        for (index, cap) in caps[3 + device_count..3 + device_count + granted]
+            .iter_mut()
+            .enumerate()
+        {
             *cap = ChildCap {
                 slot: INIT_ROM_FIRST + index as u64,
                 source: kernel_abi::INIT_BOOT_MODULES + index as u64,
@@ -179,7 +200,8 @@ fn main(info: &mut BootInfo) -> ! {
                 &rstiny::elf::Supervision {
                     info: info_bytes,
                     fault_ep: INIT_CONTROL_SLOT,
-                    caps: &caps[..4 + granted],
+                    caps: &caps[..3 + device_count + granted],
+                    slot_base: rstiny::elf::LOADER_SLOT_BASE,
                 },
             )
         } {
@@ -222,11 +244,13 @@ fn main(info: &mut BootInfo) -> ! {
         // SAFETY: init's derivation subtree was already revoked by destroy().
         unsafe {
             let _ = cnode.revoke(INIT_BUDGET_OBJ);
-            // The device region is shared with userboot's own copy and is not
-            // covered by init's budget revoke: without this the restarted
-            // console cannot re-carve its UART frame.
-            // SAFETY: init's device derivation subtree is already dead.
-            let _ = cnode.revoke(UART_DEV_COPY);
+            // Device regions are shared with userboot's own copies and are not
+            // covered by init's budget revoke: without this a restarted driver
+            // cannot re-carve its MMIO frames (docs/disk-driver.md §6.4).
+            // SAFETY: init's device derivation subtrees are already dead.
+            for index in 0..device_count {
+                let _ = cnode.revoke(DEVICE_COPY_BASE + index as u64);
+            }
         }
     }
 }

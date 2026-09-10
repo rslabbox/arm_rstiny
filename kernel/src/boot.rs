@@ -42,17 +42,27 @@ fn boot_regions(loaded: boot::BootInfo) -> Vec<(usize, u8, bool)> {
         free = next;
     }
     let mut regions = Vec::new();
+    let mut devices = Vec::new();
     for (start, end) in free {
         crate::object::partition(start, end, |physical, size_bits| {
             regions.push((physical, size_bits, false));
         });
     }
-    // Device MMIO: UART is available to a user driver; GIC and timer stay with
-    // the kernel and are never published.
-    regions.push((crate::config::UART_BASE, 12, true));
+    // Device MMIO: the UART and the VirtIO MMIO window are available to user
+    // drivers; GIC and timer stay with the kernel and are never published.
+    // Devices keep ascending physical order regardless of size so supervisor
+    // device tables (docs/disk-driver.md section 5) are stable.
+    devices.push((crate::config::UART_BASE, 12, true));
+    devices.push((
+        crate::config::VIRTIO_MMIO_BASE,
+        crate::config::VIRTIO_MMIO_SIZE_LOG2,
+        true,
+    ));
+    devices.sort_by_key(|&(physical, _, _)| physical);
     // Put the largest ordinary regions first so the well-known first Untyped
     // capability (`INIT_UNTYPED`) can back a full ELF load.
     regions.sort_by(|a, b| b.1.cmp(&a.1));
+    regions.extend(devices);
     regions
 }
 

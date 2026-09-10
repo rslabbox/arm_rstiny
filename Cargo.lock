@@ -12,6 +12,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "appmgr"
+version = "0.1.0"
+dependencies = [
+ "rstiny",
+ "rstiny-initcfg",
+ "rstiny-protocol",
+ "rstiny-runtime",
+ "rstiny-server",
+]
+
+[[package]]
 name = "arm-gic-driver"
 version = "0.17.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -27,10 +38,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "autocfg"
+version = "1.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
+
+[[package]]
 name = "bitflags"
 version = "2.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b588b76d00fde79687d7646a9b5bdf3cc0f655e0bbd080335a95d7e96f3587da"
+
+[[package]]
+name = "block_server"
+version = "0.1.0"
+dependencies = [
+ "rstiny",
+ "rstiny-protocol",
+ "rstiny-runtime",
+ "rstiny-server",
+ "virtio-drivers",
+]
 
 [[package]]
 name = "bootloader"
@@ -46,6 +74,47 @@ dependencies = [
 ]
 
 [[package]]
+name = "bytemuck"
+version = "1.25.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "95832e849adfb21180ccb6826a99da14e5d266ae5c2e668e1602cf234f153797"
+dependencies = [
+ "bytemuck_derive",
+]
+
+[[package]]
+name = "bytemuck_derive"
+version = "1.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fc0e56a716f1e132ff6bf4bdac1c944a3fcdc1cae65f70a4a2a1ac3b401d2d1f"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.5",
+]
+
+[[package]]
+name = "byteorder"
+version = "1.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1fd0f2584146f6f2ef48085050886acf353beff7305ebd1ae69500e27c67f64b"
+
+[[package]]
+name = "cfg-if"
+version = "1.0.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
+
+[[package]]
+name = "chrono"
+version = "0.4.45"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1aa79e62e7697b8e29b513a68abacf485adcd1fe8284a4316c5ae868e6633327"
+dependencies = [
+ "num-traits",
+]
+
+[[package]]
 name = "console"
 version = "0.1.0"
 dependencies = [
@@ -54,6 +123,12 @@ dependencies = [
  "rstiny-runtime",
  "rstiny-server",
 ]
+
+[[package]]
+name = "embedded-io"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9eb1aa714776b75c7e67e1da744b81a129b3ff919c8712b5e1b32252c1f07cc7"
 
 [[package]]
 name = "enum_dispatch"
@@ -68,11 +143,118 @@ dependencies = [
 ]
 
 [[package]]
+name = "enumn"
+version = "0.1.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2f9ed6b3789237c8a0c1c505af1c7eb2c560df6186f01b098c3a1064ea532f38"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "fs_server"
+version = "0.1.0"
+dependencies = [
+ "embedded-io",
+ "hadris-fat",
+ "rstiny",
+ "rstiny-protocol",
+ "rstiny-runtime",
+ "rstiny-server",
+]
+
+[[package]]
+name = "hadris-common"
+version = "2.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2419641e2ce38205ac40e8c127d5d635f700f4b6bd79494f570141296b7682e9"
+dependencies = [
+ "hadris-fixed",
+ "hadris-io",
+ "hadris-path",
+ "heapless",
+ "zerocopy",
+]
+
+[[package]]
+name = "hadris-fat"
+version = "2.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e90944e25592823e8512521f20bad5984eeddc4d4b0d4a688c379a3860c9deb7"
+dependencies = [
+ "bitflags",
+ "bytemuck",
+ "chrono",
+ "hadris-common",
+ "hadris-fixed",
+ "hadris-io",
+ "hadris-macros",
+ "hadris-path",
+ "parse-size",
+ "spin",
+]
+
+[[package]]
+name = "hadris-fixed"
+version = "2.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c2f979ce5abdf45f06df09e7fede7b7ac54aae20b63407e3f5f9595999f5cb96"
+
+[[package]]
+name = "hadris-io"
+version = "2.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "85372a1e658e46128d98b0b2221485dd72ab6adaca1b643d7f9bfc0fa42bc290"
+dependencies = [
+ "bytemuck",
+ "cfg-if",
+ "embedded-io",
+]
+
+[[package]]
+name = "hadris-macros"
+version = "2.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "793233288d1b5f23451f75b2c57696808b544eabd45919cceed46b5403c7df8e"
+dependencies = [
+ "proc-macro2",
+]
+
+[[package]]
+name = "hadris-path"
+version = "2.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "af25620d0760ae6cdcf56a5c269d29f2e380a712355924143c199552cba895de"
+
+[[package]]
+name = "hash32"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "47d60b12902ba28e2730cd37e95b8c9223af2808df9e902d4df49588d1470606"
+dependencies = [
+ "byteorder",
+]
+
+[[package]]
+name = "heapless"
+version = "0.9.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "25ba4bd83f9415b58b4ed8dc5714c76e626a105be4646c02630ad730ad3b5aa4"
+dependencies = [
+ "hash32",
+ "stable_deref_trait",
+]
+
+[[package]]
 name = "hello"
 version = "0.1.0"
 dependencies = [
  "rstiny",
+ "rstiny-protocol",
  "rstiny-runtime",
+ "rstiny-server",
 ]
 
 [[package]]
@@ -112,6 +294,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2b23ac50abb8261cb38c6e2a7192d3302e0836dac1628f6a93b82b4fad185897"
 
 [[package]]
+name = "lock_api"
+version = "0.4.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "224399e74b87b5f3557511d98dff8b14089b3dadafcab6bb93eab67d3aace965"
+dependencies = [
+ "scopeguard",
+]
+
+[[package]]
 name = "log"
 version = "0.4.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -124,10 +315,25 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b1f0625c50adb5f6aaf47f05cae3c4dbc13a74c659241b06c4576f3d7e1da940"
 
 [[package]]
+name = "num-traits"
+version = "0.2.19"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "071dfc062690e90b734c0b2273ce72ad0ffa95f0c74596bc250dcfd960262841"
+dependencies = [
+ "autocfg",
+]
+
+[[package]]
 name = "once_cell"
 version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
+
+[[package]]
+name = "parse-size"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "487f2ccd1e17ce8c1bfab3a65c89525af41cfad4c8659021a1e9a2aacd73b89b"
 
 [[package]]
 name = "paste"
@@ -208,6 +414,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "safe-mmio"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ce5e4ed477d6ebc07e01ce97b87fe319e6b62d0ab2564594db6a8c4cdc29ffd9"
+dependencies = [
+ "zerocopy",
+]
+
+[[package]]
+name = "scopeguard"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
+
+[[package]]
+name = "spin"
+version = "0.12.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0134f9043ed38b087ac4f7d4af44c79e2c9e5094421fe3164f435ce585953b10"
+dependencies = [
+ "lock_api",
+]
+
+[[package]]
+name = "stable_deref_trait"
+version = "1.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
+
+[[package]]
 name = "syn"
 version = "2.0.119"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -271,4 +507,38 @@ dependencies = [
  "rstiny-newc",
  "rstiny-protocol",
  "rstiny-runtime",
+]
+
+[[package]]
+name = "virtio-drivers"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cfdc1c628cdd8ce7c3b9e65a8ed550d0338e9ef9f911e729666f1cce097de2f7"
+dependencies = [
+ "bitflags",
+ "enumn",
+ "log",
+ "safe-mmio",
+ "thiserror",
+ "zerocopy",
+]
+
+[[package]]
+name = "zerocopy"
+version = "0.8.57"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d35102a9f36d089ccae9e4c6802bc118be4487b80aaffc0ab4e0cf5ce92d2873"
+dependencies = [
+ "zerocopy-derive",
+]
+
+[[package]]
+name = "zerocopy-derive"
+version = "0.8.57"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "146c01f5ab44258da43cf276c74a2763db2ff3969c9c652c3f2de07041d0b2bc"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
 ]

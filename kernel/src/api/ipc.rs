@@ -49,34 +49,38 @@ struct Delivery {
     sender: SenderFate,
 }
 
-/// The oldest queue entry whose task is still blocked on this object; stale
-/// entries naming finished or moved-on tasks are pruned on the way past.
+/// The oldest queue entry whose task is still blocked on this object and
+/// whose role matches `states`. Genuinely stale entries (task gone, or no
+/// longer waiting on this object) are pruned on the way past; live entries in
+/// another role — e.g. a queued fault sender when a sender scans for a
+/// receiver — stay queued for the peer that can consume them.
 fn peek_valid(ep: ObjectId, states: &[u64]) -> Result<Option<u64>, u64> {
     loop {
         let Some(id) = object::with_wait_queue(ep, |queue| queue.peek())? else {
             return Ok(None);
         };
-        let valid = api::state_of(id)
-            .ok()
-            .is_some_and(|state| states.contains(&state))
-            && api::blocked_of(id).is_some_and(|blocked| blocked.ep == ep);
-        if valid {
-            return Ok(Some(id));
+        let stale = stale_entry(id, ep);
+        if stale {
+            object::with_wait_queue(ep, |queue| queue.pop())?;
+            continue;
         }
-        object::with_wait_queue(ep, |queue| queue.pop())?;
+        let state = api::state_of(id)?;
+        return Ok(states.contains(&state).then_some(id));
     }
+}
+
+/// A queue entry is stale when its task is gone or no longer waiting on this
+/// object. Entries in another wait role — a queued fault sender ahead of a
+/// plain call, say — are live and belong to a different consumer.
+fn stale_entry(entry: u64, ep: ObjectId) -> bool {
+    api::state_of(entry).is_err() || !api::blocked_of(entry).is_some_and(|blocked| blocked.ep == ep)
 }
 
 /// Make room and enqueue `id`, pruning entries that no longer name a task
 /// waiting here. The caller commits its own `Blocked` state; enqueue never
 /// overwrites it (a queued fault sender keeps its fault marker).
-fn enqueue(ep: ObjectId, id: u64, state: u64) -> Result<(), u64> {
-    object::with_wait_queue(ep, |queue| {
-        queue.retain(|entry| {
-            api::state_of(entry).ok() == Some(state)
-                && api::blocked_of(entry).is_some_and(|blocked| blocked.ep == ep)
-        })
-    })?;
+fn enqueue(ep: ObjectId, id: u64, _state: u64) -> Result<(), u64> {
+    object::with_wait_queue(ep, |queue| queue.retain(|entry| !stale_entry(entry, ep)))?;
     object::with_wait_queue(ep, |queue| queue.push(id))??;
     Ok(())
 }
@@ -406,7 +410,13 @@ fn reply_phase(context: &mut UserContext) -> Result<bool, u64> {
                 caller: None,
                 sender: SenderFate::Wake,
             };
-            deliver(target, me, delivery, Some(context), None)?;
+            // A failed reply delivery (no receive spec, occupied landing slot,
+            // missing grant) must still wake the parked caller with a failed
+            // completion: its relation is consumed, so nothing else ever will.
+            if let Err(error) = deliver(target, me, delivery, Some(context), None) {
+                api::fail_caller(caller);
+                return Err(error);
+            }
         }
     }
     Ok(true)

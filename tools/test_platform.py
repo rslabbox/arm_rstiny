@@ -16,6 +16,9 @@ class PlatformTests(unittest.TestCase):
             self.assertEqual(info['psci_method'], 'hvc')
             self.assertEqual(info['timer_irq'], 30)
             self.assertEqual(info['kernel_devices'], ['/pl011@9000000', '/intc@8000000', '/timer'])
+            self.assertEqual(info['virtio_slots'], 32)
+            self.assertEqual(info['VIRTIO_MMIO_BASE'], 0x0a000000)
+            self.assertEqual(info['VIRTIO_MMIO_SIZE'], 0x4000)
             method = platform.run(['fdtget', '-t', 's', out / 'kernel.dtb', '/psci', 'method']).strip()
             self.assertEqual(method, info['psci_method'])
             self.assertNotIn('seL4,kernel-devices', (out / 'kernel.dts').read_text())
@@ -36,6 +39,18 @@ class PlatformTests(unittest.TestCase):
             return result
         with tempfile.TemporaryDirectory() as tmp, patch.object(platform, 'run', missing_gic):
             with self.assertRaisesRegex(ValueError, 'arm,gic-v3'):
+                platform.generate(Path(tmp))
+
+    def test_rejects_bad_virtio_window(self):
+        original = platform.run
+        def short_window(args):
+            result = original(args)
+            # Rewrite the last virtio slot's reg so the window is non-contiguous.
+            if args[0] == 'fdtget' and args[-1] == 'reg' and '/virtio_mmio@a003e00' in args:
+                result = '0x0 0x0b000000 0x0 0x200'
+            return result
+        with tempfile.TemporaryDirectory() as tmp, patch.object(platform, 'run', short_window):
+            with self.assertRaisesRegex(ValueError, 'virtio-mmio'):
                 platform.generate(Path(tmp))
 
 

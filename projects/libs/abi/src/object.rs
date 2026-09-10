@@ -21,6 +21,7 @@ pub enum Invocation {
     ArmPageMap = 40,
     ArmPageUnmap = 41,
     ArmPageGetAddress = 46,
+    ArmVspaceTranslate = 47,
     ArmAsidPoolAssign = 48,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

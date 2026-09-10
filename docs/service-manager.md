@@ -720,9 +720,26 @@ appmgr 用 `FS_OPEN/FS_READ` 读应用 ELF 到自己授予的共享 Frame，再�
 - 子 untyped 预算需覆盖 CNode 记账（512KB/slot 帧额度）与加载页，init 预算 8MB、console 4MB。
 - `Runtime::Clock/Sleep/Exit` 仍在（决策 12 的过渡通道），`Runtime::FindEmptySlot` 已从 loader 路径移除（改由 `LOADER_SLOT_BASE=40000` 起的单调分配，避免与监督者固定槽冲突）。
 
-已知余项：stop 握手的超时强制回收、restart storm 的窗口统计、依赖拓扑启动顺序、以及阶段 D–F 全部内容。
+已知余项：stop 握手的超时强制回收、restart storm 的窗口统计、以及阶段 E–F 全部内容（阶段 D 与依赖拓扑启动顺序、crash→restart 注入已随下述两批实施落地）。
 
 补充实施事实（[独立 fault-handler 线程与线程模型](fault-handler.md) F4 落地时确立）：
 
 - init 的 supervisor/client 线程组已落地：supervisor 是唯一 `control_ep` 接收者，阻塞 `Call` 由 client 线程执行；`crash → supervisor reap → 重启 → console 恢复`的注入用例由 `tools/check_fault_handler.py`（`BOOT_TEST=1`）固化，不再是余项。
-- 服务回收链补一条：`stop_and_reap` 在 `Task::destroy` 之后对 init 侧设备 untyped cap 执行 `CNode_Revoke`——服务持有的设备区间派生不随其预算子 untyped 回收，必须显式撤销才能重置区间 watermark（§8 的 reset 语义），否则重启的驱动实例切不出设备帧。
+- 服务回收链补一条：服务持有的设备区间派生不随其预算子 untyped 回收，必须显式撤销才能重置区间 watermark（§8 的 reset 语义），否则重启的驱动实例切不出设备帧。阶段 D 的实现为**按服务专用副本**：init 持设备母本，spawn 前 copy 出该服务专属副本并授予，teardown 在 `Task::destroy` 前 `Revoke` 副本（见 §25）。
+
+## 25. 实施记录（阶段 D：block/fs/appmgr 与磁盘加载）
+
+阶段 D 已实施（D0–D5，设计见 [disk-driver.md](disk-driver.md) §15 实施记录），本节记录与本文正文相关的修正：
+
+- **spawn 状态机**：spawn 完成置 `Starting`，收到 READY 才 `Running`；依赖扫描只认 Running（正文 §13.2 的"启动顺序"落地）。
+- **spawn_service cap 表**：新增 self_ep（子槽 52）、依赖 ep（53..，按 depends 顺序）、每服务设备 Untyped **专用副本**（init 侧 170+i*8+k，spawn 前 copy 母本 161+k，teardown 先 revoke 副本——设备 region 的水位只有 revoke 其派生子树才会复位，预算 revoke 不覆盖驱动 retype 的 MMIO 帧）。
+- **loader 并发槽位**：`Supervision.slot_base` = `LOADER_SLOT_BASE + index * LOADER_SLOT_STRIDE`，兄弟服务的 loader 分配窗口互不重叠（正文 §13.4 的 `FindEmptySlot` 移除遗留了这一处共享游标）。
+- **预算事实修正**：§24 "console 4MB" 有误——initcfg `budget` 默认 1MB，console 一直用的是默认值。阶段 D 起 userboot 给 init 的预算提升为 24 位（16MB，从独立 region 整块切出、fail-fast），init.cfg 显式声明 console 1M / block 1M / fs 2M / appmgr 4M。
+- **内核 IPC 三连修**（阶段 D 调试中确认，均在 `kernel/src/api/ipc.rs`/`task/api.rs`）：
+  1. `begin_fault` 现在释放被故障任务的未回复 caller（`fail_caller`），否则监督者停在 `TASK_BLOCKED_REPLY`，故障消息永远无人接收（a44008a"respawn 卡死"的根因之一）；
+  2. `reply_phase` 的 reply 投递失败时对已消费的 caller 关系补 `fail_caller`，客户端得到可见错误而非永久 BLOCKED_REPLY；
+  3. **等待队列剪枝的角色混淆**：`peek_valid`/`enqueue` 原以"状态 != 本次角色"为陈旧判据，排队的故障发送者会被后续普通发送挤出队列丢弃（监督者永远收不到故障）。现统一为 `stale_entry`（任务不存在或不再等待本端点），角色不匹配的活条目保留。
+- **子进程栈** 16 KiB → 64 KiB（debug 构建的驱动/文件栈深度会溢出）。
+- KILL_FS 演练由 init 驱动（appmgr READY 后延时回收 fs 并 detach 依赖者），比服务自毁更可控，且不消耗服务的重启预算。
+- 阶段 D 的验收脚本：`check_block.py`、`check_fat32.py`、`check_appmgr.py`、`check_services.py`、`check_restart.py`（全部进 `make check`）。
+>>>>>>> fafc44a (Implement disk stack D0-D5: VirtIO block, FAT32, apps loaded from disk)

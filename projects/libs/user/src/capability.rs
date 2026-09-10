@@ -4,6 +4,15 @@ pub use abi::{
     CNODE_BITS, INIT_ASID_POOL, INIT_CNODE, INIT_TCB, INIT_UNTYPED, INIT_VSPACE, Invocation,
     ObjectType, RIGHTS_ALL, RIGHTS_READ, RIGHTS_WRITE, VM_CACHEABLE, VM_EXECUTE_NEVER,
 };
+/// Translate a virtual address of the calling task into its physical
+/// address through the task's own VSpace (DMA setup). Fails for unmapped
+/// addresses.
+pub fn translate(address: usize) -> Result<usize, Error> {
+    // SAFETY: a read-only lookup in the caller's own address space.
+    unsafe { CPtr(INIT_VSPACE).call(Invocation::ArmVspaceTranslate, &[address as u64], &[]) }
+        .map(|word| word as usize)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(transparent)]
 pub struct CPtr(pub u64);
@@ -90,6 +99,10 @@ impl CNode {
 }
 pub struct Page(pub CPtr);
 impl Page {
+    /// Physical address of the frame (DMA setup, device register windows).
+    pub fn address(&self) -> Result<usize, Error> {
+        invoke(self.0.0, Invocation::ArmPageGetAddress as u64, &[], &[]).map(|word| word as usize)
+    }
     /// # Safety
     /// The mapping and its aliases must respect the address space's Rust ownership.
     pub unsafe fn map(

@@ -24,31 +24,46 @@ const CONSOLE: &str = "console";
 // init's CSpace layout, granted by userboot.
 const CONTROL_OBJ: u64 = 142; // init's supervision endpoint for its services
 const CONSOLE_EP_OWN: u64 = 50; // console service endpoint object cap
-const UART_DEV_OWN: u64 = 161; // first device Untyped copy (from userboot)
+const DEV_MASTER_BASE: u64 = 161; // device Untyped masters, +k per DEVICE_NAMES[k]
 // Per-service init-side cap blocks. They must stay clear of the ROM Frame
 // window granted to init (200..200+512) and below the loader's own range.
 const SUB_UNTYPED_BASE: u64 = 5000; // + i*8: per-service budget slots
 const SVC_EP_BASE: u64 = 5004; // + i*8: service main endpoint slots
 const THREAD_SLOT_BASE: u64 = 6000; // thread-group caps (16 per thread)
 const LOGGER_FAULT_SLOT: u64 = 144; // logger's badged fault-endpoint cap
+const DEV_COPY_BASE: u64 = 170; // + i*8 + k: per-service device Untyped copies
 const CHILD_SCRATCH: usize = 0x07E0_0000; // loader scratch while spawning
 const ROM_VA: usize = 0x0200_0000;
 
+// Child CSpace layout handed to every spawned service.
+const CHILD_CONTROL: u64 = 140;
+const CHILD_CONSOLE: u64 = 51;
+const CHILD_BUDGET: u64 = 32;
+const CHILD_DEV_BASE: u64 = 33;
+const CHILD_SELF_EP: u64 = 52;
+const CHILD_DEP_BASE: u64 = 53;
+const MAX_DEVICES: usize = 4;
+const MAX_DEPS: usize = 3;
+
 const SERVICE_BADGE_BASE: u64 = 1; // console = 1; others follow config order
 const INTERNAL_BADGE_BASE: u64 = 0x8000; // group-internal threads (logger …)
-const STOP_TIMEOUT_MS: u64 = 500;
+const _STOP_TIMEOUT_MS: u64 = 500;
 const BACKOFF_SHIFT_CAP: u32 = 5;
 /// Supervision drill: init hands itself back to userboot with this exit code,
 /// exercising the group destroy and the level-1 restart (BOOT_TEST builds).
 const INIT_EXIT_DRILL_CODE: u64 = 7;
 
-const DEVICE_NAMES: [&str; 1] = ["uart0"];
+/// Device names resolve by position to the masters userboot granted in
+/// ascending physical order (docs/disk-driver.md section 5.1).
+const DEVICE_NAMES: [&str; 2] = ["uart0", "virtio-mmio-0"];
 
 /// Service lifecycle states (docs/service-manager.md §12).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Status {
     /// Waiting for dependencies to become Running.
     Waiting,
+    /// Spawned, before its READY announcement.
+    Starting,
     Running,
     /// Crashed or exited cleanly; restart pending (backoff) or final.
     Terminated,
@@ -63,6 +78,8 @@ struct ServiceState {
     /// init-side cap slots: service main endpoint and per-service budget.
     svc_ep_obj: u64,
     budget_slot: u64,
+    /// Per-service device Untyped copies (init-side, survive restarts).
+    device_copies: [u64; MAX_DEVICES],
     /// Restart timestamps inside the observation window (clock ms).
     restart_times: Vec<u64>,
     restarts: u32,
@@ -200,12 +217,20 @@ fn run(info: SpawnInfo) -> ! {
 
     let mut services: Vec<ServiceState> = Vec::new();
     for (index, cfg) in config.services.iter().enumerate() {
+        // Resolve configured device names to per-service copy slots up front;
+        // names were validated against DEVICE_NAMES above.
+        let mut device_copies = [0u64; MAX_DEVICES];
+        for (k, name) in cfg.devices.iter().enumerate().take(MAX_DEVICES) {
+            device_copies[k] = DEV_COPY_BASE + index as u64 * 8 + k as u64;
+            let _ = name;
+        }
         services.push(ServiceState {
             cfg: cfg.clone(),
             status: Status::Waiting,
             task: None,
             svc_ep_obj: SVC_EP_BASE + index as u64 * 8,
             budget_slot: SUB_UNTYPED_BASE + index as u64 * 8,
+            device_copies,
             restart_times: Vec::new(),
             restarts: 0,
             infra: false,
@@ -219,6 +244,11 @@ fn run(info: SpawnInfo) -> ! {
     let mut console_running = false;
     let mut drill_armed = false;
     let mut logger_drill_armed = false;
+    // Crash drill (KILL_FS=1): once the full chain is up (appmgr READY), the
+    // supervisor reaps fs and detaches its dependents so the whole
+    // notify/rebuild path runs (docs/disk-driver.md section 12, D5).
+    let kill_fs = option_env!("KILL_FS").is_some_and(|value| value == "1");
+    let mut drilled = false;
     loop {
         // Start every service whose dependencies are all Running.
         for index in 0..services.len() {
@@ -230,8 +260,8 @@ fn run(info: SpawnInfo) -> ! {
             if services[index].status != Status::Waiting || !deps_ok {
                 continue;
             }
-            // Endpoints and budget survive restarts (supervisor-owned); the
-            // teardown revoke resets the per-service budget watermark.
+            // Endpoints, budget and device copies survive restarts
+            // (supervisor-owned); the teardown revokes reset the watermark.
             if !services[index].infra {
                 let (svc_ep_obj, budget_slot) =
                     (services[index].svc_ep_obj, services[index].budget_slot);
@@ -249,6 +279,33 @@ fn run(info: SpawnInfo) -> ! {
                         .is_err()
                 {
                     fail_reason(&info, 19);
+                }
+                // Per-service device copies: the master stays with init, the
+                // copy is revoked on teardown so the device region watermark
+                // resets even after a driver retyped MMIO frames from it.
+                for (k, name) in services[index]
+                    .cfg
+                    .devices
+                    .iter()
+                    .enumerate()
+                    .take(MAX_DEVICES)
+                {
+                    let Some(position) =
+                        DEVICE_NAMES.iter().position(|candidate| candidate == name)
+                    else {
+                        fail_reason(&info, 17);
+                    };
+                    if cnode
+                        .copy(
+                            services[index].device_copies[k],
+                            CPtr(INIT_CNODE),
+                            DEV_MASTER_BASE + position as u64,
+                            RIGHTS_ALL,
+                        )
+                        .is_err()
+                    {
+                        fail_reason(&info, 19);
+                    }
                 }
                 services[index].infra = true;
             }
@@ -330,6 +387,20 @@ fn run(info: SpawnInfo) -> ! {
                 // READY arrived as a Call: answer it before anything else,
                 // or the service stays BlockedReply (§7.3).
                 let _ = ipc::reply(0, &[]);
+                if kill_fs && !drilled && services[index].cfg.name == "appmgr" {
+                    drilled = true;
+                    // Let the freshly loaded app announce itself first.
+                    let _ = rstiny::sleep(5_000);
+                    if let Some(fs_index) = services.iter().position(|s| s.cfg.name == "fs") {
+                        // The logger posts at every log level; the marker
+                        // must be visible with LOG=off too.
+                        post_log(console_running, 0, "[init] crash drill", "reaping fs");
+                        stop_and_reap(&mut services[fs_index], false);
+                        detach_dependents(&mut services, fs_index);
+                        apply_policy(&info, &mut services, fs_index, console_running, false, true);
+                        continue;
+                    }
+                }
                 if services[index].cfg.name == CONSOLE {
                     console_running = true;
                 }
@@ -390,6 +461,10 @@ fn run(info: SpawnInfo) -> ! {
                         rstiny::debug_println!("[init] client drill call unexpectedly succeeded");
                     }
                 }
+                // A lost dependency invalidates the clients above it: notify
+                // them (best effort) and restart them so they re-BIND to the
+                // replacement service (docs/disk-driver.md section 9).
+                detach_dependents(&mut services, index);
                 apply_policy(
                     &info,
                     &mut services,
@@ -403,13 +478,56 @@ fn run(info: SpawnInfo) -> ! {
     }
 }
 
+/// Restart every service that depends on the terminated one, so the rebuilt
+/// dependency re-BINDs from scratch (shared buffers and file handles die with
+/// the crashed service).
+fn detach_dependents(services: &mut [ServiceState], index: usize) {
+    let name = services[index].cfg.name.clone();
+    for j in 0..services.len() {
+        if j == index || !services[j].cfg.depends.iter().any(|d| *d == name) {
+            continue;
+        }
+        // Best-effort notice on the dependent's own endpoint; the restart
+        // below is the guarantee, the notice is the graceful path.
+        let _ = ipc::nbsend(services[j].svc_ep_obj, control::DEPENDENCY_LOST, &[]);
+        if matches!(services[j].status, Status::Starting | Status::Running) {
+            stop_and_reap(&mut services[j], false);
+            let now = clock_ms();
+            let window = u64::from(services[j].cfg.window_ms);
+            services[j]
+                .restart_times
+                .retain(|stamp| now.saturating_sub(*stamp) < window);
+            services[j].restarts += 1;
+            services[j].restart_times.push(now);
+            services[j].status = if services[j].restarts > services[j].cfg.max_restarts {
+                Status::Failed
+            } else {
+                Status::Waiting
+            };
+        }
+    }
+}
+
 fn badge_for(index: usize) -> u64 {
     SERVICE_BADGE_BASE + index as u64
 }
 
 /// STOP handshake (graceful) when the service is Running, then destroy and
 /// reclaim its derivation subtree and budget watermark.
-fn stop_and_reap(service: &mut ServiceState, graceful_exit: bool) {
+fn stop_and_reap(service: &mut ServiceState, _graceful_exit: bool) {
+    // Revoke the per-service device copies before the task teardown: a
+    // driver's MMIO frames derive from the device region, and only a revoke
+    // of that subtree resets the region watermark — a plain budget revoke
+    // would leak it and starve the next spawn (docs/disk-driver.md §6.4).
+    let cnode = CNode(CPtr(INIT_CNODE));
+    for &slot in &service.device_copies {
+        if slot != 0 {
+            // SAFETY: the terminated service no longer touches the device.
+            unsafe {
+                let _ = cnode.revoke(slot);
+            }
+        }
+    }
     // A faulted or exited service is already halted; the STOP handshake
     // applies only to a *live* service being stopped on command (§9) — the
     // v1 restart path never needs it because the crash already halted the
@@ -417,18 +535,6 @@ fn stop_and_reap(service: &mut ServiceState, graceful_exit: bool) {
     // task, and the derivation-subtree revoke resets the budget watermark.
     if let Some(task) = service.task.take() {
         let _ = task.destroy();
-        // The ordinary budget comes back through the allocator revoke above;
-        // device regions are shared with the supervisor's own copy, so the
-        // service's derivation must be revoked explicitly for the watermark
-        // to reset and the next instance to re-carve its frames (§8).
-        let cnode = CNode(CPtr(INIT_CNODE));
-        for (device_index, _) in service.cfg.devices.iter().enumerate() {
-            // SAFETY: the terminated service's copies are the only descendants
-            // and its task is already gone.
-            unsafe {
-                let _ = cnode.revoke(UART_DEV_OWN + device_index as u64);
-            }
-        }
         rstiny::debug_println!("[init] teardown done");
     }
 }
@@ -506,18 +612,49 @@ fn spawn_service(services: &mut Vec<ServiceState>, index: usize, console_ep: u64
         return;
     };
     let service = &services[index];
+    // Devices the child receives, as (child slot, init-side copy slot) pairs.
+    let devices: Vec<(u64, u64)> = service
+        .cfg
+        .devices
+        .iter()
+        .enumerate()
+        .take(MAX_DEVICES)
+        .map(|(k, _)| (CHILD_DEV_BASE + k as u64, service.device_copies[k]))
+        .collect();
+    // Dependency endpoints in `depends` order: source slots in init's CSpace.
+    let deps: Vec<(u64, u64)> = service
+        .cfg
+        .depends
+        .iter()
+        .enumerate()
+        .take(MAX_DEPS)
+        .map(|(j, name)| {
+            let source = services
+                .iter()
+                .position(|s| s.cfg.name == *name)
+                .map(|dep_index| services[dep_index].svc_ep_obj)
+                .unwrap_or(0);
+            (CHILD_DEP_BASE + j as u64, source)
+        })
+        .collect();
     let spawn_info = SpawnInfo {
         magic: SpawnInfo::MAGIC,
         version: SpawnInfo::VERSION,
-        control_ep: 140,
+        control_ep: CHILD_CONTROL,
         command_ep: 0, // v1: STOP rides the service's main endpoint
-        untyped: 32,
+        untyped: CHILD_BUDGET,
         rom_start: 0,
         rom_count: 0,
         extra: {
             let mut extra = [0; 8];
-            extra[SpawnInfo::CONSOLE_EP] = 51;
-            extra[1] = 33; // first device slot in the child
+            extra[SpawnInfo::CONSOLE_EP] = CHILD_CONSOLE;
+            extra[SpawnInfo::DEVICE_SLOT] = CHILD_DEV_BASE;
+            extra[SpawnInfo::SELF_EP] = CHILD_SELF_EP;
+            extra[SpawnInfo::DEVICE_COUNT] = devices.len() as u64;
+            extra[SpawnInfo::DEP_COUNT] = deps.len() as u64;
+            for (j, (slot, _)) in deps.iter().enumerate() {
+                extra[SpawnInfo::DEP_EP_BASE + j] = *slot;
+            }
             extra
         },
     };
@@ -528,28 +665,28 @@ fn spawn_service(services: &mut Vec<ServiceState>, index: usize, console_ep: u64
         )
     };
     // Per-service fixed child caps: control, console client, budget, ASID
-    // pool, then the service's devices.
+    // pool, own endpoint, then devices and dependency endpoints.
     let (budget_slot, badge) = (service.budget_slot, badge_for(index));
     let mut caps = [ChildCap {
         slot: 0,
         source: 0,
         rights: 0,
         badge: 0,
-    }; 4 + DEVICE_NAMES.len()];
+    }; 16];
     caps[0] = ChildCap {
-        slot: 140,
+        slot: CHILD_CONTROL,
         source: CONTROL_OBJ,
         rights: RIGHTS_ALL,
         badge,
     };
     caps[1] = ChildCap {
-        slot: 51,
+        slot: CHILD_CONSOLE,
         source: console_ep,
         rights: RIGHTS_ALL,
         badge: 0,
     };
     caps[2] = ChildCap {
-        slot: 32,
+        slot: CHILD_BUDGET,
         source: budget_slot,
         rights: RIGHTS_ALL,
         badge: 0,
@@ -560,15 +697,26 @@ fn spawn_service(services: &mut Vec<ServiceState>, index: usize, console_ep: u64
         rights: RIGHTS_ALL,
         badge: 0,
     };
-    for (device_index, _) in service.cfg.devices.iter().enumerate() {
-        caps[4 + device_index] = ChildCap {
-            slot: 33 + device_index as u64,
-            source: UART_DEV_OWN + device_index as u64,
+    caps[4] = ChildCap {
+        slot: CHILD_SELF_EP,
+        source: service.svc_ep_obj,
+        rights: RIGHTS_ALL,
+        badge: 0,
+    };
+    let mut used = 5;
+    for &(slot, source) in devices.iter().chain(deps.iter()) {
+        if source == 0 || used == caps.len() {
+            services[index].status = Status::Failed;
+            return;
+        }
+        caps[used] = ChildCap {
+            slot,
+            source,
             rights: RIGHTS_ALL,
             badge: 0,
         };
+        used += 1;
     }
-    let used = 4 + service.cfg.devices.len();
 
     match unsafe {
         // The service's allocations carve its own per-service sub-region, so
@@ -579,14 +727,16 @@ fn spawn_service(services: &mut Vec<ServiceState>, index: usize, console_ep: u64
             service.budget_slot,
             &rstiny::elf::Supervision {
                 info: info_bytes,
-                fault_ep: 140,
+                fault_ep: CHILD_CONTROL,
                 caps: &caps[..used],
+                slot_base: rstiny::elf::LOADER_SLOT_BASE
+                    + index as u64 * rstiny::elf::LOADER_SLOT_STRIDE,
             },
         )
     } {
         Ok(task) => {
             services[index].task = Some(task);
-            services[index].status = Status::Running;
+            services[index].status = Status::Starting;
         }
         Err(error) => {
             rstiny::debug_println!(

@@ -409,7 +409,7 @@ pub(crate) fn check_task_ipc(target: u64, offset: usize, len: usize) -> Result<(
 }
 /// Record a fault delivery context on the faulted task itself.
 pub(crate) fn begin_fault(target: u64, ep: ObjectId, badge: u64, msg: super::FaultMsg, pc: u64) {
-    with_task(target, |task| {
+    let displaced = with_task(target, |task| {
         task.restart_pc = pc;
         task.fault_msg = Some(msg);
         task.blocked = Some(super::Blocked {
@@ -420,8 +420,15 @@ pub(crate) fn begin_fault(target: u64, ep: ObjectId, badge: u64, msg: super::Fau
             fault: true,
         });
         task.state = TASK_BLOCKED_FAULT;
+        task.caller.take()
     })
     .expect("faulting task identity");
+    // A task that dies mid-call must release its pending caller relation, or
+    // the supervisor waits for a reply that can never arrive: the queued fault
+    // message is only received after the supervisor's own `Call` returns.
+    if let Some(caller) = displaced {
+        fail_caller(caller);
+    }
 }
 /// Completion `Some(1)` resumes a blocked continuation with success; the
 /// registers or restart PC were written by the waker beforehand.
