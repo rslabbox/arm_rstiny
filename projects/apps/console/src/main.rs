@@ -18,6 +18,11 @@ const LCR: usize = 0x02C;
 const CR: usize = 0x030;
 const IFLS: usize = 0x038;
 
+/// `UARTFR` bits (the console polls; RX is enabled in `CR` but not interrupt).
+const FR_RXFE: u32 = 1 << 4;
+const FR_TXFF: u32 = 1 << 5;
+const FR_BUSY: u32 = 1 << 3;
+
 fn uart_init(base: usize) {
     let write = |register: usize, value: u32| unsafe {
         core::ptr::write_volatile((base + register) as *mut u32, value);
@@ -42,17 +47,28 @@ fn putc(base: usize, byte: u8) {
 fn putc_raw(base: usize, byte: u8) {
     // SAFETY: the UART page is a device frame exclusively owned by this task.
     unsafe {
-        while core::ptr::read_volatile((base + FR) as *const u32) & (1 << 5) != 0 {
+        while core::ptr::read_volatile((base + FR) as *const u32) & FR_TXFF != 0 {
             core::hint::spin_loop();
         }
         core::ptr::write_volatile((base + DR) as *mut u8, byte);
     }
 }
 
+/// Consume one received byte, or `None` when the FIFO is empty.
+fn getc(base: usize) -> Option<u8> {
+    // SAFETY: as above.
+    unsafe {
+        if core::ptr::read_volatile((base + FR) as *const u32) & FR_RXFE != 0 {
+            return None;
+        }
+        Some(core::ptr::read_volatile((base + DR) as *const u32) as u8)
+    }
+}
+
 fn flush(base: usize) {
     // SAFETY: as above.
     unsafe {
-        while core::ptr::read_volatile((base + FR) as *const u32) & (1 << 3) != 0 {
+        while core::ptr::read_volatile((base + FR) as *const u32) & FR_BUSY != 0 {
             core::hint::spin_loop();
         }
     }
@@ -144,6 +160,14 @@ fn main(argument: Argument) -> ! {
             console::BIND => {
                 let _ = rstiny::ipc::reply(0, &[1, console::MAX_WRITE as u64]);
             }
+            console::READ => match getc(CONSOLE_VA) {
+                Some(byte) => {
+                    let _ = rstiny::ipc::reply(0, &[1, byte as u64]);
+                }
+                None => {
+                    let _ = rstiny::ipc::reply(0, &[0, 0]);
+                }
+            },
             control::STOP => {
                 // Graceful stop: flush, acknowledge, exit. The supervisor
                 // tears the task down if the ack never arrives.

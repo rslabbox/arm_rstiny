@@ -237,10 +237,11 @@ boot 分区把这些 MMIO 区间作为**设备 Untyped** 发布（当前只发�
 - 应用与系统服务共用 `libs/server` 协议；控制端点是 appmgr 的 `control_ep`。
 - 应用来自 FAT32，因此**替换磁盘上的 ELF 即可改变运行内容，无需重编内核或 userboot/init**——这是与现在"hello 嵌入 rodata"的关键区别。
 
-### 10.1 mysh 与 `SH.CFG`
+### 10.1 mysh 与 console RX
 
 - `mysh` 是第五个服务（`depends = [fs]`），直接用 fs 协议读取根目录与文件，不经过 appmgr。
-- 命令脚本 `SH.CFG` 也在 FAT32 根目录（`make disk` 写入），缺省 `ls` + `./hello`。
+- 它是一个交互式 REPL：提示符 `[rstiny ~]$: `，输入从 console 服务读取。
+- console 服务新增 `CONSOLE_READ`：轮询 PL011 RX FIFO（`FR.RXFE`），有字节就回 `[1, byte]`，否则回 `[0, 0]`。RX 已在 `UARTCR` 使能，但未接中断。
 - `ls` 走 `FS_READDIR`（短名 8.3）；`cat <file>` 走 `OPEN/READ/CLOSE`；`./hello` 复用 appmgr 的 loader 装载并监督 `HELLO.ELF`。
 
 ## 11. 分阶段实施
@@ -253,7 +254,7 @@ boot 分区把这些 MMIO 区间作为**设备 Untyped** 发布（当前只发�
 | D3 | `appmgr`：从 FAT32 读 `hello.elf` 并 supervised spawn | D2 |
 | D4 | init 配置驱动化：把 block/fs/appmgr 写进 `init.cfg`、依赖拓扑、按策略重启 | D3 |
 | D5 | 服务崩溃重启：杀 fs/block → init 重启 → appmgr 重连；补端到端验收 | D4 |
-| D6（可选） | `mysh` 脚本 shell：`FS_READDIR`、`SH.CFG`、从磁盘装载 `./hello` | D4 |
+| D6（可选） | `mysh` 交互式 shell：`FS_READDIR`、console RX、从磁盘装载 `./hello` | D4 |
 
 ## 12. 测试与验收
 
@@ -263,7 +264,7 @@ boot 分区把这些 MMIO 区间作为**设备 Untyped** 发布（当前只发�
 - **D3**：hello 是独立 EL0 进程，正常输出、退出、被回收；替换镜像里的 ELF 后运行内容改变。
 - **D4**：`init.cfg` 增加 block/fs/appmgr 后按依赖顺序启动；console 未 READY 前不启动依赖者。
 - **D5**：杀 fs-server → init 重启 → appmgr 收到 `DEPENDENCY_LOST`/重连；无内存泄漏（`available` 回到基线）。
-- **mysh**：`check_mysh.py` 断言 `ls` 列出三个文件、`cat APPS.CFG` 输出文件内容、`./hello` 输出 hello 消息并回收到 `[mysh] hello exited: 0` 后 `[mysh] done`。
+- **mysh**：`check_mysh.py` 在串口上按提示符依次输入 `ls`/`./hello`/`cat APPS.CFG`/`exit`，断言列出文件、`cat` 输出内容、`./hello` 回收到 `[mysh] hello exited: 0` 后 `[mysh] bye`。
 - 全部纳入 `tools/check_*`，覆盖 debug/release × LOG=off/info。
 
 ## 13. 开放决策
@@ -323,10 +324,11 @@ boot 分区把这些 MMIO 区间作为**设备 Untyped** 发布（当前只发�
 - fs/appmgr 处理 `DEPENDENCY_LOST`：清理后退出，由 init 按策略重建；appmgr 退出前先逐个销毁应用，避免应用成为孤儿。
 - 验收：`tools/check_restart.py`（KILL_FS=1）断言 hello 前后运行两次、`[appmgr] frames=N` 前后一致（无泄漏）；`check_services.py` 断言依赖序启动与 block 失败时 fs/appmgr 不启动。
 
-### D6 mysh 脚本 shell
+### D6 mysh 交互式 shell
 
 - `fs::READDIR`（= 0x505）加入 fs 协议：`start` 下标分页遍历根目录，`DirEntry { name:[u8;12]; size:u32; is_dir:u32 }` 写入共享缓冲，回复 `count`/`next`。
-- `mysh`（`projects/apps/mysh`）是第五个服务，`depends = [fs]`；从盘上 `SH.CFG` 读脚本（无控制台输入，用磁盘文件代替），支持 `ls`/`cat`/`./hello`/`help`/`exit`。
+- console 协议新增 `CONSOLE_READ`（= 0x102）：console 服务轮询 PL011 RX FIFO，非阻塞返回 `[present, byte]`。RX 已在 `UARTCR` 使能，暂未接 IRQ。
+- `mysh`（`projects/apps/mysh`）是第五个服务，`depends = [fs]`；开一个交互式 REPL（`[rstiny ~]$: `），支持 `ls`/`cat`/`./hello`/`help`/`exit`、回显、退格、Ctrl-C/Ctrl-D。空读时 `sleep(5ms)` 后重试，不忙等。
 - `./hello` 复用 `spawn_supervised`：切子 untyped、填 `SpawnInfo`（`control_ep=140`、`console_ep=51`），并像 appmgr 一样 `Recv(control_ep)`/`Reply` 监督。**关键**：`hello` 是标准服务，装载后 `Call(control_ep, READY)`，监督者不 `Reply` 子进程就卡在 `BlockedSend`、`Wait` 不返回；`EXIT` 同样经 `control_ep`。
 - `mysh` 预算 2M（命令与文件缓冲都在 BSS/共享缓冲，不额外切大 untyped）。
 

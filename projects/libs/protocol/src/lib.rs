@@ -90,6 +90,10 @@ pub mod console {
     pub const WRITE: u64 = BASE + 0x01;
     /// Maximum inline bytes of one `CONSOLE_WRITE` (14 registers of payload).
     pub const MAX_WRITE: usize = 14 * 8;
+    /// Non-blocking read of one byte. Request: none. Reply: mr0 = present
+    /// (1 = a byte was consumed, 0 = the input FIFO is empty), mr1 = byte.
+    /// The client polls; there is no RX interrupt yet.
+    pub const READ: u64 = BASE + 0x02;
 }
 
 /// init's internal supervisor→logger channel. Not a service protocol: the two

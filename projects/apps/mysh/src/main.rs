@@ -1,13 +1,13 @@
 #![no_std]
 #![no_main]
-//! mysh: a minimal script-driven shell. It lists the FAT32 disk through the fs
-//! service, runs a few commands (`ls`, `cat`, `./hello`, `help`, `exit`) read
-//! from `SH.CFG` on the disk (or a built-in default), and executes `./hello`
-//! by loading the ELF from disk and supervising it with the same loader appmgr
-//! uses.
+//! mysh: a minimal interactive shell. It reads command lines from the console
+//! service (polling for RX), lists the FAT32 disk through the fs service, runs
+//! commands (`ls`, `cat <file>`, `./hello`, `help`, `exit`) and executes
+//! `./hello` by loading the ELF from disk and supervising it with the same
+//! loader appmgr uses.
 //!
-//! There is no console input path yet, so the command source is a disk file:
-//! replacing `SH.CFG` changes what the shell does without rebuilding anything.
+//! The console service is polling-only (no RX interrupt yet), so `read_line`
+//! sleeps between polls while it waits for a keystroke.
 
 extern crate alloc;
 
@@ -21,7 +21,7 @@ use rstiny::capability::{
 };
 use rstiny::elf::{ChildCap, LOADER_SLOT_BASE, Supervision};
 use rstiny::ipc::{self, ReceiveSpec};
-use rstiny_protocol::{Argument, SpawnInfo, control, fs, status};
+use rstiny_protocol::{Argument, SpawnInfo, console, control, fs, status};
 use rstiny_runtime::entry;
 use rstiny_server::{Service, logln};
 
@@ -39,7 +39,8 @@ const CHILD_CONTROL: u64 = 140;
 const CHILD_CONSOLE: u64 = 51;
 const CHILD_BUDGET: u64 = 32;
 
-const DEFAULT_SCRIPT: &str = "ls\n./hello\n";
+const PROMPT: &[u8] = b"[rstiny ~]$: ";
+const LINE_MAX: usize = 128;
 
 /// Bump allocator over a fixed BSS pool: file images and script text live here
 /// and are freed only when the supervisor tears the task down.
@@ -83,7 +84,7 @@ fn main(argument: Argument) -> ! {
         service.exit(3);
     }
     logln!(service, "[mysh] ready");
-    run(&service, fs_ep)
+    repl(&service, fs_ep)
 }
 
 /// Map the fs shared buffer and bind the fs service.
@@ -112,29 +113,69 @@ fn bind_fs(fs_ep: u64) -> Result<(), Error> {
     Ok(())
 }
 
-fn run(service: &Service, fs_ep: u64) -> ! {
-    // Prefer the disk script; fall back to a built-in default when absent.
-    let script = read_file(fs_ep, b"SH.CFG").unwrap_or_default();
-    let text = core::str::from_utf8(&script).unwrap_or("");
-    let text = if text.trim().is_empty() {
-        DEFAULT_SCRIPT
-    } else {
-        text
-    };
-    for line in text.lines() {
-        let line = line.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        if !execute(service, fs_ep, line) {
+fn repl(service: &Service, fs_ep: u64) -> ! {
+    let mut line = [0u8; LINE_MAX];
+    loop {
+        service.log_bytes(PROMPT);
+        let Some(used) = read_line(service, &mut line) else {
+            // Ctrl-D: end of input.
+            service.log_bytes(b"\n");
+            break;
+        };
+        let text = core::str::from_utf8(&line[..used]).unwrap_or("");
+        if !execute(service, fs_ep, text) {
             break;
         }
     }
-    logln!(service, "[mysh] done");
+    logln!(service, "[mysh] bye");
     service.exit(0)
 }
 
-/// Run one command line. Returns false to stop the script.
+/// Poll one byte from the console; `None` when the input FIFO is empty.
+fn console_read(console_ep: u64) -> Option<u8> {
+    let received = ipc::call(console_ep, console::READ, &[]).ok()?;
+    (received.label == status::OK && received.word(0) == 1).then(|| received.word(1) as u8)
+}
+
+/// Block until Enter, echoing input. Handles backspace (0x7f/0x08), Ctrl-C
+/// (abort the line) and Ctrl-D (EOF). Returns the line length without the
+/// newline, or `None` on EOF.
+fn read_line(service: &Service, line: &mut [u8]) -> Option<usize> {
+    let mut used = 0usize;
+    loop {
+        match console_read(service.console_ep) {
+            Some(b'\r') | Some(b'\n') => {
+                service.log_bytes(b"\n");
+                return Some(used);
+            }
+            Some(0x7f) | Some(0x08) => {
+                if used > 0 {
+                    used -= 1;
+                    service.log_bytes(b"\x08 \x08");
+                }
+            }
+            Some(0x03) => {
+                service.log_bytes(b"^C\n");
+                return Some(0);
+            }
+            Some(0x04) => return None,
+            Some(byte) if (0x20..=0x7e).contains(&byte) => {
+                if used < line.len() {
+                    line[used] = byte;
+                    used += 1;
+                    service.log_bytes(&[byte]);
+                }
+            }
+            Some(_) => {}
+            None => {
+                // No RX interrupt yet: poll without spinning the CPU.
+                let _ = rstiny::sleep(5);
+            }
+        }
+    }
+}
+
+/// Run one command line. Returns false to leave the shell.
 fn execute(service: &Service, fs_ep: u64, line: &str) -> bool {
     let mut parts = line.split_whitespace();
     let Some(command) = parts.next() else {

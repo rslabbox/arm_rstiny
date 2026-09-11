@@ -46,6 +46,15 @@ ifeq ($(KERNEL_TEST),1)
 CARGO_FLAGS += --features kernel-test
 endif
 
+# The restart acceptance (KILL_FS) exercises the fs -> appmgr chain. The
+# restart=never mysh leaf is excluded there: its live/dead state legitimately
+# differs before and after the crash, which would perturb the frame-budget
+# comparison (docs/disk-driver.md section 12).
+INIT_CFG := apps/init.cfg
+ifdef KILL_FS
+INIT_CFG := apps/init-restart.cfg
+endif
+
 # Fixed platform contract; no network backends. The VirtIO block device and
 # its FAT32 image back the userland disk stack (docs/disk-driver.md). The drive
 # options live in their own variable: commas inside $(if ...) split its
@@ -75,7 +84,7 @@ build: userboot init console block-server fs-server appmgr mysh platform
 	rust-objcopy --strip-all $(MYSH_ELF) $(APP_DIR)/mysh.elf
 	python3 tools/build_image.py $(KERNEL_ELF) $(USERBOOT_ELF) $(IMAGE_DIR) --platform $(PLATFORM_DIR) --mode $(MODE) \
 	  --module $(APP_DIR)/init.elf --module $(APP_DIR)/console.elf --module $(APP_DIR)/block.elf \
-	  --module $(APP_DIR)/fs.elf --module $(APP_DIR)/appmgr.elf --module $(APP_DIR)/mysh.elf --module init.cfg=apps/init.cfg
+	  --module $(APP_DIR)/fs.elf --module $(APP_DIR)/appmgr.elf --module $(APP_DIR)/mysh.elf --module init.cfg=$(INIT_CFG)
 
 userboot:
 	python3 tools/build_app.py userboot --mode $(MODE) $(if $(ROOT_IMAGE_BASE),--image-base $(ROOT_IMAGE_BASE))
@@ -83,13 +92,11 @@ userboot:
 init console hello block-server fs-server appmgr mysh:
 	python3 tools/build_app.py $@ --mode $(MODE)
 
-# The application disk: bare FAT32 with the app manifest, the shell script and
-# the app ELF.
+# The application disk: bare FAT32 with the app manifest and its ELF.
 disk: hello
 	rust-objcopy --strip-all $(HELLO_ELF) $(APP_DIR)/hello.elf
 	python3 tools/make_disk.py $(DISK_IMG) \
-	  --file HELLO.ELF=$(APP_DIR)/hello.elf --file APPS.CFG=apps/APPS.CFG \
-	  --file SH.CFG=apps/SH.CFG
+	  --file HELLO.ELF=$(APP_DIR)/hello.elf --file APPS.CFG=apps/APPS.CFG
 
 # `run` builds the application disk too, so the guest finds a virtio-blk
 # device and the FAT32 image the services need.

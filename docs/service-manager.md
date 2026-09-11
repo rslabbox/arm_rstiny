@@ -95,11 +95,12 @@ userboot 保留为 monitor（决策 1）：它不参与服务管理，但在 ini
 - 对应用执行与 init 类似的生命周期管理（READY/report/重启），但策略属于应用域。
 - init 不直接加载应用；应用崩溃由 appmgr 处理，appmgr 崩溃由 init 处理。
 
-### 3.5 mysh（脚本驱动的 shell）
+### 3.5 mysh（交互式 shell）
 
 - 作为 init 的一个普通服务启动，`depends = [fs]`，`restart = never`（一次性演示）。
 - 直接使用 `fs` 协议（`OPEN/READ/CLOSE/READDIR`）与自己的共享缓冲，不经过 appmgr。
-- 命令来源是磁盘上的 `SH.CFG`（无控制台输入路径）；缺省脚本为 `ls` + `./hello`。
+- 提示符 `[rstiny ~]$: `，命令从 console 服务读取（`CONSOLE_READ` 轮询）；支持 `ls`、`cat <file>`、`./hello`、`help`、`exit`，以及退格/Ctrl-C/Ctrl-D。
+- console 服务目前是轮询 RX（无 RX 中断），shell 在无输入时 `sleep` 后重试，不忙等。
 - `./hello` 用与 appmgr 相同的 ELF loader 从磁盘装载 `HELLO.ELF`，并按 `libs/server` 协议监督它（`READY` 回执、`EXIT` 回收）。
 
 ## 4. 目录与构建
@@ -574,8 +575,9 @@ console（`console_ep`）：
 | --- | --- | --- |
 | 1 `CONSOLE_BIND` | client → server | mr0 = 版本；回复 mr0 = 版本、mr1 = 最大内联长度 |
 | 2 `CONSOLE_WRITE` | client → server | mr0 = 字节数 n（≤ mr1 上限），mr1.. 按 8 字节/MR 内联打包；回复 mr0 = 已写字节 |
+| 3 `CONSOLE_READ` | client → server | 无；回复 mr0 = 是否有字节（1/0）、mr1 = 字节 |
 
-内联上限 120 MR ≈ 960 字节，客户端分块。v1 无共享缓冲、无 RX。
+内联上限 14 MR = 112 字节（`MAX_WRITE`），客户端分块。v1 无共享缓冲。RX 为轮询（无中断），客户端在空读后自行退避。
 
 block（`block_ep`，阶段 D）：
 
@@ -608,8 +610,8 @@ fs（`fs_ep`，阶段 D）：
 
 ## 15.1 mysh 与 `./hello`
 
-- `mysh` 是 init 的普通服务，`depends = [fs]`，从 `SH.CFG` 读取命令脚本（`ls`、`cat <file>`、`./hello`、`help`、`exit`）。
-- `SH.CFG` 由 `make disk` 写入 FAT32 根目录；改脚本不需要重建系统镜像。
+- `mysh` 是 init 的普通服务，`depends = [fs]`，在 console 上开一个 REPL（`[rstiny ~]$: `）。
+- 输入来自 `CONSOLE_READ`：console 服务轮询 PL011 RX FIFO，无字节就回空；shell 空读后 `sleep(5ms)`，不忙等。行编辑只做回显、退格和 Ctrl-C/Ctrl-D。
 - `./hello` 复用 appmgr 的 loader：切一个子 untyped、填 `SpawnInfo`（`control_ep = 140`、`console_ep = 51`），并以子进程的 `control_ep` 为 fault/控制端点监督它。
 - 关键差异：`hello` 是标准服务，装载后会 `Call(control_ep, READY)`，因此 shell 必须像 appmgr 一样 `Recv(control_ep)` 并 `Reply`，否则子进程停在 `BlockedSend`、`Wait` 永不返回。
 
@@ -666,7 +668,7 @@ fs（`fs_ep`，阶段 D）：
 - `userboot` 在 init 崩溃后重建并重启 init（有限次 + 退避）。
 - 权限：服务拿不到别的服务 cap；设备 cap 只给对应驱动；GIC/timer 永不发布（`check_untyped.py` 已覆盖设备策略）。
 - `LOG=off` 下 init/服务仍能经 console 协议输出。
-- `mysh`（`tools/check_mysh.py`）：`ls` 列出 `HELLO.ELF`/`APPS.CFG`/`SH.CFG`；`cat APPS.CFG` 打印文件内容；`./hello` 装载并监督 `HELLO.ELF`，`[mysh] hello exited: 0` 后 `[mysh] done`。
+- `mysh`（`tools/check_mysh.py`）：在串口上按提示符依次输入 `ls`/`./hello`/`cat APPS.CFG`/`exit`；断言列出 `HELLO.ELF`/`APPS.CFG`、打印文件内容、`[mysh] hello exited: 0` 后 `[mysh] bye`。
 - 每阶段同时提供正常用例和权限/失败用例；QEMU harness 区分"预期阻塞 / panic 停机 / 死循环"（沿用现有 check 脚本约定）。
 
 ## 20. 与其他微内核对照
