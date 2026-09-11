@@ -46,7 +46,11 @@ type Result<T> = core::result::Result<T, u64>;
 /// and `MAX_OBJECTS` must stay a pure metadata cap.
 pub(crate) const TCB_BYTES: usize = 1024;
 pub(crate) const TCB_ALIGN: usize = 1024;
-pub(crate) const CNODE_SLOT_BYTES: usize = 8;
+/// Nominal bytes charged per CNode slot. The flat CNode is a sparse
+/// `BTreeMap`, so a slot costs a fraction of a byte; one byte gives a
+/// monotonic, non-arbitrary price without starving small tasks. A full
+/// 16-bit CNode (65536 slots) reserves 64 KiB (docs/untyped-plan.md).
+pub(crate) const CNODE_SLOT_BYTES: usize = 1;
 
 /// `(bytes, align)` carved from an Untyped region for one object of `kind`.
 /// `Untyped` is excluded: its size comes from the request's `size_bits`.

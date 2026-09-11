@@ -95,6 +95,13 @@ userboot 保留为 monitor（决策 1）：它不参与服务管理，但在 ini
 - 对应用执行与 init 类似的生命周期管理（READY/report/重启），但策略属于应用域。
 - init 不直接加载应用；应用崩溃由 appmgr 处理，appmgr 崩溃由 init 处理。
 
+### 3.5 mysh（脚本驱动的 shell）
+
+- 作为 init 的一个普通服务启动，`depends = [fs]`，`restart = never`（一次性演示）。
+- 直接使用 `fs` 协议（`OPEN/READ/CLOSE/READDIR`）与自己的共享缓冲，不经过 appmgr。
+- 命令来源是磁盘上的 `SH.CFG`（无控制台输入路径）；缺省脚本为 `ls` + `./hello`。
+- `./hello` 用与 appmgr 相同的 ELF loader 从磁盘装载 `HELLO.ELF`，并按 `libs/server` 协议监督它（`READY` 回执、`EXIT` 回收）。
+
 ## 4. 目录与构建
 
 ```text
@@ -104,6 +111,7 @@ projects/apps/console/           # 用户态串口服务
 projects/apps/block/             # VirtIO MMIO 块驱动（阶段 D）
 projects/apps/fs/                # FAT32 只读（阶段 D）
 projects/apps/appmgr/            # 应用管理器（阶段 D）
+projects/apps/mysh/              # 脚本驱动 shell（阶段 D，D4）
 projects/libs/server/            # 服务运行时：注册、report、fault、panic→EXIT
 projects/libs/initcfg/           # init.cfg 解析器（no_std + alloc，可宿主测试）
 projects/libs/newc/              # newc CPIO 只读解析（bootloader 与 userland 共用）
@@ -114,7 +122,8 @@ projects/libs/fatfs/             # FAT32 只读（阶段 D）
 
 构建改动：
 
-- `Makefile`：`fatboot` target → `userboot`；新增 `init`、`console`、`block`、`fs`、`appmgr`。
+- `Makefile`：`fatboot` target → `userboot`；新增 `init`、`console`、`block`、`fs`、`appmgr`、`mysh`。
+- 应用磁盘除 `APPS.CFG`/`HELLO.ELF` 外再放入 shell 脚本 `SH.CFG`（`make disk`）。
 - `tools/build_image.py`：CPIO 从 `kernel + dtb + rootserver` 扩展为 `kernel.elf + kernel.dtb + userboot + init + services + init.cfg`；前三个文件名与顺序保持 bootloader 现有校验，其后为模块文件。
 - `tools/build_app.py` 增加多应用构建入口；各应用共用 LLD 默认布局，段保持页不重叠（ELF loader 依赖该性质，见 13.4）。
 - 文档、`tools/check_*.py`、README 中的 fatboot 引用同步改名。
@@ -398,7 +407,16 @@ service appmgr {
     elf = "appmgr.elf"
     depends = fs
     restart = on-failure
-    budget = 4M
+    budget = 2M
+}
+
+# mysh: script-driven shell (apps/SH.CFG on the disk). Lists the disk, prints
+# files and executes ./hello by loading HELLO.ELF from the disk.
+service mysh {
+    elf = "mysh.elf"
+    depends = fs
+    restart = never
+    budget = 2M
 }
 ```
 
@@ -576,8 +594,9 @@ fs（`fs_ep`，阶段 D）：
 | 2 `FS_OPEN` | client → server | mr0 = 路径字节数，mr1.. 内联路径；回复 mr0 = 句柄或错误 |
 | 3 `FS_READ` | client → server | mr0 = 句柄、mr1 = 偏移、mr2 = 长度；回复 mr0 = status、mr1 = 实读长度（数据经 `FS_BIND` 附带的共享 Frame） |
 | 4 `FS_SIZE` | client → server | mr0 = 句柄；回复 mr0 = 文件字节数 |
+| 5 `FS_READDIR` | client → server | mr0 = 起始条目下标；回复 mr0 = status、mr1 = 写入条目数、mr2 = 下一下标（0 = 结束）；条目为共享 Frame 中的 `DirEntry` 数组 |
 
-appmgr 用 `FS_OPEN/FS_READ` 读应用 ELF 到自己授予的共享 Frame，再走标准 ELF loader。
+`DirEntry` 为 `{ name:[u8;12]; size:u32; is_dir:u32 }`，一页共享缓冲容纳 `DIR_ENTRIES_PER_PAGE` 条。appmgr 用 `FS_OPEN/FS_READ` 读应用 ELF 到自己授予的共享 Frame；`mysh` 额外用 `FS_READDIR` 列根目录。
 
 ## 15. appmgr 与应用生命周期
 
@@ -586,6 +605,13 @@ appmgr 用 `FS_OPEN/FS_READ` 读应用 ELF 到自己授予的共享 Frame，再�
 - appmgr 负责：解析清单、切应用子 untyped、ELF 装载、READY/report、应用级重启策略。
 - 应用与系统服务使用同一套 `libs/server` 协议，但控制端点是 appmgr 的 `control_ep`；应用不接触系统服务的 endpoint（console 例外，经 appmgr Copy）。
 - init 不感知具体应用；只监督 appmgr。
+
+## 15.1 mysh 与 `./hello`
+
+- `mysh` 是 init 的普通服务，`depends = [fs]`，从 `SH.CFG` 读取命令脚本（`ls`、`cat <file>`、`./hello`、`help`、`exit`）。
+- `SH.CFG` 由 `make disk` 写入 FAT32 根目录；改脚本不需要重建系统镜像。
+- `./hello` 复用 appmgr 的 loader：切一个子 untyped、填 `SpawnInfo`（`control_ep = 140`、`console_ep = 51`），并以子进程的 `control_ep` 为 fault/控制端点监督它。
+- 关键差异：`hello` 是标准服务，装载后会 `Call(control_ep, READY)`，因此 shell 必须像 appmgr 一样 `Recv(control_ep)` 并 `Reply`，否则子进程停在 `BlockedSend`、`Wait` 永不返回。
 
 ## 16. 日志
 
@@ -639,6 +665,7 @@ appmgr 用 `FS_OPEN/FS_READ` 读应用 ELF 到自己授予的共享 Frame，再�
 - `userboot` 在 init 崩溃后重建并重启 init（有限次 + 退避）。
 - 权限：服务拿不到别的服务 cap；设备 cap 只给对应驱动；GIC/timer 永不发布（`check_untyped.py` 已覆盖设备策略）。
 - `LOG=off` 下 init/服务仍能经 console 协议输出。
+- `mysh`（`tools/check_mysh.py`）：`ls` 列出 `HELLO.ELF`/`APPS.CFG`/`SH.CFG`；`cat APPS.CFG` 打印文件内容；`./hello` 装载并监督 `HELLO.ELF`，`[mysh] hello exited: 0` 后 `[mysh] done`。
 - 每阶段同时提供正常用例和权限/失败用例；QEMU harness 区分"预期阻塞 / panic 停机 / 死循环"（沿用现有 check 脚本约定）。
 
 ## 20. 与其他微内核对照

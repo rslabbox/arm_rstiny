@@ -376,6 +376,58 @@ fn main(argument: Argument) -> ! {
                     }
                 }
             }
+            fs::READDIR => {
+                if bound != Some(received.badge) {
+                    let _ = ipc::reply(status::ERROR, &[0]);
+                    continue;
+                }
+                let start = received.word(0) as usize;
+                let capacity = fs::DIR_ENTRIES_PER_PAGE;
+                // SAFETY: SHARE_VA is exclusively mapped; the client reads it
+                // only after this reply arrives.
+                let records = unsafe {
+                    core::slice::from_raw_parts_mut(SHARE_VA as *mut fs::DirEntry, capacity)
+                };
+                let mut written = 0usize;
+                let mut index = 0usize;
+                let mut more = false;
+                let dir = volume.root_dir();
+                for entry in dir.entries() {
+                    let Ok(entry) = entry else { continue };
+                    let Some(file) = entry.as_entry() else {
+                        continue;
+                    };
+                    let name = entry.name();
+                    let bytes = name.as_bytes();
+                    if bytes.is_empty()
+                        || bytes.len() > 12
+                        || bytes == b"."
+                        || bytes == b".."
+                        || !(file.is_file() || file.is_directory())
+                    {
+                        continue;
+                    }
+                    if index < start {
+                        index += 1;
+                        continue;
+                    }
+                    if written == capacity {
+                        more = true;
+                        break;
+                    }
+                    let mut record = fs::DirEntry {
+                        name: [0; 12],
+                        size: file.len() as u32,
+                        is_dir: file.is_directory() as u32,
+                    };
+                    record.name[..bytes.len()].copy_from_slice(bytes);
+                    records[written] = record;
+                    written += 1;
+                    index += 1;
+                }
+                let next = if more { (start + written) as u64 } else { 0 };
+                let _ = ipc::reply(status::OK, &[written as u64, next]);
+            }
             control::DEPENDENCY_LOST => {
                 // The block service died: our cached volume and buffer die
                 // with it. Exit and let init rebuild the chain.

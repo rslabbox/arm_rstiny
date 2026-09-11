@@ -31,6 +31,8 @@ INIT_ELF := $(APP_DIR)/$(TARGET)/$(MODE)/init
 CONSOLE_ELF := $(APP_DIR)/$(TARGET)/$(MODE)/console
 BLOCK_ELF := $(APP_DIR)/$(TARGET)/$(MODE)/block-server
 FS_ELF := $(APP_DIR)/$(TARGET)/$(MODE)/fs-server
+APPMGR_ELF := $(APP_DIR)/$(TARGET)/$(MODE)/appmgr
+MYSH_ELF := $(APP_DIR)/$(TARGET)/$(MODE)/mysh
 HELLO_ELF := $(APP_DIR)/$(TARGET)/$(MODE)/hello
 DISK_IMG := $(APP_DIR)/disk.img
 MODULES := $(INIT_ELF) $(CONSOLE_ELF)
@@ -54,34 +56,37 @@ QEMU_ARGS := -machine virt,gic-version=3,virtualization=off -cpu cortex-a72 \
 	-kernel $(BOOT_IMAGE)
 export LOG QEMU KERNEL_LOAD_MIN BOOT_TEST BLK_TEST
 
-.PHONY: all build platform userboot init console block-server fs-server appmgr hello disk run run-kernel run-root run-userboot debug check fmt clean
+.PHONY: all build platform userboot init console block-server fs-server appmgr mysh hello disk run run-kernel run-root run-userboot debug check fmt clean
 all: build
 
 platform:
 	python3 tools/build_platform.py $(PLATFORM_DIR) --qemu $(QEMU)
 
-build: userboot init console block-server fs-server appmgr platform
+build: userboot init console block-server fs-server appmgr mysh platform
 	PLATFORM_DIR=$(PLATFORM_DIR) cargo build $(CARGO_FLAGS) --target-dir $(BUILD_DIR)
 	rust-objcopy -O binary $(KERNEL_ELF) $(KERNEL_BIN)
 	for app in init console; do rust-objcopy --strip-all $(APP_DIR)/$(TARGET)/$(MODE)/$$app $(APP_DIR)/$$app.elf; done
 	rust-objcopy --strip-all $(BLOCK_ELF) $(APP_DIR)/block.elf
 	rust-objcopy --strip-all $(FS_ELF) $(APP_DIR)/fs.elf
-	rust-objcopy --strip-all $(APP_DIR)/$(TARGET)/$(MODE)/appmgr $(APP_DIR)/appmgr.elf
+	rust-objcopy --strip-all $(APPMGR_ELF) $(APP_DIR)/appmgr.elf
+	rust-objcopy --strip-all $(MYSH_ELF) $(APP_DIR)/mysh.elf
 	python3 tools/build_image.py $(KERNEL_ELF) $(USERBOOT_ELF) $(IMAGE_DIR) --platform $(PLATFORM_DIR) --mode $(MODE) \
 	  --module $(APP_DIR)/init.elf --module $(APP_DIR)/console.elf --module $(APP_DIR)/block.elf \
-	  --module $(APP_DIR)/fs.elf --module $(APP_DIR)/appmgr.elf --module init.cfg=apps/init.cfg
+	  --module $(APP_DIR)/fs.elf --module $(APP_DIR)/appmgr.elf --module $(APP_DIR)/mysh.elf --module init.cfg=apps/init.cfg
 
 userboot:
 	python3 tools/build_app.py userboot --mode $(MODE) $(if $(ROOT_IMAGE_BASE),--image-base $(ROOT_IMAGE_BASE))
 
-init console hello block-server fs-server appmgr:
+init console hello block-server fs-server appmgr mysh:
 	python3 tools/build_app.py $@ --mode $(MODE)
 
-# The application disk: bare FAT32 with the app manifest and its ELFs.
+# The application disk: bare FAT32 with the app manifest, the shell script and
+# the app ELF.
 disk: hello
 	rust-objcopy --strip-all $(HELLO_ELF) $(APP_DIR)/hello.elf
 	python3 tools/make_disk.py $(DISK_IMG) \
-	  --file HELLO.ELF=$(APP_DIR)/hello.elf --file APPS.CFG=apps/APPS.CFG
+	  --file HELLO.ELF=$(APP_DIR)/hello.elf --file APPS.CFG=apps/APPS.CFG \
+	  --file SH.CFG=apps/SH.CFG
 
 run run-kernel run-root run-userboot: build
 	$(QEMU) $(QEMU_ARGS)
@@ -106,6 +111,7 @@ check:
 	python3 tools/check_block.py --qemu $(QEMU)
 	python3 tools/check_fat32.py --qemu $(QEMU)
 	python3 tools/check_appmgr.py --qemu $(QEMU)
+	python3 tools/check_mysh.py --qemu $(QEMU)
 	python3 tools/check_services.py --qemu $(QEMU)
 	python3 tools/check_restart.py --qemu $(QEMU)
 

@@ -141,6 +141,24 @@ pub mod fs {
     /// mr0 = name length, mr1 = packed 8.3 short name. Reply: mr0 = size,
     /// mr1 = is_dir.
     pub const STAT: u64 = BASE + 0x04;
+    /// mr0 = start entry index. Reply: mr0 = status, mr1 = entries written
+    /// into the shared buffer, mr2 = next index (0 = no more).
+    pub const READDIR: u64 = BASE + 0x05;
+
+    /// One directory entry written into the shared buffer by `READDIR`.
+    #[repr(C)]
+    #[derive(Clone, Copy, Debug)]
+    pub struct DirEntry {
+        /// 8.3 short name, NUL padded.
+        pub name: [u8; 12],
+        /// File size in bytes (0 for directories).
+        pub size: u32,
+        /// Non-zero for a directory.
+        pub is_dir: u32,
+    }
+
+    /// Entries that fit one shared-buffer page.
+    pub const DIR_ENTRIES_PER_PAGE: usize = 0x1000 / core::mem::size_of::<DirEntry>();
 }
 
 /// Declared protocol segments, for the disjointness test.

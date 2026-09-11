@@ -356,7 +356,7 @@ ABI 从 v4 升到 v5，旧用户程序不保证可运行；fatboot 与 `rstiny` 
 - **BootInfo v5**：`BootInfo` 增加 `untyped_start`/`untyped_count`/`reserved[6]`，扩展记录 id=7 携带 `UntypedDesc` 列表；`ABI_VERSION = 5`。初始 Untyped cap 区间从 `INIT_UNTYPED = 32` 起。
 - **启动分区**：`kernel/src/boot.rs::boot_regions` 从 RAM 中排除固件、内核镜像、DTB、root 镜像与程序头页、bootloader 固定区间，再按 2 的幂对齐切分；UART 作为设备 Untyped 追加。内核直接映射改为覆盖固件之上全部 RAM（镜像别名保留原权限），否则 Untyped 页不可访问。
 - **watermark 与归属**：`object/untyped.rs` 的 `Untyped` 实现对齐切分与 `reset`；`ObjectTable` 槽记录 `ObjectOwner { untyped, offset, size }`；`retype` 用 `Untyped::fits` 精确模拟 watermark 再一次性提交，失败不推进 watermark。
-- **计费**：TCB/CNode 也推进 watermark（TCB 1024 字节、CNode 每槽 8 字节），`MAX_OBJECTS/MAX_CAPS` 因此是纯元数据上限；托管 `Runtime` 的 VSpace/页表/页同样从最大普通 Untyped 切分，`collect` 在该区间无子对象时重置它。
+- **计费**：TCB/CNode 也推进 watermark（TCB 1024 字节、CNode 每槽 1 字节），`MAX_OBJECTS/MAX_CAPS` 因此是纯元数据上限；托管 `Runtime` 的 VSpace/页表/页同样从最大普通 Untyped 切分，`collect` 在该区间无子对象时重置它。
 - **所有权**：`Frame::from_untyped` 的 `Drop` 不再归还帧池，回收由 `Untyped::reset` 完成；非设备页在分配时清零。
 - **Revoke**：`CNode_Revoke` 作用于 Untyped cap 时递归 finalise 子对象、清零并重置 watermark；旧 cap 随后失效。
 - **设备**：设备 Untyped 只允许 `SmallPage`；GIC/timer 不进入 Untyped 列表。
@@ -364,7 +364,7 @@ ABI 从 v4 升到 v5，旧用户程序不保证可运行；fatboot 与 `rstiny` 
 
 保留的简化（与本文原设计的差异）：
 
-- TCB/CNode 的元数据仍在对象表，但按固定消耗量计费：TCB 1024 字节（1024 对齐）、CNode 每槽 8 字节（页对齐）。它们推进 watermark，因此 `MAX_OBJECTS/MAX_CAPS` 退化为纯元数据上限。
+- TCB/CNode 的元数据仍在对象表，但按固定消耗量计费：TCB 1024 字节（1024 对齐）、CNode 每槽 1 字节（页对齐，`CNODE_SLOT_BYTES`）。扁平 CNode 是稀疏 `BTreeMap`，每槽实际只占几字节，旧值 8 字节/槽会让 16 位 CNode 预定 512 KiB，五个服务的子 untyped 因此放不进 init 的 16 MiB 预算；1 字节/槽给出单调、非任意的价格（满 16 位 CNode = 64 KiB）。它们推进 watermark，因此 `MAX_OBJECTS/MAX_CAPS` 退化为纯元数据上限。
 - 托管 `Runtime` 层也从同一 Untyped 切分（`create_vspace`/`map_vspace` 使用内核选定的最大普通区间）；当该区间不再拥有任何子对象时，`collect` 重置并清零它，因此 `POOL` 只服务 boot 对象。`AvailableFrames` = 全部普通 Untyped 剩余。
 - 尚未提供用户态 allocman 式分配器（U5）；`Revoke` 已能独立回收，但用户库仍直接使用单个 Untyped cap。
 - 子 Untyped（`Retype(Untyped → Untyped)`）、设备 DMA 静止检查与 IOMMU 未实现。

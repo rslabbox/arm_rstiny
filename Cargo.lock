@@ -315,6 +315,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b1f0625c50adb5f6aaf47f05cae3c4dbc13a74c659241b06c4576f3d7e1da940"
 
 [[package]]
+name = "mysh"
+version = "0.1.0"
+dependencies = [
+ "rstiny",
+ "rstiny-protocol",
+ "rstiny-runtime",
+ "rstiny-server",
+]
+
+[[package]]
 name = "num-traits"
 version = "0.2.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"

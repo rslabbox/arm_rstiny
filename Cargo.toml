@@ -9,6 +9,7 @@ members = [
     "projects/apps/block-server",
     "projects/apps/fs-server",
     "projects/apps/appmgr",
+    "projects/apps/mysh",
     "projects/libs/abi",
     "projects/libs/elf",
     "projects/libs/newc",
