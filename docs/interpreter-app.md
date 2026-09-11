@@ -186,6 +186,9 @@
 | P1 | `libs/alloc` 通用分配器(决策 B);loader 批量映射/大帧(决策 A) | P0 | `check_mysh` debug spawn 时间下降;可用帧断言不变 |
 | P2 | C 工具链接入 + `minic` ELF(决策 F);参数页 argv(决策 H) | P1 | `./minic` 在 mysh 跑通;`./minic arg` 读到 argv |
 | P3 | MicroPython port:frozen stdlib、堆、console、time、argv 解析(决策 B/D/E-1/H);脚本运行类子进程的 fs 授予(决策 I) | P2 | `./python` 出 REPL;`./python app.py` 解释执行并断言输出 |
+
+P3 的具体实现设计(port 文件清单、钩子表、整数模式、启动/脚本流程、验收)
+见 [micropython-port.md](micropython-port.md)。
 | P4 | fs v2(决策 E-2) | P2 | 长名 import 与脚本读写;`check_fs2` |
 
 ## 9. 结论

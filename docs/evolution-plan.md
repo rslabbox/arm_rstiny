@@ -418,7 +418,8 @@ ABI_VERSION 已升为 4，旧 x8 正调用号协议已删除，不保留兼容 s
 分配器、loader 批量映射/大帧、fs v2、C 构建接入）见
 [interpreter-app.md](interpreter-app.md)。若实施，按该文 §8 的阶段表与验收
 执行；P0（契约文档化）与 P1（分配器 + loader 批量映射）独立于是否真正移植
-解释器。
+解释器。P3 的 MicroPython 落地实现设计见
+[micropython-port.md](micropython-port.md)。
 
 ## 10. 测试与验证计划
 
