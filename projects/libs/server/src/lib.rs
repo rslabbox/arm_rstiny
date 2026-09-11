@@ -112,9 +112,20 @@ macro_rules! logln {
     ($service:expr) => {
         $crate::log!($service, "\n")
     };
-    ($service:expr, $($arg:tt)*) => {
-        $crate::log!($service, "{}", ::core::format_args!($($arg)*))
-    };
+    ($service:expr, $($arg:tt)*) => {{
+        let service: &$crate::Service = &$service;
+        let mut buffer = [0u8; 256];
+        let used = {
+            let mut writer = $crate::LineWriter { buffer: &mut buffer, used: 0 };
+            let _ = ::core::fmt::Write::write_fmt(&mut writer, ::core::format_args!($($arg)*));
+            writer.used
+        };
+        // Always terminate the line: reserving the last byte truncates a
+        // too-long message rather than dropping its newline.
+        let used = used.min(buffer.len() - 1);
+        buffer[used] = b'\n';
+        service.log_bytes(&buffer[..used + 1]);
+    }};
 }
 
 /// Write into a caller-owned line buffer.

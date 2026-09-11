@@ -119,7 +119,13 @@ fn write_console(console_ep: u64, bytes: &[u8]) -> Result<(), u64> {
             return Err(received.label);
         }
     }
-    Ok(())
+    // Log lines are newline-terminated; the console service turns LF into CRLF.
+    // (The debug-console path terminates via `debug_println!` instead.)
+    match ipc::call(console_ep, console::WRITE, &pack_words(b"\n")) {
+        Ok(received) if received.label == REPLY_OK => Ok(()),
+        Ok(received) => Err(received.label),
+        Err(_) => Err(u64::MAX),
+    }
 }
 
 /// Pack `bytes` little-endian behind the byte count, per the console wire

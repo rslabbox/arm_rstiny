@@ -32,6 +32,14 @@ fn uart_init(base: usize) {
 }
 
 fn putc(base: usize, byte: u8) {
+    // Terminals need CR before LF; the kernel's debug console does the same.
+    if byte == b'\n' {
+        putc_raw(base, b'\r');
+    }
+    putc_raw(base, byte);
+}
+
+fn putc_raw(base: usize, byte: u8) {
     // SAFETY: the UART page is a device frame exclusively owned by this task.
     unsafe {
         while core::ptr::read_volatile((base + FR) as *const u32) & (1 << 5) != 0 {

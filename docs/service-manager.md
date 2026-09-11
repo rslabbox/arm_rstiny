@@ -619,6 +619,7 @@ fs（`fs_ep`，阶段 D）：
 - READY 后：init 与服务的日志走 console 协议；`libs/server` 的 `log!` 内部 `Call(console_ep, CONSOLE_WRITE)`。
 - 边界（明确化）：内核自身的 `log` 宏**始终**直写 PL011，不经过用户服务，也没有跨地址空间锁。debug 运行时内核日志与用户输出可能交错；生产/测试运行用 `LOG=off` 获得干净输出。`DebugPutChar` 在 console 服务可用后仅保留给 `kernel-test`。
 - 服务 panic：见 14.1，先 EXIT 后 fault 兜底。
+- 换行：`libs/server` 的 `logln!` 负责在行尾补 `\n`（`log!` 不补）；console 服务把 `\n` 翻译为 `\r\n` 再写 PL011，与内核 debug console 一致（终端需要 CR）。init 的 logger 线程写 console 时同样补 `\n`。
 
 ## 17. 调度与实时性假设
 
