@@ -47,12 +47,15 @@ CARGO_FLAGS += --features kernel-test
 endif
 
 # Fixed platform contract; no network backends. The VirtIO block device and
-# its FAT32 image back the userland disk stack (docs/disk-driver.md).
+# its FAT32 image back the userland disk stack (docs/disk-driver.md). The drive
+# options live in their own variable: commas inside $(if ...) split its
+# arguments, which would silently drop everything after the first one.
+DISK_ARGS := -drive file=$(DISK_IMG),if=none,format=raw,id=hd0,readonly=on \
+	-device virtio-blk-device,drive=hd0
 QEMU_ARGS := -machine virt,gic-version=3,virtualization=off -cpu cortex-a72 \
 	-smp 1 -m 128M -display none -monitor none -serial stdio -nic none \
 	-global virtio-mmio.force-legacy=false \
-	$(if $(filter 1,$(DISK)),-drive file=$(DISK_IMG),if=none,format=raw,id=hd0,readonly=on \
-	-device virtio-blk-device,drive=hd0) \
+	$(if $(filter 1,$(DISK)),$(DISK_ARGS)) \
 	-kernel $(BOOT_IMAGE)
 export LOG QEMU KERNEL_LOAD_MIN BOOT_TEST BLK_TEST
 
@@ -88,10 +91,13 @@ disk: hello
 	  --file HELLO.ELF=$(APP_DIR)/hello.elf --file APPS.CFG=apps/APPS.CFG \
 	  --file SH.CFG=apps/SH.CFG
 
-run run-kernel run-root run-userboot: build
+# `run` builds the application disk too, so the guest finds a virtio-blk
+# device and the FAT32 image the services need.
+RUN_DEPS := build $(if $(filter 1,$(DISK)),disk)
+run run-kernel run-root run-userboot: $(RUN_DEPS)
 	$(QEMU) $(QEMU_ARGS)
 
-debug: build
+debug: $(RUN_DEPS)
 	$(QEMU) $(QEMU_ARGS) -gdb tcp::$(GDB_PORT) -S
 
 check:
