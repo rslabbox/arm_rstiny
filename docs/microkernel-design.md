@@ -30,7 +30,7 @@ QEMU / 启动加载器
   → EL0 fatboot（root task）
   → EL0 serial_server（独立地址空间）
   → fatboot 的用户态 VirtIO 块设备与 FAT32 库
-  → 从磁盘读取 HELLO.ELF
+  → 从磁盘读取 hello
   → EL0 hello（独立地址空间）
   → hello 通过 IPC 请求 serial_server 输出
 ```
@@ -89,7 +89,7 @@ SMP、MCS、虚拟化、动态链接、POSIX、网络栈、磁盘写入与形式
 
 `../seL4/projects/sel4test/apps/CMakeLists.txt` 声明 `DeclareRootserver(fatboot)`。
 
-`apps/boot/main.c` 接收 BootInfo，建立用户态分配和地址空间管理，再启动串口服务、访问块设备、挂载 FAT32、读取 `HELLO.ELF`、创建子进程并处理其故障/完成消息。
+`apps/boot/main.c` 接收 BootInfo，建立用户态分配和地址空间管理，再启动串口服务、访问块设备、挂载 FAT32、读取 `hello`、创建子进程并处理其故障/完成消息。
 
 `serial_server` 是独立 ELF，嵌入 fatboot 镜像中，从而不依赖磁盘。参考实现为它映射 UART 页，通过 endpoint 提供轮询式串口输出。`hello` 则单独写入 FAT32 镜像，不嵌入 rootserver。
 
@@ -320,7 +320,7 @@ CPU 页表不能限制设备 DMA。没有 IOMMU/SMMU 时，持有总线主控设
 
 ### 13.2 FAT32 与 ELF 装载
 
-FAT32 第一版只读，挂载支持明确的分区布局。按镜像工具约定查找 `HELLO.ELF`；如果先只支持短文件名，要在工具和库两侧一致限制。检查扇区大小、分区/簇范围、FAT 链循环、文件大小上限以及算术溢出。
+FAT32 第一版只读，挂载支持明确的分区布局。按镜像工具约定查找 `hello`；如果先只支持短文件名，要在工具和库两侧一致限制。检查扇区大小、分区/簇范围、FAT 链循环、文件大小上限以及算术溢出。
 
 fatboot 的 ELF loader 支持 ELF64、小端、AArch64、ET_EXEC：
 
@@ -341,7 +341,7 @@ hello 只获得自己的执行资源、控制台客户端 capability 和完成�
 
 ```text
 内核 → fatboot → serial_server
-fatboot → VirtIO 读盘 → FAT32 → HELLO.ELF
+fatboot → VirtIO 读盘 → FAT32 → hello
 fatboot → 新 CSpace/VSpace/TCB → hello
 hello → ConsoleWrite IPC → serial_server → UART
 hello → 完成协议 → fatboot 监管与回收

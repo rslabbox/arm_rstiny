@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Phase D2 acceptance: fs-server mounts the FAT32 image through the block
-service and reads HELLO.ELF byte-for-byte. Corrupted images (bad BPB signature,
+service and reads hello byte-for-byte. Corrupted images (bad BPB signature,
 a self-looping FAT chain) must surface as bounded service errors — never a
 kernel panic (docs/disk-driver.md section 12, D2)."""
 import argparse
@@ -70,7 +70,7 @@ def main():
             expected_sum = sum(hello[:4096])
             kernel = (root / f'target/kernel/{mode}-log{level}-test0/{TARGET}/{mode}/kernel')
 
-            # Positive: a healthy image mounts and HELLO.ELF matches the host.
+            # Positive: a healthy image mounts and the file matches the host.
             # The disk is rebuilt first — the previous combo (or script run)
             # may have left a deliberately corrupted image behind.
             subprocess.run(['make', 'disk', f'MODE={mode}'], cwd=root, check=True,
@@ -86,18 +86,18 @@ def main():
 
             # Negative: bad BPB signature — the mount must fail, bounded.
             subprocess.run(['python3', str(tools), str(disk),
-                            f'--file', f'HELLO.ELF={app_dir}/hello.elf',
+                            f'--file', f'hello={app_dir}/hello.elf',
                             f'--file', f'APPS.CFG={root}/apps/APPS.CFG',
                             '--corrupt-bpb'], cwd=root, check=True, stdout=subprocess.DEVNULL)
             print(f'CHECK fat32 {mode} LOG={level}: corrupt BPB', flush=True)
             text = run(args.qemu, kernel, disk, lambda t: '[fs] mount failed' in t)
             assert '[fs] mounted' not in text, 'mount accepted a corrupt BPB'
 
-            # Negative: HELLO.ELF's FAT chain loops. The library's loop bound
+            # Negative: hello's FAT chain loops. The library's loop bound
             # (max_cluster steps) is far beyond one read, so the read returns
             # bounded-but-wrong data; the checksum must expose the corruption.
             subprocess.run(['python3', str(tools), str(disk),
-                            f'--file', f'HELLO.ELF={app_dir}/hello.elf',
+                            f'--file', f'hello={app_dir}/hello.elf',
                             f'--file', f'APPS.CFG={root}/apps/APPS.CFG',
                             '--cycle-fat'], cwd=root, check=True, stdout=subprocess.DEVNULL)
             print(f'CHECK fat32 {mode} LOG={level}: FAT cycle', flush=True)

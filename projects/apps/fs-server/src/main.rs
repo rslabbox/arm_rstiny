@@ -250,10 +250,10 @@ fn main(argument: Argument) -> ! {
     };
     logln!(service, "[fs] mounted, {} sectors", capacity);
 
-    // Acceptance hook (FAT_TEST=1): open HELLO.ELF, read its first sector and
+    // Acceptance hook (FAT_TEST=1): open hello, read its first sector and
     // log size plus checksum for the check script to compare with the image.
     if option_env!("FAT_TEST").is_some_and(|value| value == "1") {
-        match lookup(&volume, b"HELLO.ELF") {
+        match lookup(&volume, b"hello") {
             Some(entry) => {
                 let mut reader = match volume.read_file(&entry) {
                     Ok(reader) => reader,
@@ -452,7 +452,11 @@ fn lookup(volume: &FatVolume<BlockDevice>, name: &[u8]) -> Option<FileEntry> {
     let dir = volume.root_dir();
     for entry in dir.entries() {
         let Ok(entry) = entry else { continue };
-        if entry.name().as_bytes() == name && entry.as_entry().is_some_and(|file| file.is_file()) {
+        // FAT names are case-insensitive: `hello` matches a short name stored
+        // as `HELLO` (and vice versa).
+        if entry.name().as_bytes().eq_ignore_ascii_case(name)
+            && entry.as_entry().is_some_and(|file| file.is_file())
+        {
             return Some(entry.as_entry()?.clone());
         }
     }

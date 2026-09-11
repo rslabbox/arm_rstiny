@@ -57,7 +57,7 @@ endif
 
 # Application manifest baked into the disk. The default is empty (the shell
 # runs apps on demand); the appmgr/restart/services acceptances point this at
-# apps/APPS-hello.CFG, which lists HELLO.ELF.
+# apps/APPS-hello.CFG, which lists hello.
 APPS_CFG ?= apps/APPS.CFG
 
 # Fixed platform contract; no network backends. The VirtIO block device and
@@ -101,7 +101,7 @@ init console hello block-server fs-server appmgr mysh:
 disk: hello
 	rust-objcopy --strip-all $(HELLO_ELF) $(APP_DIR)/hello.elf
 	python3 tools/make_disk.py $(DISK_IMG) \
-	  --file HELLO.ELF=$(APP_DIR)/hello.elf --file APPS.CFG=$(APPS_CFG)
+	  --file hello=$(APP_DIR)/hello.elf --file APPS.CFG=$(APPS_CFG)
 
 # `run` builds the application disk too, so the guest finds a virtio-blk
 # device and the FAT32 image the services need.

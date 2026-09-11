@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Phase D3 acceptance: appmgr reads APPS.CFG from the FAT32 disk, loads
-HELLO.ELF from the same disk and supervises it. Replacing the on-disk ELF
+hello from the same disk and supervises it. Replacing the on-disk ELF
 changes what runs without rebuilding the system image (docs/disk-driver.md
 section 12, D3)."""
 import argparse

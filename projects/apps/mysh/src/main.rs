@@ -83,6 +83,19 @@ fn main(argument: Argument) -> ! {
         logln!(service, "[mysh] fs bind failed: {:?}", error);
         service.exit(3);
     }
+    // Carve the per-program budget once; every `./program` resets it with
+    // `revoke`. Re-carving each time would exhaust mysh's own Untyped: the
+    // parent watermark does not roll back when a sub-Untyped is deleted.
+    if let Err(error) = Untyped(CPtr(INIT_UNTYPED)).retype(
+        ObjectType::Untyped,
+        CHILD_BUDGET_BITS,
+        CNode(CPtr(INIT_CNODE)).0,
+        CHILD_BUDGET_SLOT,
+        1,
+    ) {
+        logln!(service, "[mysh] cannot budget children: {:?}", error);
+        service.exit(4);
+    }
     logln!(service, "[mysh] ready");
     repl(&service, fs_ep)
 }
@@ -203,19 +216,12 @@ fn execute(service: &Service, fs_ep: u64, line: &str) -> bool {
     true
 }
 
-/// Map a `./stem` command to the FAT 8.3 file `<STEM>.ELF`. Names are limited
-/// to eight alphanumerics, matching the on-disk short name.
-fn program_file(stem: &str) -> Option<([u8; 12], usize)> {
+/// Validate a `./name` token. The name is opened literally; the FAT server
+/// resolves it case-insensitively, so `./hello` finds a file stored as
+/// `HELLO` (the usual 8.3 short-name form).
+fn program_file(stem: &str) -> Option<&[u8]> {
     let bytes = stem.as_bytes();
-    if bytes.is_empty() || bytes.len() > 8 || !bytes.iter().all(u8::is_ascii_alphanumeric) {
-        return None;
-    }
-    let mut name = [0u8; 12];
-    for (index, byte) in bytes.iter().enumerate() {
-        name[index] = byte.to_ascii_uppercase();
-    }
-    name[bytes.len()..bytes.len() + 4].copy_from_slice(b".ELF");
-    Some((name, bytes.len() + 4))
+    (!bytes.is_empty() && bytes.len() <= 12).then_some(bytes)
 }
 
 /// `ls`: list the FAT32 root directory, batched through the shared buffer.
@@ -282,29 +288,15 @@ fn run_program(service: &Service, fs_ep: u64, stem: &str) {
         logln!(service, "[mysh] ./{}: no self endpoint", stem);
         return;
     };
-    let Some((file, length)) = program_file(stem) else {
-        logln!(service, "[mysh] ./{}: name must be 1-8 alphanumerics", stem);
+    let Some(file) = program_file(stem) else {
+        logln!(service, "[mysh] ./{}: bad program name", stem);
         return;
     };
-    let Some(image) = read_file(fs_ep, &file[..length]) else {
+    let Some(image) = read_file(fs_ep, file) else {
         logln!(service, "[mysh] ./{}: not on disk", stem);
         return;
     };
     let cnode = CNode(CPtr(INIT_CNODE));
-    // One fresh sub-Untyped per spawn; Task::destroy revokes it.
-    if Untyped(CPtr(INIT_UNTYPED))
-        .retype(
-            ObjectType::Untyped,
-            CHILD_BUDGET_BITS,
-            cnode.0,
-            CHILD_BUDGET_SLOT,
-            1,
-        )
-        .is_err()
-    {
-        logln!(service, "[mysh] ./{}: cannot budget the child", stem);
-        return;
-    }
     let child_info = SpawnInfo {
         magic: SpawnInfo::MAGIC,
         version: SpawnInfo::VERSION,
@@ -390,9 +382,19 @@ fn run_program(service: &Service, fs_ep: u64, stem: &str) {
                 }
             };
             let _ = task.destroy();
+            // The child's objects are gone; reset the shared sub-Untyped so the
+            // next `./program` starts from a clean watermark.
+            // SAFETY: no other task owns capabilities derived from it.
+            unsafe {
+                let _ = cnode.revoke(CHILD_BUDGET_SLOT);
+            }
             logln!(service, "[mysh] ./{} exited: {}", stem, code);
         }
         Err(error) => {
+            // SAFETY: as above; the failed spawn left no live derivation.
+            unsafe {
+                let _ = cnode.revoke(CHILD_BUDGET_SLOT);
+            }
             logln!(service, "[mysh] ./{} spawn failed: {:?}", stem, error);
         }
     }

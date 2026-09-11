@@ -101,7 +101,7 @@ userboot 保留为 monitor（决策 1）：它不参与服务管理，但在 ini
 - 作为 init 的一个普通服务启动，`depends = [fs]`，`restart = never`（一次性演示）。
 - 直接使用 `fs` 协议（`OPEN/READ/CLOSE/READDIR`）与自己的共享缓冲，不经过 appmgr。
 - 提示符 `[rstiny ~]$: `，命令从 console 服务读取（`CONSOLE_READ` 轮询）；支持 `ls`、`cat <file>`、`./<program>`、`help`、`exit`，以及退格/Ctrl-C/Ctrl-D。
-- `./<program>` 映射到磁盘上的 `<PROGRAM>.ELF`（FAT 8.3 短名，大写，名字限 1..8 个字母数字），用与 appmgr 相同的 ELF loader 装载并按 `libs/server` 协议监督（`READY` 回执、`EXIT` 回收）；所以把 `HELLO.ELF` 改名成 `TEST.ELF` 后 `./test` 就能跑。
+- `./<program>` 直接以该名字打开磁盘文件（FAT 大小写不敏感，和 Linux 一样没有扩展名约定），用与 appmgr 相同的 ELF loader 装载并按 `libs/server` 协议监督（`READY` 回执、`EXIT` 回收）；所以把 `hello` 改名成 `test` 后 `./test` 就能跑。
 - `exit` / Ctrl-D 退出 shell 并直接关机：`Runtime::Shutdown` → PSCI `SYSTEM_OFF`，QEMU 退出。
 
 ## 4. 目录与构建
@@ -125,7 +125,7 @@ projects/libs/fatfs/             # FAT32 只读（阶段 D）
 构建改动：
 
 - `Makefile`：`fatboot` target → `userboot`；新增 `init`、`console`、`block`、`fs`、`appmgr`、`mysh`。
-- 应用磁盘由 `make disk` 生成：`APPS.CFG` + `HELLO.ELF`。缺省 `APPS.CFG` **为空**（appmgr 不自动启动任何应用，由 shell 的 `./hello` 按需运行）；D3/D5 验收用 `apps/APPS-hello.CFG`（`make APPS_CFG=...`）。
+- 应用磁盘由 `make disk` 生成：`APPS.CFG` + `hello`（无扩展名；FAT 短名存为 `HELLO`，大小写标志让工具显示 `hello`）。缺省 `APPS.CFG` **为空**（appmgr 不自动启动任何应用，由 shell 的 `./hello` 按需运行）；D3/D5 验收用 `apps/APPS-hello.CFG`（`make APPS_CFG=...`）。
 - `tools/build_image.py`：CPIO 从 `kernel + dtb + rootserver` 扩展为 `kernel.elf + kernel.dtb + userboot + init + services + init.cfg`；前三个文件名与顺序保持 bootloader 现有校验，其后为模块文件。
 - `tools/build_app.py` 增加多应用构建入口；各应用共用 LLD 默认布局，段保持页不重叠（ELF loader 依赖该性质，见 13.4）。
 - 文档、`tools/check_*.py`、README 中的 fatboot 引用同步改名。
@@ -406,7 +406,7 @@ service fs {
 }
 
 # mysh: interactive shell. Prompts on the console (CONSOLE_READ) and runs
-# `ls`/`cat <file>`/`./hello`/`help`/`exit`; `./hello` loads HELLO.ELF.
+# `ls`/`cat <file>`/`./hello`/`help`/`exit`; `./hello` loads the file `hello`.
 service mysh {
     elf = "mysh.elf"
     depends = fs
@@ -415,7 +415,7 @@ service mysh {
 }
 ```
 
-缺省拓扑是 `console` / `block` / `fs` / `mysh`：应用由 shell 的 `./hello` 按需运行。`appmgr`（应用自动加载与重启策略）不在缺省 `init.cfg` 中，D3/D5 验收用 `apps/init-appmgr.cfg`（`console` / `block` / `fs` / `appmgr`），它列出 `HELLO.ELF`。
+缺省拓扑是 `console` / `block` / `fs` / `mysh`：应用由 shell 的 `./hello` 按需运行。`appmgr`（应用自动加载与重启策略）不在缺省 `init.cfg` 中，D3/D5 验收用 `apps/init-appmgr.cfg`（`console` / `block` / `fs` / `appmgr`），它列出 `hello`。
 
 键：
 

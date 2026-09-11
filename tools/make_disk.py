@@ -2,12 +2,14 @@
 """Build a bare FAT32 disk image with mtools (no partition table): sector 0 is
 the BPB the fs-server mounts (docs/disk-driver.md section 5.3).
 
-    python3 tools/make_disk.py disk.img --file HELLO.ELF=path/to/hello.elf
+    python3 tools/make_disk.py disk.img --file hello=path/to/hello
 
-Names must be valid 8.3 short names. Corruption switches build images for the
+Names may be upper or lower case 8.3 names; FAT stores the short name in
+upper case and mtools records the case so tools display what was asked for.
+Corruption switches build images for the
 fs-server failure-path acceptance:
   --corrupt-bpb  invalidates the boot sector signature
-  --cycle-fat    makes the first cluster of HELLO.ELF point at itself
+  --cycle-fat    makes the first cluster of hello point at itself
   --truncate     cuts the image short so late reads fall off the end
 """
 import argparse
@@ -20,8 +22,8 @@ from pathlib import Path
 
 def check_name(name):
     stem, _, extension = name.partition('.')
-    if not stem.isalnum() or not stem.isupper() or len(stem) > 8 or len(extension) > 3:
-        raise SystemExit(f'not an 8.3 short name: {name}')
+    if not stem.isalnum() or len(stem) > 8 or len(extension) > 3:
+        raise SystemExit(f'not an 8.3 name: {name}')
 
 
 def bpb_fields(image):
@@ -39,12 +41,16 @@ def bpb_fields(image):
 
 
 def directory_entry(image, fields, short_name):
-    """Return the 32-byte root directory entry for `short_name` (8.3)."""
+    """Return the 32-byte root directory entry for `short_name` (8.3).
+
+    FAT short names live in upper case, so a lower-case request still finds
+    the entry (mtools only records a case flag for display).
+    """
     data_start = fields['reserved_sectors'] + fields['num_fats'] * fields['fat_size']
     root_start = data_start + (fields['root_cluster'] - 2) * fields['sectors_per_cluster']
     spc = fields['sectors_per_cluster']
     stem, _, extension = short_name.partition('.')
-    raw = f'{stem:<8}{extension:<3}'.encode('ascii')
+    raw = f'{stem.upper():<8}{extension.upper():<3}'.encode('ascii')
     for sector in range(root_start, root_start + spc):
         image.seek(sector * fields['bytes_per_sector'])
         block = image.read(fields['bytes_per_sector'])
@@ -54,7 +60,7 @@ def directory_entry(image, fields, short_name):
     raise SystemExit(f'{short_name} not found in the root directory')
 
 
-def cycle_fat(image, fields, short_name='HELLO.ELF'):
+def cycle_fat(image, fields, short_name='hello'):
     """Point the file's first cluster at itself: a FAT loop a reader must bound."""
     entry = directory_entry(image, fields, short_name)
     first = struct.unpack_from('<H', entry, 0x1A)[0] | \

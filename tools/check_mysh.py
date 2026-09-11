@@ -7,7 +7,7 @@ machine off (PSCI SYSTEM_OFF), which terminates QEMU.
 The shell is the fifth service (console/block/fs/mysh). Console RX is
 polling-only, so the harness drives the guest over the serial line and waits
 for each prompt before typing the next command. The renamed-program phase
-runs the same ELF installed as TEST.ELF via `./test`.
+runs the same ELF installed as `test` via `./test`.
 """
 import argparse
 import os
@@ -94,10 +94,10 @@ def build_and_make_disk(root, mode, level):
 
 
 def make_renamed_disk(root, mode):
-    """Install the same ELF as TEST.ELF so `./test` proves the name mapping."""
+    """Install the same ELF as `test` so `./test` proves the name mapping."""
     disk = root / f'target/apps/{mode}/disk-renamed.img'
     subprocess.run(['python3', str(root / 'tools/make_disk.py'), str(disk),
-                    '--file', f'TEST.ELF={root}/target/apps/{mode}/hello.elf',
+                    '--file', f'test={root}/target/apps/{mode}/hello.elf',
                     '--file', f'APPS.CFG={root}/apps/APPS.CFG'],
                    cwd=root, check=True, stdout=subprocess.DEVNULL)
     return disk
@@ -114,7 +114,7 @@ def main():
             disk = root / f'target/apps/{mode}/disk.img'
             print(f'CHECK mysh {mode} LOG={level}: ./hello + poweroff', flush=True)
             run(args.qemu, kernel, disk, 'hello', expect_poweroff=True)
-            print(f'CHECK mysh {mode} LOG={level}: renamed TEST.ELF as ./test', flush=True)
+            print(f'CHECK mysh {mode} LOG={level}: renamed test as ./test', flush=True)
             run(args.qemu, kernel, make_renamed_disk(root, mode), 'test', expect_poweroff=True)
     print('PASS: the interactive shell runs disk programs and powers off on exit.',
           flush=True)

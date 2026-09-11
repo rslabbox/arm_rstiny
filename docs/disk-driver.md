@@ -233,17 +233,17 @@ boot 分区把这些 MMIO 区间作为**设备 Untyped** 发布（当前只发�
 ## 10. appmgr 与应用加载
 
 - `appmgr` 由 init 按 `apps/init-appmgr.cfg` 启动（缺省 `apps/init.cfg` 不含它，应用由 `mysh` 按需运行），`depends = [fs]`，持有 FS client cap 和应用 untyped 预算。
-- 流程：`OPEN("HELLO   ELF")` → 循环 `READ` 到自己的缓冲 → 解析 ELF → `spawn_supervised` 创建应用（独立 VSpace/CSpace/TCB、READY/report/重启协议）。
+- 流程：`OPEN("hello")` → 循环 `READ` 到自己的缓冲 → 解析 ELF → `spawn_supervised` 创建应用（独立 VSpace/CSpace/TCB、READY/report/重启协议）。
 - 应用与系统服务共用 `libs/server` 协议；控制端点是 appmgr 的 `control_ep`。
 - 应用来自 FAT32，因此**替换磁盘上的 ELF 即可改变运行内容，无需重编内核或 userboot/init**——这是与现在"hello 嵌入 rodata"的关键区别。
-- 缺省 `APPS.CFG` **不含应用**：appmgr 启动后只报 `manifest lists 0 app(s)` 并阻塞，开机不会自动跑 hello。运行入口是 `mysh` 的 `./hello`。D3/D5 验收用 `apps/APPS-hello.CFG`（`make APPS_CFG=apps/APPS-hello.CFG`），它列出 `HELLO.ELF`。
+- 缺省 `APPS.CFG` **不含应用**：appmgr 启动后只报 `manifest lists 0 app(s)` 并阻塞，开机不会自动跑 hello。运行入口是 `mysh` 的 `./hello`。D3/D5 验收用 `apps/APPS-hello.CFG`（`make APPS_CFG=apps/APPS-hello.CFG`），它列出 `hello`。
 
 ### 10.1 mysh 与 console RX
 
 - `mysh` 是第五个服务（`depends = [fs]`），直接用 fs 协议读取根目录与文件，不经过 appmgr。
 - 它是一个交互式 REPL：提示符 `[rstiny ~]$: `，输入从 console 服务读取。
 - console 服务新增 `CONSOLE_READ`：轮询 PL011 RX FIFO（`FR.RXFE`），有字节就回 `[1, byte]`，否则回 `[0, 0]`。RX 已在 `UARTCR` 使能，但未接中断。
-- `ls` 走 `FS_READDIR`（短名 8.3）；`cat <file>` 走 `OPEN/READ/CLOSE`；`./<program>` 把命令转成 `<PROGRAM>.ELF` 后复用 appmgr 的 loader 装载并监督（所以 `HELLO.ELF` 改名 `TEST.ELF` 后 `./test` 能跑）；`exit` 经 `Runtime::Shutdown` 关机。
+- `ls` 走 `FS_READDIR`；`cat <file>` 走 `OPEN/READ/CLOSE`；`./<program>` 直接打开同名文件（FAT 大小写不敏感，无扩展名约定）后复用 appmgr 的 loader 装载并监督（所以 `hello` 改名 `test` 后 `./test` 能跑）；`exit` 经 `Runtime::Shutdown` 关机。
 
 ## 11. 分阶段实施
 
@@ -329,7 +329,7 @@ boot 分区把这些 MMIO 区间作为**设备 Untyped** 发布（当前只发�
 
 - `fs::READDIR`（= 0x505）加入 fs 协议：`start` 下标分页遍历根目录，`DirEntry { name:[u8;12]; size:u32; is_dir:u32 }` 写入共享缓冲，回复 `count`/`next`。
 - console 协议新增 `CONSOLE_READ`（= 0x102）：console 服务轮询 PL011 RX FIFO，非阻塞返回 `[present, byte]`。RX 已在 `UARTCR` 使能，暂未接 IRQ。
-- `mysh`（`projects/apps/mysh`）是第五个服务，`depends = [fs]`；开一个交互式 REPL（`[rstiny ~]$: `），支持 `ls`/`cat`/`./<program>`/`help`/`exit`、回显、退格、Ctrl-C/Ctrl-D。空读时 `sleep(5ms)` 后重试，不忙等。`./<program>` 映射到 `<PROGRAM>.ELF`（8.3 短名）；`exit`/Ctrl-D 调 `Runtime::Shutdown`（PSCI `SYSTEM_OFF`）关机。
+- `mysh`（`projects/apps/mysh`）是第五个服务，`depends = [fs]`；开一个交互式 REPL（`[rstiny ~]$: `），支持 `ls`/`cat`/`./<program>`/`help`/`exit`、回显、退格、Ctrl-C/Ctrl-D。空读时 `sleep(5ms)` 后重试，不忙等。`./<program>` 直接打开同名文件（FAT 大小写不敏感）；`exit`/Ctrl-D 调 `Runtime::Shutdown`（PSCI `SYSTEM_OFF`）关机。
 - `./<program>` 复用 `spawn_supervised`：切子 untyped、填 `SpawnInfo`（`control_ep=140`、`console_ep=51`），并像 appmgr 一样 `Recv(control_ep)`/`Reply` 监督。**关键**：子程序是标准服务，装载后 `Call(control_ep, READY)`，监督者不 `Reply` 子进程就卡在 `BlockedSend`、`Wait` 不返回；`EXIT` 同样经 `control_ep`。
 - `mysh` 预算 2M（命令与文件缓冲都在 BSS/共享缓冲，不额外切大 untyped）。
 
