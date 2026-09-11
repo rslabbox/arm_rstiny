@@ -128,10 +128,7 @@ pub unsafe fn spawn(image: &[u8], scratch: usize, source_untyped: u64) -> Result
                         RIGHTS_READ | RIGHTS_WRITE,
                         VM_CACHEABLE | VM_EXECUTE_NEVER,
                     )
-                }
-                .inspect_err(|e| {
-                    crate::debug_println!("[loader] alias map {:#x} err {:?}", address, e)
-                });
+                };
                 if map == Err(Error::FailedLookup) {
                     let table = retype(&allocator, ObjectType::PageTable)?;
                     PageTable(CPtr(table)).map(CPtr(INIT_VSPACE), scratch & !(0x200000 - 1))?;
@@ -172,9 +169,7 @@ pub unsafe fn spawn(image: &[u8], scratch: usize, source_untyped: u64) -> Result
                         VM_EXECUTE_NEVER
                     };
                 unsafe {
-                    page.map(space, address, rights, attr).inspect_err(|e| {
-                        crate::debug_println!("[loader] page map {:#x} err {:?}", address, e)
-                    })?;
+                    page.map(space, address, rights, attr)?;
                 }
             }
         }
@@ -346,10 +341,7 @@ pub unsafe fn spawn_supervised(
                         RIGHTS_READ | RIGHTS_WRITE,
                         VM_CACHEABLE | VM_EXECUTE_NEVER,
                     )
-                }
-                .inspect_err(|e| {
-                    crate::debug_println!("[loader] alias map {:#x} err {:?}", address, e)
-                });
+                };
                 if map == Err(Error::FailedLookup) {
                     let table = retype(&allocator, ObjectType::PageTable)?;
                     PageTable(CPtr(table)).map(CPtr(INIT_VSPACE), scratch & !(0x200000 - 1))?;
@@ -390,9 +382,7 @@ pub unsafe fn spawn_supervised(
                         VM_EXECUTE_NEVER
                     };
                 unsafe {
-                    page.map(space, address, rights, attr).inspect_err(|e| {
-                        crate::debug_println!("[loader] page map {:#x} err {:?}", address, e)
-                    })?;
+                    page.map(space, address, rights, attr)?;
                 }
             }
         }
@@ -463,12 +453,6 @@ pub unsafe fn spawn_supervised(
             child.copy(slot, CPtr(INIT_CNODE), source, RIGHTS_ALL)?;
         }
         for cap in spec.caps {
-            crate::debug_println!(
-                "[loader] cap slot={} src={} badge={:#x}",
-                cap.slot,
-                cap.source,
-                cap.badge
-            );
             if cap.badge != 0 {
                 child.mint(
                     cap.slot,
