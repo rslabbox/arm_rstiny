@@ -406,7 +406,7 @@ ABI_VERSION 已升为 4，旧 x8 正调用号协议已删除，不保留兼容 s
 
 - ASID 分配与按 ASID 失效，替换全量 TLB 失效。
 - IPC fastpath、批量日志、映射开销测量。
-- 再评估 SMP、MCS、SMMU、FP/SIMD 上下文，各自独立里程碑。
+- 再评估 SMP、MCS、SMMU，各自独立里程碑。FP/SIMD 上下文已独立成里程碑并在 [FP/SIMD 上下文与惰性切换](fpu.md) 中实施（CPACR_EL1 惰性放行 + 528 字节现场）。
 
 验收：给出 IPC 延迟、上下文切换、映射与镜像尺寸基线；现有回归不退化。
 
@@ -438,7 +438,7 @@ ABI_VERSION 已升为 4，旧 x8 正调用号协议已删除，不保留兼容 s
 - 不做多级 CNode guard/radix，第一版单层。
 - 不做完整 derivation tree 撤销，第一版用有界对象表扫描。
 - 不做 reply capability 的安全强化，第一版用一次性回复槽。
-- 不做优先级继承、MCS、超时 IPC、SMP、SMMU、FP/SIMD 上下文。
+- 不做优先级继承、MCS、超时 IPC、SMP、SMMU。FP/SIMD 上下文已从本清单移出：实现见 [FP/SIMD 上下文与惰性切换](fpu.md)。
 - 不做通用 `open/read/write/fork/exec`，服务组合通过对象与 IPC 完成。
 
 ## 12. 里程碑与优先级总表

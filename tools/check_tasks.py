@@ -162,7 +162,10 @@ def run(qemu, kernel):
             assert call('wait',denied) == 6
             call('destroy',denied); call('destroy',victim)
 
-            for code,ec in [(mov(9,0)+[0xf9400120],0x24),([0xd51be220],0x18),([0x9e670000],0x07)]:
+            # EC 0x00 is any other unallocated instruction: FP/SIMD is no
+            # longer one of them (docs/fpu.md), so the third probe is a plain
+            # UDF #0; FP behavior moved to check_fpu.py.
+            for code,ec in [(mov(9,0)+[0xf9400120],0x24),([0xd51be220],0x18),([0x00000000],0x00)]:
                 fault = task(code)
                 start(fault)
                 assert call('wait',fault) >> 26 == ec

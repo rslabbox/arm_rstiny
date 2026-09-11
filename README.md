@@ -76,7 +76,7 @@ info registers cpsr sp x0
 
 内核初始化后进入 fatboot，由它创建独立地址空间、装载 hello 并启动；hello 输出问候后退出，fatboot 回收子任务并暂停。EL0 由 10 ms 定时器抢占，支持创建、启动、暂停、恢复、睡眠、等待、退出和销毁任务。没有 Ready 任务时内核进入可被定时器唤醒的 idle。用户故障终止该任务并释放其空间，其他任务继续执行。内核致命异常和 panic 仍诊断后关机：使用构建时从最终 DTB 生成的 SMC/HVC 配置。
 
-当前每个任务有一个地址空间和一个用户线程。完整 capability、IPC、fork/COW、文件映射与 POSIX 尚未实现；不支持 EL3、安全态、SMP、FP/SIMD、热启动。bootloader 要求固件交接时 MMU/cache 关闭且 RAM 已可用；进入内核时 MMU/cache 已开启。详见 [用户内存与单核任务调度](docs/memory-task.md)。
+当前每个任务有一个地址空间和一个用户线程。完整 capability、IPC、fork/COW、文件映射与 POSIX 尚未实现；不支持 EL3、安全态、SMP、热启动。FP/SIMD 经 CPACR_EL1 惰性放行且已实现（任务首次 FP 指令陷入、528 字节现场保存恢复，见 [FP/SIMD 上下文与惰性切换](docs/fpu.md)）。bootloader 要求固件交接时 MMU/cache 关闭且 RAM 已可用；进入内核时 MMU/cache 已开启。详见 [用户内存与单核任务调度](docs/memory-task.md)。
 
 `KERNEL_TEST=1` 对应独立 `kernel-test` feature，启用分配器自测与调试器使用的故障探针。自测成功写 `SELF_TEST_PASSED=1`，失败 panic；正式构建不包含探针。
 
@@ -98,5 +98,6 @@ info registers cpsr sp x0
 - [内核实现与验证记录](docs/kernel-implementation.md)
 - [完整微内核设计与分阶段路线](docs/microkernel-design.md)
 - [能力系统与 IPC 演进规划](docs/evolution-plan.md)
+- [FP/SIMD 上下文与惰性切换（FPU 支持，已实施）](docs/fpu.md)
 
 root 用户地址由其 ELF 决定，IPC buffer、BootInfo 与扩展区依次放在镜像末尾；用户入口自行安装 ELF 栈。可用 `make run ROOT_IMAGE_BASE=0x800000` 改变 root 链接地址，内核无需重编译。

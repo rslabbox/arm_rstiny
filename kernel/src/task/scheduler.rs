@@ -8,6 +8,7 @@ use crate::{
     arch::{
         kernel::thread::{
             TrapFrame,
+            fpu,
             kernel_context::{self, KernelContext},
             user::UserContext,
         },
@@ -154,9 +155,9 @@ impl Scheduler {
     fn current_slot(&self) -> Option<usize> {
         self.current
     }
-    pub(super) fn current_root(&self) -> (usize, usize) {
+    pub(super) fn current_root(&self) -> (u64, usize, usize) {
         let task = &self.tasks[self.current.expect("user execution outside task")];
-        (task.root, task.ipc_buffer)
+        (task.id, task.root, task.ipc_buffer)
     }
     pub(super) fn current_id(&self) -> Option<u64> {
         self.current_slot().map(|slot| self.tasks[slot].id)
@@ -199,6 +200,10 @@ impl Scheduler {
         task.state = if fault { TASK_FAULTED } else { TASK_EXITED };
         task.result = result;
         let id = task.id;
+        // The FPU owner is exactly this thread's task: drop the ownership so a
+        // later `fpu::migrate` never saves hardware registers into the
+        // `UserContext` box dropped below (docs/fpu.md §9).
+        fpu::forget(id);
         // A thread only retires itself: the Execution/kernel stack dies here,
         // while a shared CSpace/VSpace survives for its sibling threads and is
         // reclaimed by collection once the last reference disappears. The

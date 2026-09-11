@@ -6,7 +6,7 @@
 - `./python` → 解释器内 REPL(读写 console);
 - `./python app.py` → 通过参数页 argv(决策 H)+ 槽 53 的 fs 能力(决策 I)从
   磁盘读取脚本并解释执行;
-- 整数模式:用户态无 FPU 上下文(见 §7),不启用浮点。
+- 整数模式:端口保留整数 MicroPython(内核已支持 FP,见 §7;此模式不启用浮点)。
 
 本文是"实现设计",不是架构(架构见 interpreter-app.md),也不包含第三方
 C 代码正文(移植时从 MicroPython 上游拉取)。
@@ -33,7 +33,7 @@ C 代码正文(移植时从 MicroPython 上游拉取)。
 
 非目标(明说,避免过度设计):
 
-- 不做浮点(`MICROPY_PY_BUILTINS_FLOAT = 0`),原因见 §7。
+- 不做浮点(`MICROPY_PY_BUILTINS_FLOAT = 0`),理由与可选启用条件见 §7。
 - 不做线程/`_thread`、socket、timezone;`MICROPY_ROM_LEVEL` 从 `MINIMUM` 起步。
 - 不做 fs v2:脚本用现有 fs 协议(8.3 短名、`APP.PY` 合法)整体读入内存执行;
   标准库 import 来自 **frozen modules**(决策 E-1)。fs v2 留给 P4。
@@ -107,17 +107,16 @@ _start(x0 = 参数页 VA)            ; loader 已设 SP=栈顶,段/DSS 已就绪
 - 崩溃:解释器 fault → 经 control_ep 投给 mysh,`[mysh] ./python spawn failed
   / exited` 按既有路径处理;做 init 服务(可选项)时 `restart = on-failure`。
 
-## 7. 整数模式(硬约束)
+## 7. 整数模式（可选浮点）
 
-内核 `configure_el0_domain()` 置 `CPACR_EL1 = 0`,`TrapFrame` 无 FP 寄存器:
-**用户态任何 FP/SIMD 指令都会当场 trap**(evolution-plan 把 FP/SIMD 上下文列为
-未做里程碑)。因此:
+EL0 浮点已在内核侧落地：`UserContext` 附带 528 字节 FP 现场，CPACR_EL1 按任务
+惰性放行，首次执行 FP 指令时陷入保存/恢复（见 [FP/SIMD 上下文与惰性切换](fpu.md)）。
+本端口仍保持 `MICROPY_PY_BUILTINS_FLOAT = 0`（整数 Python）：
 
-- `MICROPY_PY_BUILTINS_FLOAT = 0`(整数 Python);
-- 微观层面 `MICROPY_FLOAT_IMPL` 相关宏不启用;
-- `mpconfigport.h` 里显式关闭 float,并在 port README 注明"如启用 float,需先
-  实现 FP/SIMD 上下文(内核侧)";
-- 测试脚本只能用整数语义(`1+2`,字节串等),验收断言里全是整数输出。
+- 微观层面 `MICROPY_FLOAT_IMPL` 相关宏不启用；
+- `mpconfigport.h` 里显式关闭 float；如需启用浮点，前置条件（FP/SIMD 上下文）
+  已实现，再为 MicroPython 选择 float 实现并接入即可，不再是内核级硬门槛；
+- 测试脚本只能用整数语义（`1+2`，字节串等），验收断言里全是整数输出。
 
 ## 8. 脚本执行(`./python app.py`)
 

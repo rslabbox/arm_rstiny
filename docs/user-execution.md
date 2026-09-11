@@ -62,7 +62,7 @@ Sleep 提交阻塞动作；TCB_Suspend 更新目标调度状态；Exit/Fault 切
 
 保存 EL0 的 x0..x30、SP_EL0、ELR_EL1、SPSR_EL1，复用 272 字节 TrapFrame。它持久存在于任务入口闭包的捕获中，通过可变借用传给运行循环和 syscall handler。任务运行期间其他任务不能访问或替换它。
 
-用户 ABI 使用 softfloat。FP/SIMD 通过 CPACR_EL1 禁止，通用 TLS 尚未实现；TPIDRRO_EL0 用于运行库定位 IPC buffer。
+用户 ABI 使用 softfloat。FP/SIMD 经 CPACR_EL1 惰性放行：`UserContext` 附带 528 字节 FP 现场（`FpuContext`，16 个 q 寄存器 + FPCR/FPSR），任务首次执行 FP 指令时由内核陷入后置入并使能，切出时整体保存恢复（见 [FP/SIMD 上下文与惰性切换](fpu.md)）；通用 TLS 尚未实现；TPIDRRO_EL0 用于运行库定位 IPC buffer。
 
 ### KernelReturnFrame
 

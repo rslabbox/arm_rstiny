@@ -22,10 +22,10 @@ fn run_user_thread_loop(
     dispatch_syscall: &mut impl FnMut(&mut UserContext) -> Disposition,
 ) -> ! {
     loop {
-        let (root, ipc_buffer) = with_scheduler(|scheduler| scheduler.current_root());
+        let (id, root, ipc_buffer) = with_scheduler(|scheduler| scheduler.current_root());
         // SAFETY: this task owns the context; its address space stays alive while
         // running. No scheduler borrow crosses EL0 or a kernel context switch.
-        let event = unsafe { uctx.run(root, ipc_buffer) };
+        let event = unsafe { uctx.run(root, ipc_buffer, id) };
         let action = match event {
             UserEvent::Syscall => dispatch_syscall(uctx),
             UserEvent::Interrupt => {

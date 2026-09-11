@@ -1,24 +1,30 @@
 //! A returning, IRQ-masked boundary around one interval of EL0 execution.
+use super::fpu::{self, FpuContext};
 use super::TrapFrame;
 use crate::arch::machine::instructions;
 use crate::memory;
 use aarch64_cpu::registers::{CNTKCTL_EL1, CPACR_EL1, TPIDRRO_EL0, Writeable};
 use core::mem::{offset_of, size_of};
 
-pub struct UserContext(TrapFrame);
+/// A task's saved user state: the AArch64 integer frame plus the lazy
+/// FP/SIMD context. Both share the one stable heap box created by
+/// `Execution::start`, so `fpu::migrate` can rely on the FPU owner's address
+/// staying valid for the whole task lifetime (docs/fpu.md §13).
+pub struct UserContext(TrapFrame, FpuContext);
 
 /// Configure the EL0 execution environment shared by all user tasks. Run once,
 /// IRQ-masked, before the first user-mode entry: EL0 may not read the system
-/// counter or enable its own event stream, and FP/SIMD stays trapped until a
-/// task context supports it.
+/// counter or enable its own event stream, and FP/SIMD is enabled per-task by
+/// `fpu::activate` immediately before each `eret` (the `fpu::migrate` trap
+/// installs the first-time owner's state).
 pub(crate) fn configure_el0_domain() {
     assert!(instructions::irq_masked());
     CNTKCTL_EL1.set(0); // EL0 cannot reprogram timers or enable its own event stream.
-    CPACR_EL1.set(0); // FP/SIMD remains trapped until its context is supported.
+    CPACR_EL1.set(0); // Boot seed: everything trapped until `fpu::activate` runs.
 }
 impl UserContext {
     pub fn new(frame: TrapFrame) -> Self {
-        Self(frame)
+        Self(frame, FpuContext::default())
     }
     pub fn frame(&self) -> &TrapFrame {
         &self.0
@@ -54,29 +60,45 @@ impl UserContext {
     /// # Safety
     /// The page-table root and all mappings must remain owned for this call.
     /// Only the single-CPU runtime may call this, without shared-state borrows.
-    pub unsafe fn run(&mut self, root: usize, ipc_buffer: usize) -> UserEvent {
+    pub unsafe fn run(&mut self, root: usize, ipc_buffer: usize, id: u64) -> UserEvent {
         assert!(instructions::irq_masked());
-        let mut trap = RawTrap::default();
-        memory::activate(root);
-        // Runtime convention: read-only thread register locates this task's
-        // IPC buffer. This is separate from the seL4 syscall wire protocol.
-        TPIDRRO_EL0.set(ipc_buffer as u64);
-        // SAFETY: exclusively borrowed context and stack-local result remain
-        // alive until the assembly restores this kernel continuation.
-        unsafe { run_user(&mut self.0, &mut trap) };
-        memory::activate_kernel();
-        assert!(instructions::irq_masked());
-        match trap.kind {
-            1 => UserEvent::Interrupt,
-            0 if trap.esr >> 26 == 0x15 && trap.esr & 0xffff == 0 => UserEvent::Syscall,
-            0 => UserEvent::Fault(UserFault {
-                esr: trap.esr,
-                far: match (trap.esr >> 26, trap.esr & (1 << 10)) {
-                    (0x20 | 0x24, 0) => Some(trap.far),
-                    _ => None,
-                },
-            }),
-            _ => unreachable!("fatal architecture events cannot return"),
+        loop {
+            let mut trap = RawTrap::default();
+            memory::activate(root);
+            // FP/SIMD is enabled only for the current FPU owner; any other
+            // task's first FP/SIMD instruction traps (§`migrate` below).
+            fpu::activate(&mut self.1 as *mut FpuContext, id);
+            // Runtime convention: read-only thread register locates this task's
+            // IPC buffer. This is separate from the seL4 syscall wire protocol.
+            TPIDRRO_EL0.set(ipc_buffer as u64);
+            // SAFETY: exclusively borrowed context and stack-local result remain
+            // alive until the assembly restores this kernel continuation.
+            unsafe { run_user(&mut self.0, &mut trap) };
+            memory::activate_kernel();
+            // First FP/SIMD instruction of a non-owner task: migrate the
+            // previous owner's registers, load this task's state, and replay.
+            // ELR is unchanged, so the eret below re-executes the trap against
+            // the now-enabled owner (docs/fpu.md §8).
+            if trap.kind == 0 && trap.esr >> 26 == 0x07 {
+                fpu::migrate(&mut self.1 as *mut FpuContext, id);
+                continue;
+            }
+            // The kernel runs with FP/SIMD trapped beyond this point; only
+            // migrate's short save/restore window ever enables them.
+            fpu::disable();
+            assert!(instructions::irq_masked());
+            return match trap.kind {
+                1 => UserEvent::Interrupt,
+                0 if trap.esr >> 26 == 0x15 && trap.esr & 0xffff == 0 => UserEvent::Syscall,
+                0 => UserEvent::Fault(UserFault {
+                    esr: trap.esr,
+                    far: match (trap.esr >> 26, trap.esr & (1 << 10)) {
+                        (0x20 | 0x24, 0) => Some(trap.far),
+                        _ => None,
+                    },
+                }),
+                _ => unreachable!("fatal architecture events cannot return"),
+            };
         }
     }
 }

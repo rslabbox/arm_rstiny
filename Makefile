@@ -145,6 +145,7 @@ check:
 	python3 tools/check_untyped.py --qemu $(QEMU)
 	python3 tools/check_ipc.py --qemu $(QEMU)
 	python3 tools/check_tasks.py --qemu $(QEMU)
+	python3 tools/check_fpu.py --qemu $(QEMU)
 	python3 tools/check_user_context.py --qemu $(QEMU)
 	python3 tools/check_relocation.py --qemu $(QEMU)
 	python3 tools/check_block.py --qemu $(QEMU)

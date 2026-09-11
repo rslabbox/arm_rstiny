@@ -79,7 +79,7 @@ Wait 在目标未终止时阻塞，结束后返回退出码或 ESR；通过 Stat
 
 目标操作通过调用者 CSpace 中的 capability 授权。父子关系只用于内部等待/孤儿生命周期，不授予对任意任务的访问权。可用 CNode_Copy 把目标 TCB cap 授予另一任务；猜测其他空间的 CPtr 或内部 ID 不构成授权。
 
-没有 Ready 任务时内核在现有调用栈上、IRQ 掩蔽状态执行 WFI；pending timer 唤醒后由 Rust 处理 IRQ，再检查到期任务。用户异常保存到 `LAST_FAULT`，终止该任务并调度其他任务。内核自身异常或 panic 无条件诊断并 PSCI 关机。CNTKCTL_EL1 禁止 EL0 修改定时器。FP/SIMD 通过 CPACR_EL1 显式禁止，相关用户指令产生故障；尚无 FP/SIMD 上下文保存。
+没有 Ready 任务时内核在现有调用栈上、IRQ 掩蔽状态执行 WFI；pending timer 唤醒后由 Rust 处理 IRQ，再检查到期任务。用户异常保存到 `LAST_FAULT`，终止该任务并调度其他任务。内核自身异常或 panic 无条件诊断并 PSCI 关机。CNTKCTL_EL1 禁止 EL0 修改定时器。FP/SIMD 经 CPACR_EL1 惰性放行：任务首次 FP 指令陷入时保存前所有权、装载自己已清零的 528 字节现场（`FpuContext`）并使能；切出/销毁时回写回收，内核态始终置回陷阱（见 [FP/SIMD 上下文与惰性切换](fpu.md)）。
 
 EL1 内核执行期间 IRQ 屏蔽、不可抢占，任务通过显式 park 切回调度器。独立内核栈保留阻塞的 Rust 调用链，wait 在唤醒后从原 handler 调用点继续。任何共享状态借用都必须在切换前结束；强制销毁不会展开挂起栈，所以持久资源必须由任务对象或入口捕获持有。它不是硬实时实现：映射清零、复制和元数据操作会增加中断响应延迟。
 
@@ -111,7 +111,7 @@ ABI 已切换为 seL4 non-MCS 的负调用号、x7、MessageInfo 和 capability 
 - 用户配额、全局内存池和任务槽耗尽，验证失败回滚和后续恢复。
 - 两个无 Yield 循环的定时器抢占、相同 VA 的不同物理内容、暂停/恢复、idle 睡眠唤醒。
 - 阻塞等待、暂停中的睡眠/等待、跨 CSpace 授权、退出/故障后空间释放和句柄复用。
-- 实际执行 EL0 定时器控制写入和 FP/SIMD 指令，验证权限陷入与故障隔离。
+- 实际执行 EL0 定时器控制写入（验证权限陷入）与 FP 指令（验证透明放行、数值正确、任务间隔离；未定义/SVE 指令仍按故障隔离，见 [check_fpu.py](../tools/check_fpu.py)）。
 
 fatboot 也通过实际 Rust API 检查任务创建/销毁计费和定时器睡眠，保留静默启动结果验证。
 
