@@ -124,7 +124,7 @@ projects/libs/fatfs/             # FAT32 只读（阶段 D）
 构建改动：
 
 - `Makefile`：`fatboot` target → `userboot`；新增 `init`、`console`、`block`、`fs`、`appmgr`、`mysh`。
-- 应用磁盘除 `APPS.CFG`/`HELLO.ELF` 外再放入 shell 脚本 `SH.CFG`（`make disk`）。
+- 应用磁盘由 `make disk` 生成：`APPS.CFG` + `HELLO.ELF`。缺省 `APPS.CFG` **为空**（appmgr 不自动启动任何应用，由 shell 的 `./hello` 按需运行）；D3/D5 验收用 `apps/APPS-hello.CFG`（`make APPS_CFG=...`）。
 - `tools/build_image.py`：CPIO 从 `kernel + dtb + rootserver` 扩展为 `kernel.elf + kernel.dtb + userboot + init + services + init.cfg`；前三个文件名与顺序保持 bootloader 现有校验，其后为模块文件。
 - `tools/build_app.py` 增加多应用构建入口；各应用共用 LLD 默认布局，段保持页不重叠（ELF loader 依赖该性质，见 13.4）。
 - 文档、`tools/check_*.py`、README 中的 fatboot 引用同步改名。
@@ -603,7 +603,7 @@ fs（`fs_ep`，阶段 D）：
 ## 15. appmgr 与应用生命周期
 
 - `appmgr` 是 init 的普通服务，`depends = [fs]`。
-- 应用来源：`fs-server` 的只读文件；应用清单文件（`apps.cfg`，语法同 `init.cfg`）由 appmgr 从 fs 读取。
+- 应用来源：`fs-server` 的只读文件；应用清单文件（`APPS.CFG`，语法同 `init.cfg`）由 appmgr 从 fs 读取。缺省清单为空——开机不自动跑应用，`mysh` 的 `./hello` 才是运行入口；D3/D5 验收换用 `APPS-hello.CFG`。
 - appmgr 负责：解析清单、切应用子 untyped、ELF 装载、READY/report、应用级重启策略。
 - 应用与系统服务使用同一套 `libs/server` 协议，但控制端点是 appmgr 的 `control_ep`；应用不接触系统服务的 endpoint（console 例外，经 appmgr Copy）。
 - init 不感知具体应用；只监督 appmgr。

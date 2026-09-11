@@ -58,8 +58,8 @@ def main():
     args = parser.parse_args()
     root = Path(__file__).resolve().parent.parent
     disk = root / 'target/apps/release/disk.img'
-    subprocess.run(['make', 'disk', 'MODE=release'], cwd=root, check=True,
-                   stdout=subprocess.DEVNULL)
+    subprocess.run(['make', 'disk', 'MODE=release', 'APPS_CFG=apps/APPS-hello.CFG'], cwd=root,
+                   check=True, stdout=subprocess.DEVNULL)
     for mode in ('debug', 'release'):
         for level in ('off', 'info'):
             subprocess.run(['make', 'build', f'MODE={mode}', f'LOG={level}', 'DISK=1'],

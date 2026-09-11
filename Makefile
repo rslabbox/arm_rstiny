@@ -55,6 +55,11 @@ ifdef KILL_FS
 INIT_CFG := apps/init-restart.cfg
 endif
 
+# Application manifest baked into the disk. The default is empty (the shell
+# runs apps on demand); the appmgr/restart/services acceptances point this at
+# apps/APPS-hello.CFG, which lists HELLO.ELF.
+APPS_CFG ?= apps/APPS.CFG
+
 # Fixed platform contract; no network backends. The VirtIO block device and
 # its FAT32 image back the userland disk stack (docs/disk-driver.md). The drive
 # options live in their own variable: commas inside $(if ...) split its
@@ -96,7 +101,7 @@ init console hello block-server fs-server appmgr mysh:
 disk: hello
 	rust-objcopy --strip-all $(HELLO_ELF) $(APP_DIR)/hello.elf
 	python3 tools/make_disk.py $(DISK_IMG) \
-	  --file HELLO.ELF=$(APP_DIR)/hello.elf --file APPS.CFG=apps/APPS.CFG
+	  --file HELLO.ELF=$(APP_DIR)/hello.elf --file APPS.CFG=$(APPS_CFG)
 
 # `run` builds the application disk too, so the guest finds a virtio-blk
 # device and the FAT32 image the services need.
