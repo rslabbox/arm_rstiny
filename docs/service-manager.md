@@ -608,9 +608,10 @@ fs（`fs_ep`，阶段 D）：
 
 - `mysh` 是 init 的普通服务，`depends = [fs]`，在 console 上开一个 REPL（`[rstiny ~]$: `）。
 - 输入来自 `CONSOLE_READ`：console 服务轮询 PL011 RX FIFO，无字节就回空；shell 空读后 `sleep(5ms)`，不忙等。行编辑只做回显、退格和 Ctrl-C/Ctrl-D。
-- `./<program>`（以及不带 `./` 的 `hello`）把 `<program>` 大写后拼上 `.ELF`（8.3 短名），从 fs 读文件，复用 appmgr 的 loader：切一个子 untyped、填 `SpawnInfo`（`control_ep = 140`、`console_ep = 51`），并以子进程的 `control_ep` 为 fault/控制端点监督它。
+- `./<program>`（以及不带 `./` 的 `hello`）按字面打开磁盘上的同名文件（FAT 大小写不敏感，无扩展名约定），从 fs 读文件，复用 loader：切一个子 untyped、填 `SpawnInfo`（`control_ep = 140`、`console_ep = 51`），并以子进程的 `control_ep` 为 fault/控制端点监督它。
 - `exit` / Ctrl-D 调 `Runtime::Shutdown`（PSCI `SYSTEM_OFF`）直接关机。
 - 关键差异：子程序是标准服务，装载后会 `Call(control_ep, READY)`，因此 shell 必须像 appmgr 一样 `Recv(control_ep)` 并 `Reply`，否则子进程停在 `BlockedSend`、`Wait` 永不返回。
+- 解释器（如 MicroPython）既可作 `./python` 子进程，也可作 init 服务（`restart = on-failure` 开机即有 REPL）；两者都只复用本协议与 `spawn_supervised`，见 [interpreter-app.md](interpreter-app.md)。
 
 ## 16. 日志
 

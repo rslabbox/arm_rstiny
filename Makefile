@@ -1,4 +1,6 @@
-MODE ?= debug
+# Default to release: QEMU TCG is slow and code is small; debug is ~46x
+# slower to boot and only needed when tracing (make MODE=debug).
+MODE ?= release
 KERNEL_TEST ?= 0
 BOOT_TEST ?= 0
 BLK_TEST ?= 0

@@ -68,6 +68,20 @@ TCB_Configure 校验 IPCFrame 确实映射在指定 IPC 地址。多个 TCB 允�
 
 scratch 地址来自 BootInfo 扩展区之后的空闲页，由调用者独占保留；没有固定 ELF 装载地址。页表层级仍受下述实现范围限制。
 
+### EL0 加载契约（对 C 程序同样适用）
+
+`elf.rs` 对 Rust 与 C 程序一视同仁。C `_start` 必须遵守：
+
+- 入口寄存器：`x0 = SpawnInfo 参数页 VA`（Rust 服务经 `Service::init` 读取；
+  C 程序可忽略但不得假设 `x0 = 0`）；`SP = loader 提供的 64 KiB 栈顶`。
+- 段：`.bss` 由 loader 从零化帧 retype，天然清零；代码段 W^X，数据段 RW/NX。
+- 退出/崩溃：与 Rust 服务相同，走 `Call(control_ep, EXIT/READY)` 协议或
+  fault 投递；不做裸 `ret`。
+- C rt0 模板：`_start: 忽略 x0 → 调 `port_main()` → 永不返回`。
+
+契约细节与"为什么解释器需要它"见
+[interpreter-app.md](interpreter-app.md)（决策 C）。
+
 ## 显式运行时扩展
 
 睡眠、时钟、退出状态和托管任务便利接口仍由内核 Runtime 对象提供，通过 Call 调用，标签独立保留在 0x1000 以上。它们不是 seL4 标准对象方法，也不是已经实现的用户态服务端。

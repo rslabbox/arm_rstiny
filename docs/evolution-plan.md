@@ -412,6 +412,14 @@ ABI_VERSION 已升为 4，旧 x8 正调用号协议已删除，不保留兼容 s
 
 风险：低到中。
 
+### 阶段 P0–P4（可选）：解释器应用（MicroPython 案例）
+
+以 MicroPython 作为"大 C 应用"反推的架构完善（EL0 加载契约、通用用户态
+分配器、loader 批量映射/大帧、fs v2、C 构建接入）见
+[interpreter-app.md](interpreter-app.md)。若实施，按该文 §8 的阶段表与验收
+执行；P0（契约文档化）与 P1（分配器 + loader 批量映射）独立于是否真正移植
+解释器。
+
 ## 10. 测试与验证计划
 
 | 层 | 新增检查 |

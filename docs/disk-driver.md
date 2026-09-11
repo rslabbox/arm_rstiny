@@ -273,6 +273,7 @@ boot 分区把这些 MMIO 区间作为**设备 Untyped** 发布（当前只发�
 1. 磁盘布局：裸 FAT32（建议）vs GPT/MBR。
 2. 共享缓冲：server 持有、client 只读映射（建议）vs client 提供。
 3. IRQ：设备 IRQ → Notification（已落地，[irq.md](irq.md) §13）；预绑定验收路径（`BLK_TEST`）保留轮询作驱动级自检。
+4. **fs v2（解释器驱动的登记）**：解释器 import/脚本读写需要长名（≥255）、多绑定 client（或按 badge 多缓冲）、更强的目录遍历；现状单 client / ≤13 字节短名 / 4 句柄不够。不做时先用 frozen 标准库规避，见 [interpreter-app.md](interpreter-app.md) 决策 E。
 4. appmgr 与 init 的边界：应用清单放 `init.cfg` 还是 appmgr 自己的配置。
 5. 文件名：先只支持 8.3 短名，LFN 后置。
 
