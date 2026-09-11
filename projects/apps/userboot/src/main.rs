@@ -14,10 +14,13 @@ use rstiny_runtime::{BootInfo, entry};
 const CONTROL_EP: u64 = 130; // root's supervision endpoint object for init
 const INIT_BUDGET_OBJ: u64 = 160; // init's Untyped budget carved from our pool
 const DEVICE_COPY_BASE: u64 = 161; // device Untyped copies, +k per device region
+const IRQ_MASTER_BASE: u64 = 170; // root-side IRQHandler masters, +i per user line
 const MAX_DEVICES: usize = 4;
+const MAX_IRQ_LINES: usize = 64; // bound matching the BootInfo record reservation
 const INIT_CONTROL_SLOT: u64 = 140; // init's control endpoint slot
 const INIT_BUDGET_SLOT: u64 = 32; // init's budget slot in its own CSpace
 const INIT_DEV_SLOT: u64 = 161; // init's first device Untyped slot in its CSpace
+const INIT_IRQ_SLOT: u64 = 800; // init's first IRQHandler slot (clear of the ROM window)
 const INIT_ASID_SLOT: u64 = 6; // init's ASID pool slot (the standard slot)
 const INIT_ROM_FIRST: u64 = 200; // init's ROM Frame caps (clear of 161)
 const ROM_GRANT_MAX: usize = 512; // ROM pages granted to init (covers the whole archive)
@@ -87,6 +90,34 @@ fn main(info: &mut BootInfo) -> ! {
             root_failed();
         }
     }
+    // Authorize every platform-table line as a root-side master (docs/irq.md
+    // §8). The kernel publishes the table in BootInfo — authorization policy
+    // is data, not probing. Table order: VirtIO slot lines ascending, other
+    // device lines after; QEMU attaches devices to the window's end, so
+    // virtio device N uses kind-0 entry count-1-N (docs/irq.md §7).
+    let lines = info.irq_lines();
+    if lines.len() > MAX_IRQ_LINES {
+        rstiny::debug_println!("[userboot] too many user IRQ lines");
+        root_failed();
+    }
+    for (index, line) in lines.iter().enumerate() {
+        if IrqControl(CPtr(INIT_IRQ_CONTROL))
+            .get(line.intid, cnode.0, IRQ_MASTER_BASE + index as u64)
+            .is_err()
+        {
+            rstiny::debug_println!("[userboot] IRQ master {} authorize failed", line.intid);
+            root_failed();
+        }
+    }
+    let irq_count = lines.len();
+    let virtio_lines = lines
+        .iter()
+        .filter(|line| line.kind == kernel_abi::IRQ_KIND_VIRTIO_SLOT)
+        .count();
+    if virtio_lines == 0 {
+        rstiny::debug_println!("[userboot] platform exposes no VirtIO IRQ lines");
+        root_failed();
+    }
     // init's budget: carve a whole sub-Untyped from a region big enough that
     // root's own allocations (ROM tables, endpoints) are untouched. The boot
     // partition yields several max-sized regions; pick one other than the
@@ -130,13 +161,18 @@ fn main(info: &mut BootInfo) -> ! {
             rom_start: INIT_ROM_FIRST,
             rom_count: rom.frame_count.min(ROM_GRANT_MAX as u64),
             extra: {
-                let mut extra = [0; 8];
+                let mut extra = [0; SpawnInfo::EXTRA_LEN];
                 extra[1] = INIT_DEV_SLOT;
                 extra[3] = device_count as u64;
                 extra[4] = u64::from(boot_test());
                 // Restart generation: test drills only run in the first
                 // incarnation (docs/thread-group.md §7).
                 extra[5] = u64::from(restarts);
+                // IRQHandler masters: first init-side slot, then the count of
+                // VirtIO slot lines among them (docs/irq.md §8). Virtio device
+                // N maps to entry count-1-N.
+                extra[SpawnInfo::IRQ_SLOT] = INIT_IRQ_SLOT;
+                extra[SpawnInfo::IRQ_SLOT + 1] = virtio_lines as u64;
                 extra
             },
         };
@@ -146,13 +182,13 @@ fn main(info: &mut BootInfo) -> ! {
                 core::mem::size_of::<SpawnInfo>(),
             )
         };
-        // Fixed-capability prefix, device grants, then the ROM window.
+        // Fixed-capability prefix, device and IRQ grants, then the ROM window.
         let mut caps = [ChildCap {
             slot: 0,
             source: 0,
             rights: 0,
             badge: 0,
-        }; 4 + MAX_DEVICES + ROM_GRANT_MAX];
+        }; 4 + MAX_DEVICES + MAX_IRQ_LINES + ROM_GRANT_MAX];
         caps[0] = ChildCap {
             slot: INIT_CONTROL_SLOT,
             source: CONTROL_EP,
@@ -179,11 +215,20 @@ fn main(info: &mut BootInfo) -> ! {
                 badge: 0,
             };
         }
-        let granted = (modules.frame_count as usize).min(ROM_GRANT_MAX);
-        for (index, cap) in caps[3 + device_count..3 + device_count + granted]
+        for (index, cap) in caps[3 + device_count..3 + device_count + irq_count]
             .iter_mut()
             .enumerate()
         {
+            *cap = ChildCap {
+                slot: INIT_IRQ_SLOT + index as u64,
+                source: IRQ_MASTER_BASE + index as u64,
+                rights: RIGHTS_ALL,
+                badge: 0,
+            };
+        }
+        let granted = (modules.frame_count as usize).min(ROM_GRANT_MAX);
+        let fixed = 3 + device_count + irq_count;
+        for (index, cap) in caps[fixed..fixed + granted].iter_mut().enumerate() {
             *cap = ChildCap {
                 slot: INIT_ROM_FIRST + index as u64,
                 source: kernel_abi::INIT_BOOT_MODULES + index as u64,
@@ -200,7 +245,7 @@ fn main(info: &mut BootInfo) -> ! {
                 &rstiny::elf::Supervision {
                     info: info_bytes,
                     fault_ep: INIT_CONTROL_SLOT,
-                    caps: &caps[..3 + device_count + granted],
+                    caps: &caps[..fixed + granted],
                     slot_base: rstiny::elf::LOADER_SLOT_BASE,
                 },
             )
@@ -251,6 +296,12 @@ fn main(info: &mut BootInfo) -> ! {
             for index in 0..device_count {
                 let _ = cnode.revoke(DEVICE_COPY_BASE + index as u64);
             }
+        }
+        // A crashed init can leave a service's notification bound to a line.
+        // Clear the masters so every line starts unbound and quiesced
+        // (docs/irq.md §12.3); the next incarnation re-binds on spawn.
+        for index in 0..irq_count {
+            let _ = IrqHandler(CPtr(IRQ_MASTER_BASE + index as u64)).clear();
         }
     }
 }

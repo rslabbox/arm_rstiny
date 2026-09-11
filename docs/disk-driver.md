@@ -150,7 +150,7 @@ boot 分区把这些 MMIO 区间作为**设备 Untyped** 发布（当前只发�
 ### 6.3 请求
 
 - 一条 block 请求由三段描述符组成：`{ type: u32, reserved: u32, sector: u64 }`（type 0 = IN / 1 = OUT）+ 数据缓冲 + 状态字节。
-- 写 `QueueNotify` 后轮询 used ring（阶段 D；用户态中断投递见 [设备 IRQ 授权与用户态投递](irq.md)，落地后改为等设备完成中断）。
+- 写 `QueueNotify` 后等设备完成中断（`read_blocks_nb` → Notification → 遍历 used ring → `InterruptACK` → IRQ Ack），授权链与迁移记录见 [设备 IRQ 授权与用户态投递](irq.md) §7/§13。
 - `InterruptStatus` 读后写 `InterruptACK`。
 - 容量：config 区 offset `0x100` 读 64-bit `capacity`（sectors，512 B）。
 
@@ -241,7 +241,7 @@ boot 分区把这些 MMIO 区间作为**设备 Untyped** 发布（当前只发�
 | 阶段 | 内容 | 前置 |
 | --- | --- | --- |
 | D0 | 平台生成 VirtIO MMIO + 设备 Untyped；QEMU 加盘 | 现有设备 Untyped |
-| D1 | `block-server`：VirtIO 初始化 + 轮询读扇区 | D0 |
+| D1 | `block-server`：VirtIO 初始化 + 中断驱动读扇区（`BLK_TEST` 钩子保留轮询自检） | D0 |
 | D2 | `fs-server`：FAT32 挂载 + 短名 open/read | D1 |
 | D3 | `appmgr`：从 FAT32 读 `hello.elf` 并 supervised spawn | D2 |
 | D4 | init 配置驱动化：把 block/fs/appmgr 写进 `init.cfg`、依赖拓扑、按策略重启 | D3 |
@@ -261,7 +261,7 @@ boot 分区把这些 MMIO 区间作为**设备 Untyped** 发布（当前只发�
 
 1. 磁盘布局：裸 FAT32（建议）vs GPT/MBR。
 2. 共享缓冲：server 持有、client 只读映射（建议）vs client 提供。
-3. IRQ：轮询（阶段 D）vs 设备 IRQ → Notification（后续）。
+3. IRQ：设备 IRQ → Notification（已落地，[irq.md](irq.md) §13）；预绑定验收路径（`BLK_TEST`）保留轮询作驱动级自检。
 4. appmgr 与 init 的边界：应用清单放 `init.cfg` 还是 appmgr 自己的配置。
 5. 文件名：先只支持 8.3 短名，LFN 后置。
 

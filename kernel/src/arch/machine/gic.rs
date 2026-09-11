@@ -54,9 +54,11 @@ pub(crate) fn init() {
     gic.init();
     let mut cpu = gic.cpu_interface();
     cpu.init_current_cpu().expect("GICv3 CPU initialization");
-    // Combined EOI: drop priority and deactivate together. User IRQ delivery
-    // with deferred deactivation would need a different completion protocol.
-    cpu.set_eoi_mode(false);
+    // Split EOI (EOImode=1, docs/irq.md §5): delivery drops priority via EOIR
+    // only and leaves the line active; the driver's Ack deactivates via DIR.
+    // Combined EOI would deactivate at delivery time, re-arming an uncleared
+    // level source before its driver has even seen the notification.
+    cpu.set_eoi_mode(true);
     *slot = Some(Controller {
         gic,
         cpu,
@@ -136,14 +138,56 @@ pub(crate) fn claim() -> Option<ActiveInterrupt> {
         Some(ActiveInterrupt { irq })
     })
 }
-/// The device must have cleared or reprogrammed its source before completion.
-pub(crate) fn complete(interrupt: ActiveInterrupt) {
+
+/// Rebuild an [`IrqId`] from its INTID; `None` outside the architecture range.
+pub(crate) fn from_intid(intid: u32) -> Option<IrqId> {
+    match intid {
+        0..=15 => Some(IrqId::sgi(intid)),
+        16..=31 => Some(IrqId::ppi(intid - 16)),
+        32..=1019 => Some(IrqId::spi(intid - 32)),
+        _ => None,
+    }
+}
+
+/// Priority drop only (EOIR): the claim obligation is discharged but the line
+/// stays active in the GIC, which blocks re-delivery of the same INTID until
+/// the driver deactivates it — the seL4 GICv3 user-IRQ protocol (docs/irq.md
+/// §5). Used after signaling a bound user IRQ.
+pub(crate) fn priority_drop(interrupt: ActiveInterrupt) {
     with_controller(|controller| {
         assert_eq!(controller.active, Some(interrupt.irq));
-        // Order device-source writes before priority drop/deactivation.
+        // Order device-source writes before priority drop.
         barrier::dsb(barrier::SY);
         controller.cpu.eoi1(interrupt.irq);
         barrier::isb(barrier::SY);
         controller.active = None;
+    });
+}
+
+/// Priority drop plus deactivate (EOIR + DIR): the claim is recycled at once.
+/// Used for kernel-owned lines (timer) and unknown sources; the caller must
+/// have cleared or masked the source first.
+pub(crate) fn priority_and_deactivate(interrupt: ActiveInterrupt) {
+    let irq = interrupt.irq;
+    with_controller(|controller| {
+        assert_eq!(controller.active, Some(irq));
+        // Order device-source writes before priority drop/deactivation.
+        barrier::dsb(barrier::SY);
+        controller.cpu.eoi1(irq);
+        barrier::isb(barrier::SY);
+        controller.active = None;
+        controller.cpu.dir(irq);
+    });
+}
+
+/// Deactivate one line on behalf of its driver (`IRQHandler_Ack`): release the
+/// active state so the line can fire again. A write for a non-active INTID is
+/// ignored by the GIC, so this is safe at any point in the protocol.
+pub(crate) fn deactivate(irq: IrqId) {
+    with_controller(|controller| {
+        controller.validate(irq);
+        barrier::dsb(barrier::SY);
+        controller.cpu.dir(irq);
+        barrier::isb(barrier::SY);
     });
 }

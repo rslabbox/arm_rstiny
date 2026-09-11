@@ -151,5 +151,7 @@ fn root_layout_follows_elf_without_a_kernel_stack_contract() {
     assert_eq!(layout.ipc_buffer, 0x17000);
     assert_eq!(layout.boot_info, 0x18000);
     assert_eq!(layout.extra, 0x19000);
-    assert_eq!(layout.end, 0x1b000);
+    // Extra holds the DTB plus worst-case Untyped, boot-module and platform
+    // IRQ table records (docs/irq.md §3.1) — three pages for a 4 KiB DTB.
+    assert_eq!(layout.end, 0x1c000);
 }

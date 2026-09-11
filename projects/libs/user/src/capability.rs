@@ -1,8 +1,8 @@
 //! Explicit seL4-style object capabilities. Slot allocation is the caller's policy.
 use super::{Error, abi, invoke};
 pub use abi::{
-    CNODE_BITS, INIT_ASID_POOL, INIT_CNODE, INIT_TCB, INIT_UNTYPED, INIT_VSPACE, Invocation,
-    ObjectType, RIGHTS_ALL, RIGHTS_READ, RIGHTS_WRITE, VM_CACHEABLE, VM_EXECUTE_NEVER,
+    CNODE_BITS, INIT_ASID_POOL, INIT_CNODE, INIT_IRQ_CONTROL, INIT_TCB, INIT_UNTYPED, INIT_VSPACE,
+    Invocation, ObjectType, RIGHTS_ALL, RIGHTS_READ, RIGHTS_WRITE, VM_CACHEABLE, VM_EXECUTE_NEVER,
 };
 /// Translate a virtual address of the calling task into its physical
 /// address through the task's own VSpace (DMA setup). Fails for unmapped
@@ -136,6 +136,56 @@ impl PageTable {
             &[space.0],
         )
         .map(|_| ())
+    }
+}
+/// Root-only IRQ authorization singleton (`INIT_IRQ_CONTROL`). Only the root
+/// task holds it; every other task receives explicit `IrqHandler` caps.
+pub struct IrqControl(pub CPtr);
+impl IrqControl {
+    /// seL4 `IRQControl_Get`: authorize interrupt `irq` (INTID) into `slot` of
+    /// `cnode`. Only platform-table lines are accepted; a line whose handler
+    /// still exists fails with `RevokeFirst`.
+    pub fn get(&self, irq: u64, cnode: CPtr, slot: u64) -> Result<(), Error> {
+        invoke(
+            self.0.0,
+            Invocation::IrqIssueIrqHandler as u64,
+            &[irq, slot, 64],
+            &[cnode.0],
+        )
+        .map(|_| ())
+    }
+}
+/// One authorized interrupt line (docs/irq.md §4).
+pub struct IrqHandler(pub CPtr);
+impl IrqHandler {
+    /// seL4 `IRQHandler_SetNotification`: bind `notification` to the line.
+    /// Delivery carries `notification`'s badge; rebinding overwrites and
+    /// re-enables the line (a restarted driver's bind must recover a line its
+    /// predecessor left disabled by `clear`).
+    ///
+    /// # Driver contract
+    /// Clear the device's latched interrupt **before** calling this (VirtIO:
+    /// read `InterruptACK` once). The kernel re-enables the line on bind, and
+    /// an edge line whose device still asserts an old interrupt has no new
+    /// edge to deliver — the stale latch must be cleared driver-side.
+    pub fn set_notification(&self, notification: CPtr) -> Result<(), Error> {
+        invoke(
+            self.0.0,
+            Invocation::IrqSetIrqHandler as u64,
+            &[],
+            &[notification.0],
+        )
+        .map(|_| ())
+    }
+    /// seL4 `IRQHandler_Ack`: GICv3 deactivate. The line can fire again; a
+    /// level source that was not cleared re-pends immediately.
+    pub fn ack(&self) -> Result<(), Error> {
+        invoke(self.0.0, Invocation::IrqAckIrq as u64, &[], &[]).map(|_| ())
+    }
+    /// seL4 `IRQHandler_Clear`: drop the binding, disable and deactivate the
+    /// line. Idempotent.
+    pub fn clear(&self) -> Result<(), Error> {
+        invoke(self.0.0, Invocation::IrqClearIrqHandler as u64, &[], &[]).map(|_| ())
     }
 }
 pub struct Tcb(pub CPtr);

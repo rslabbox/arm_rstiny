@@ -280,6 +280,51 @@ pub extern "C" fn start_root() -> ! {
         modules_record_bytes,
     )
     .expect("extra BootInfo modules record");
+    // The platform IRQ table record: every user-authorizable line, in the
+    // generated order (VirtIO slot lines ascending, then other devices).
+    assert!(
+        crate::config::IRQ_LINES.len() <= MAX_IRQ_LINES,
+        "platform IRQ table exceeds the BootInfo record bound"
+    );
+    let irq_header = BootInfoHeader {
+        id: BOOTINFO_HEADER_IRQS,
+        len: header_size as u64 + crate::config::IRQ_LINES.len() as u64 * IrqDesc::RECORD_LEN,
+    };
+    let irq_offset =
+        modules_offset + (header_size + core::mem::size_of::<BootModules>()).next_multiple_of(8);
+    // SAFETY: fully initialized repr(C) header with no padding.
+    let irq_header_bytes = unsafe {
+        core::slice::from_raw_parts(
+            (&irq_header as *const BootInfoHeader).cast::<u8>(),
+            header_size,
+        )
+    };
+    crate::object::boot_write(vspace, layout.extra as usize + irq_offset, irq_header_bytes)
+        .expect("extra BootInfo IRQ header");
+    for (index, &(intid, level, kind)) in crate::config::IRQ_LINES.iter().enumerate() {
+        let desc = IrqDesc {
+            intid,
+            level,
+            kind,
+            reserved: 0,
+        };
+        // SAFETY: a fully initialized repr(C) record with no padding.
+        let bytes = unsafe {
+            core::slice::from_raw_parts(
+                (&desc as *const IrqDesc).cast::<u8>(),
+                core::mem::size_of::<IrqDesc>(),
+            )
+        };
+        crate::object::boot_write(
+            vspace,
+            layout.extra as usize
+                + irq_offset
+                + header_size
+                + index * core::mem::size_of::<IrqDesc>(),
+            bytes,
+        )
+        .expect("extra BootInfo IRQ descriptor");
+    }
     let info = BootInfo {
         magic: BOOTINFO_MAGIC,
         version: ABI_VERSION,

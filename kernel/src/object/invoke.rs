@@ -31,6 +31,10 @@ fn dispatch(slot: u64, message: &Request) -> Result<Completion> {
     }
     match kind {
         ObjectKind::Runtime => runtime::invoke(message),
+        ObjectKind::IrqControl if message.label == Invocation::IrqIssueIrqHandler as u64 => {
+            irq::issue(&cap, message)
+        }
+        ObjectKind::IrqHandler => irq::handler_invoke(&cap, message),
         ObjectKind::CNode => {
             let completion = cnode::invoke(cap.object, message)?;
             let current = crate::task::current_id().unwrap();

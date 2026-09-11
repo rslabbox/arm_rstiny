@@ -423,15 +423,23 @@ fn reply_phase(context: &mut UserContext) -> Result<bool, u64> {
 }
 
 /// Signal a notification: wake one waiter with the badge, or merge into bits.
-fn signal(ntfn: ObjectId, badge: u64) -> Result<(), u64> {
+/// Returns whether a waiter became runnable (the IRQ path reschedules then).
+fn signal(ntfn: ObjectId, badge: u64) -> Result<bool, u64> {
     if let Some(waiter) = peek_valid(ntfn, &[TASK_BLOCKED_RECV])? {
         api::edit_frame(waiter, |frame| frame.set_reply(badge, 0, &[]))?;
         api::complete(waiter)?;
         object::with_wait_queue(ntfn, |queue| queue.pop())?;
+        Ok(true)
     } else {
         object::with_notification_bits(ntfn, |bits| *bits |= badge)?;
+        Ok(false)
     }
-    Ok(())
+}
+
+/// Kernel-side signal from IRQ delivery (docs/irq.md §6). A collected
+/// notification drops the signal; a woken waiter asks for a reschedule.
+pub(crate) fn signal_notification(ntfn: ObjectId, badge: u64) -> bool {
+    matches!(signal(ntfn, badge), Ok(true))
 }
 
 fn wait_notification(

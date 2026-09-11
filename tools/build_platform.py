@@ -98,6 +98,33 @@ def generate(output, qemu='qemu-system-aarch64'):
     virtio_size_log2 = max(12, (span - 1).bit_length())
     if virtio_base % (1 << virtio_size_log2):
         raise ValueError(f'virtio-mmio window is not aligned: {slots}')
+    # The platform IRQ table (docs/irq.md section 3.1): one entry per
+    # user-authorizable line, generated as (INTID, level, kind). Kind 0 is a
+    # VirtIO MMIO slot line — the entries are ascending with the slot order and
+    # must be contiguous SPIs sharing one trigger type, so a supervisor can map
+    # device ordinal to line positionally. Kind 1 covers other devices' lines
+    # (the PL011 today) and follows. Trigger/visibility is platform policy; the
+    # timer PPI and every unmapped line stay kernel-owned.
+    slot_irqs = []
+    for node in [n for n in all_nodes if 'virtio,mmio' in compat.get(n, [])]:
+        raw = words(node, 'interrupts')
+        if len(raw) != 3 or raw[0] != 0:
+            raise ValueError(f'expected a GIC SPI for {node}: {raw}')
+        slot_irqs.append((regions(node)[0][0], raw[1], raw[2]))
+    slot_irqs.sort()
+    if any(number != slot_irqs[0][1] + index for index, (_, number, _) in enumerate(slot_irqs)):
+        raise ValueError(f'virtio-mmio IRQs are not contiguous: {slot_irqs}')
+    triggers = {flags & 15 for _, _, flags in slot_irqs}
+    if len(triggers) != 1 or not triggers <= {1, 2, 4}:
+        raise ValueError(f'unsupported virtio-mmio trigger configuration: {slot_irqs}')
+    virtio_irq_level = triggers == {4}
+    uart_raw = words(uart, 'interrupts')
+    if len(uart_raw) != 3 or uart_raw[0] != 0 or uart_raw[2] & 15 not in (1, 2, 4):
+        raise ValueError(f'expected a GIC SPI for {uart}: {uart_raw}')
+    irq_lines = ([(number + 32, 1 if virtio_irq_level else 0, 0) for _, number, _ in slot_irqs] +
+                 [(uart_raw[1] + 32, 1 if uart_raw[2] & 15 == 4 else 0, 1)])
+    if len(set(intid for intid, _, _ in irq_lines)) != len(irq_lines):
+        raise ValueError(f'duplicate platform IRQ lines: {irq_lines}')
     irq = words(timer, 'interrupts')[3:6]  # Non-secure physical timer.
     if len(irq) != 3 or irq[0] != 1 or irq[1] >= 16 or irq[2] & 15 != 4:
         raise ValueError('expected a level-triggered physical timer PPI')
@@ -108,12 +135,20 @@ def generate(output, qemu='qemu-system-aarch64'):
                      GICR_BASE=gicr, GICR_SIZE=0x20000, RAM_START=0x40000000, RAM_END=0x48000000,
                      VIRTIO_MMIO_BASE=virtio_base, VIRTIO_MMIO_SIZE=1 << virtio_size_log2)
     rust = '// Generated from QEMU kernel.dtb; do not edit.\n'
-    rust += ''.join(f'pub const {name}: usize = {value:#x};\n' for name, value in constants.items())
+    # VIRTIO_MMIO_SIZE stays json-only: the window extent is device policy for
+    # supervisors, and the kernel consumes the log2 form below.
+    rust += ''.join(f'pub const {name}: usize = {value:#x};\n' for name, value in constants.items()
+                    if name != 'VIRTIO_MMIO_SIZE')
     rust += f'pub const VIRTIO_MMIO_SIZE_LOG2: u8 = {virtio_size_log2};\n'
+    # Per-line platform IRQ table: (INTID, level, kind); see docs/irq.md §3.1.
+    rust += 'pub const IRQ_LINES: &[(u64, u64, u64)] = &['
+    rust += ', '.join(f'({intid}, {level}, {kind})' for intid, level, kind in irq_lines)
+    rust += '];\n'
     rust += f'pub const TIMER_IRQ: u32 = {irq[1] + 16};\npub const PSCI_SMC: bool = {str(method == "smc").lower()};\n'
     (output / 'platform.rs').write_text(rust)
     (output / 'platform.json').write_text(json.dumps(dict(constants, timer_irq=irq[1] + 16,
-        virtio_slots=len(slots), psci_method=method, machine=machine,
+        irq_lines=[list(line) for line in irq_lines], virtio_slots=len(slots),
+        psci_method=method, machine=machine,
         kernel_devices=kernel_devices, loader_devices=loader_devices), indent=2) + '\n')
     stamp.write_text(key)
 

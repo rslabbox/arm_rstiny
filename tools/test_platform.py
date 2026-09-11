@@ -19,6 +19,14 @@ class PlatformTests(unittest.TestCase):
             self.assertEqual(info['virtio_slots'], 32)
             self.assertEqual(info['VIRTIO_MMIO_BASE'], 0x0a000000)
             self.assertEqual(info['VIRTIO_MMIO_SIZE'], 0x4000)
+            # Per-line table (docs/irq.md §3.1): 32 edge VirtIO slot lines
+            # (INTID 48..79) first, then the level PL011 line (INTID 33).
+            irq_lines = info['irq_lines']
+            self.assertEqual(len(irq_lines), 33)
+            self.assertEqual(irq_lines[0], [48, 0, 0])
+            self.assertEqual(irq_lines[31], [79, 0, 0])
+            self.assertEqual(irq_lines[-1], [33, 1, 1])
+            self.assertIn('pub const IRQ_LINES', (out / 'platform.rs').read_text())
             method = platform.run(['fdtget', '-t', 's', out / 'kernel.dtb', '/psci', 'method']).strip()
             self.assertEqual(method, info['psci_method'])
             self.assertNotIn('seL4,kernel-devices', (out / 'kernel.dts').read_text())

@@ -14,8 +14,8 @@ pub struct Service {
     pub control_ep: u64,
     pub command_ep: u64,
     pub console_ep: u64,
-    /// Extra endpoint slots granted through `SpawnInfo::extra`.
-    pub extra: [u64; 8],
+    /// Extra endpoint/capability slots granted through `SpawnInfo::extra`.
+    pub extra: [u64; 12],
 }
 
 impl Service {

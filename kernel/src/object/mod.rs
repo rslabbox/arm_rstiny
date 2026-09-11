@@ -10,6 +10,7 @@ mod cnode;
 mod endpoint;
 mod id;
 mod invoke;
+pub(crate) mod irq;
 mod runtime;
 mod untyped;
 use crate::{
@@ -80,6 +81,8 @@ pub(crate) enum ObjectKind {
     Runtime,
     Endpoint,
     Notification,
+    IrqControl,
+    IrqHandler,
 }
 
 /// A recorded mapping installed by a frame or page-table capability. The
@@ -112,6 +115,11 @@ impl CNode {
             slots: BTreeMap::new(),
         }
     }
+    /// Test-only empty CNode; production ones come from retype or `init_root`.
+    #[cfg(feature = "kernel-test")]
+    pub(crate) const fn empty() -> Self {
+        Self::new()
+    }
 }
 
 /// VSpace payload: the address space plus its ASID binding. The address space
@@ -135,6 +143,11 @@ pub(crate) enum Object {
     Runtime,
     Endpoint(Endpoint),
     Notification(Notification),
+    /// Root-only IRQ authorization singleton (`INIT_IRQ_CONTROL`).
+    IrqControl,
+    /// One authorized interrupt line; created only by `IRQControl_Get`
+    /// (docs/irq.md §3).
+    IrqHandler(irq::IrqHandler),
 }
 impl Object {
     fn kind(&self) -> ObjectKind {
@@ -149,6 +162,8 @@ impl Object {
             Object::Runtime => ObjectKind::Runtime,
             Object::Endpoint(_) => ObjectKind::Endpoint,
             Object::Notification(_) => ObjectKind::Notification,
+            Object::IrqControl => ObjectKind::IrqControl,
+            Object::IrqHandler(_) => ObjectKind::IrqHandler,
         }
     }
 }
@@ -180,6 +195,19 @@ static STORE: SingleCore<Store> = SingleCore::new(Store {
 
 pub(crate) fn with_store<T>(f: impl FnOnce(&mut Store) -> T) -> T {
     f(&mut STORE.borrow_mut())
+}
+
+/// Test-only raw object publication; production objects come from retype,
+/// boot partitioning or the IRQ/ROOT setup paths.
+#[cfg(feature = "kernel-test")]
+pub(crate) fn test_insert(object: Object) -> Option<ObjectId> {
+    with_store(|store| store.objects.insert(object))
+}
+
+/// Test-only raw removal; the caller applies any object-specific finalizers.
+#[cfg(feature = "kernel-test")]
+pub(crate) fn test_remove(id: ObjectId) -> Option<Object> {
+    with_store(|store| store.objects.remove(id))
 }
 
 impl Store {
@@ -689,6 +717,10 @@ pub(crate) fn init_root(task: u64, vspace: ObjectId, ipc: usize, untyped_start: 
             .objects
             .insert(Object::AsidPool)
             .expect("root ASID pool");
+        let irq_control = store
+            .objects
+            .insert(Object::IrqControl)
+            .expect("root IRQControl");
         let page = store
             .vspace(vspace)
             .expect("root VSpace")
@@ -699,6 +731,7 @@ pub(crate) fn init_root(task: u64, vspace: ObjectId, ipc: usize, untyped_start: 
             (INIT_TCB, tcb),
             (INIT_CNODE, cnode),
             (INIT_VSPACE, vspace),
+            (INIT_IRQ_CONTROL, irq_control),
             (INIT_RUNTIME, runtime),
             (INIT_ASID_POOL, asid),
             (INIT_IPC_BUFFER, page),
@@ -909,6 +942,14 @@ pub(crate) fn collect() {
                         live.insert(cap.object);
                     }
                 }
+                // A bound IRQHandler keeps its Notification object alive even
+                // when no capability names it anymore (docs/irq.md §6); the
+                // binding dies with the handler or an explicit Clear.
+                if let Object::IrqHandler(handler) = object
+                    && let Some((notification, _)) = handler.bound()
+                {
+                    live.insert(notification);
+                }
             }
             for id in thread_roots.iter().copied() {
                 live.insert(id);
@@ -942,8 +983,15 @@ pub(crate) fn collect() {
                 ) {
                     api::suspend_blocked_on(id);
                 }
-                if let Some(Object::Tcb(task)) = store.objects.remove(id) {
-                    tasks.push(task);
+                if let Some(object) = store.objects.remove(id) {
+                    // A collected handler must release its line: drop the
+                    // delivery index and disable the source (docs/irq.md §5).
+                    if let Object::IrqHandler(handler) = &object {
+                        irq::retire(handler);
+                    }
+                    if let Object::Tcb(task) = object {
+                        tasks.push(task);
+                    }
                 }
             }
             let mut needed = BTreeSet::new();

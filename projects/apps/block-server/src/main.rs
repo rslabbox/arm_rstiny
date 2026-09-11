@@ -3,7 +3,9 @@
 //! block-server: the VirtIO MMIO block driver as a supervised user service
 //! (docs/disk-driver.md section 6), built on the maintained `virtio-drivers`
 //! crate. One bound client at a time; sector data is DMAd directly into a
-//! server-owned shared buffer frame granted on BIND.
+//! server-owned shared buffer frame granted on BIND. Reads complete through
+//! the device IRQ: the supervisor grants an `IrqHandler` cap, the server
+//! binds its own Notification and waits instead of polling (docs/irq.md §7).
 
 extern crate alloc;
 
@@ -11,16 +13,16 @@ use core::hint::spin_loop;
 use core::ptr::NonNull;
 
 use rstiny::capability::{
-    CNode, CPtr, INIT_CNODE, INIT_UNTYPED, INIT_VSPACE, ObjectType, Page, PageTable, RIGHTS_READ,
-    RIGHTS_WRITE, Untyped, VM_CACHEABLE, VM_EXECUTE_NEVER,
+    CNode, CPtr, INIT_CNODE, INIT_UNTYPED, INIT_VSPACE, IrqHandler, ObjectType, Page, PageTable,
+    RIGHTS_READ, RIGHTS_WRITE, Untyped, VM_CACHEABLE, VM_EXECUTE_NEVER,
 };
 use rstiny::ipc;
 use rstiny_protocol::{Argument, SpawnInfo, block, control, status};
 use rstiny_runtime::entry;
 use rstiny_server::{Service, logln};
 use virtio_drivers::{
-    BufferDirection, Hal, PhysAddr,
-    device::blk::VirtIOBlk,
+    BufferDirection, Error as VirtError, Hal, PhysAddr,
+    device::blk::{BlkReq, BlkResp, VirtIOBlk},
     transport::{DeviceType, Transport, mmio::MmioTransport},
 };
 
@@ -36,6 +38,11 @@ const MMIO_PAGE: u64 = 40;
 const TABLE_SLOT: u64 = 44;
 const DMA_SLOT: u64 = 45; // + i: DMA frames, handed out sequentially
 const BUF_SLOT: u64 = DMA_SLOT + DMA_MAX_PAGES as u64;
+const NT_SLOT: u64 = BUF_SLOT + 1; // completion Notification object
+const NT_BADGED: u64 = NT_SLOT + 1; // its badged copy, bound to the IRQ line
+/// Delivery badge minted onto the bound Notification copy. Non-zero so an
+/// unwaited signal merges into the notification bits instead of being lost.
+const IRQ_BADGE: u64 = 1;
 const SECTORS_PER_BUFFER: u64 = 8;
 const SLOT_STRIDE: u64 = 0x200;
 
@@ -226,6 +233,15 @@ fn main(argument: Argument) -> ! {
     };
     let _ = buffer_phys; // share() resolves it through kernel translation
 
+    // The supervisor grants the device IRQ handler (docs/irq.md §7); without
+    // it the driver would have to poll, which this service does not do.
+    let irq_slot = service.extra[SpawnInfo::IRQ_SLOT];
+    if irq_slot == 0 {
+        logln!(service, "[block] no device IRQ handler granted");
+        service.exit(2);
+    }
+    let irq = IrqHandler(CPtr(irq_slot));
+
     // Probe every 0x200 slot in the granted window: QEMU virt exposes uniform
     // empty slots, and only the one bound to virtio-blk identifies itself.
     let Some(mut device) = probe(MMIO_VA, MMIO_PAGES as usize * 0x1000) else {
@@ -239,6 +255,8 @@ fn main(argument: Argument) -> ! {
     );
     // Acceptance hook (BLK_TEST=1): read sector 0 through the driver and log
     // capacity plus a checksum the check script compares against the image.
+    // Deliberately before the IRQ binding: this exercises the driver without
+    // the notification path.
     if option_env!("BLK_TEST").is_some_and(|value| value == "1") {
         // SAFETY: the shared buffer is exclusively mapped by this task.
         let buffer = unsafe { core::slice::from_raw_parts_mut(BUF_VA as *mut u8, 512) };
@@ -252,6 +270,43 @@ fn main(argument: Argument) -> ! {
             Err(error) => logln!(service, "[block] test read failed: {error:?}"),
         }
     }
+
+    // Bind the completion path: our own Notification, minted with a badge and
+    // handed to the kernel through SetNotification. Rebinding recovers a line
+    // a crashed predecessor left disabled (docs/irq.md §8).
+    //
+    // Clear a possibly latched device interrupt first (pre-bind reads, or a
+    // crashed predecessor that died mid-completion): the device holds its IRQ
+    // line asserted until InterruptACK, and re-enabling an edge line without
+    // a fresh edge would never deliver (docs/irq.md §7).
+    let _ = device.ack_interrupt();
+    let cnode = CNode(CPtr(INIT_CNODE));
+    if Untyped(CPtr(INIT_UNTYPED))
+        .retype(ObjectType::Notification, 0, cnode.0, NT_SLOT, 1)
+        .is_err()
+    {
+        logln!(service, "[block] cannot budget the completion notification");
+        service.exit(5);
+    }
+    if cnode
+        .mint(
+            NT_BADGED,
+            CPtr(INIT_CNODE),
+            NT_SLOT,
+            RIGHTS_WRITE,
+            IRQ_BADGE,
+        )
+        .is_err()
+    {
+        logln!(service, "[block] cannot mint the badged notification");
+        service.exit(6);
+    }
+    if irq.set_notification(CPtr(NT_BADGED)).is_err() {
+        logln!(service, "[block] cannot bind the completion interrupt");
+        service.exit(7);
+    }
+    device.enable_interrupts();
+    logln!(service, "[block] completion interrupt bound");
 
     let mut bound: Option<u64> = None;
     loop {
@@ -292,7 +347,7 @@ fn main(argument: Argument) -> ! {
                 // task; the client reads it only after the reply arrives.
                 let buffer =
                     unsafe { core::slice::from_raw_parts_mut(BUF_VA as *mut u8, count * 512) };
-                match device.read_blocks(lba, buffer) {
+                match read_via_interrupt(&mut device, &irq, buffer, lba) {
                     Ok(()) => {
                         let _ = ipc::reply(status::OK, &[count as u64]);
                     }
@@ -326,6 +381,48 @@ const SECTOR_SIZE: u64 = 512;
 
 fn vspace_of() -> CPtr {
     CPtr(INIT_VSPACE)
+}
+
+/// One interrupt-driven read (docs/irq.md §7): submit the request, wait for
+/// the completion notification, drain the entire used ring (merged or repeat
+/// notifications must not lose completions), clear the device's interrupt
+/// status and only then deactivate the line for the next interrupt.
+fn read_via_interrupt(
+    device: &mut VirtIOBlk<HalImpl, MmioTransport<'static>>,
+    irq: &IrqHandler,
+    buffer: &mut [u8],
+    lba: usize,
+) -> Result<(), VirtError> {
+    let mut request = BlkReq::default();
+    let mut response = BlkResp::default();
+    // SAFETY: `request`, `buffer` and `response` are borrowed by the device
+    // until `complete_read_blocks` below; this task blocks on the completion
+    // notification in between and nothing else touches them.
+    let token = unsafe { device.read_blocks_nb(lba, &mut request, buffer, &mut response) }?;
+    loop {
+        // Badge or merged bits. A notification that raced ahead of the used
+        // ring loops back to waiting rather than replying early.
+        let _ = ipc::recv(NT_SLOT);
+        let mut completed = false;
+        while let Some(done) = device.peek_used() {
+            if done != token {
+                return Err(VirtError::WrongToken);
+            }
+            // SAFETY: the same buffers `read_blocks_nb` handed to the device;
+            // popping the token makes them driver-owned again.
+            unsafe {
+                device.complete_read_blocks(done, &mut request, buffer, &mut response)?;
+            }
+            completed = true;
+        }
+        // Clear the device's interrupt status before deactivating the line:
+        // with a still-asserted source the line would re-fire immediately.
+        let _ = device.ack_interrupt();
+        irq.ack().map_err(|_| VirtError::IoError)?;
+        if completed {
+            return response.status().into();
+        }
+    }
 }
 
 /// Probe every slot in the granted MMIO window for a virtio-blk device.

@@ -301,7 +301,7 @@ NBRecv:     有发送者才接收，否则立即返回 badge=0、length=0。
 - `Signal`（`Send` 到 Notification cap，`RIGHTS_WRITE`）：有等待者 → 取 badge|word 唤醒一个；无等待者 → `bits |= (badge | word)` 合并。
 - `Wait`（`Recv`，`RIGHTS_READ`）：`bits != 0` → 取走并清零，以 badge 返回；否则阻塞。
 - `NBRecv`：非阻塞轮询版本。
-- 不做绑定 TCB（`TCB_BindNotification`）与 IRQ 投递（阶段 D/F 另议）；多次 Signal 合并语义要求驱动读设备直到清空事件源，沿用 seL4 语义。
+- 不做绑定 TCB（`TCB_BindNotification`，仍延后）；IRQ 投递已落地：init 按服务授予 `IRQHandler`（与设备 Untyped 同副本模式，teardown 时对 master `Clear`）并经 `SpawnInfo::extra[IRQ_SLOT]` 下发（[irq.md](irq.md) §8/§13）。多次 Signal 合并语义要求驱动读设备直到清空事件源，沿用 seL4 语义。
 
 ### 7.7 fault endpoint 与故障消息
 

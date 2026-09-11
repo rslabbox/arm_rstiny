@@ -150,7 +150,7 @@ fn spawn_app(
         rom_start: 0,
         rom_count: 0,
         extra: {
-            let mut extra = [0; 8];
+            let mut extra = [0; SpawnInfo::EXTRA_LEN];
             extra[SpawnInfo::CONSOLE_EP] = CHILD_CONSOLE;
             extra
         },

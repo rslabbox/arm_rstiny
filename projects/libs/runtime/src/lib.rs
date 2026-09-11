@@ -9,6 +9,7 @@ pub struct BootInfo {
     dtb: &'static [u8],
     untyped: &'static [abi::UntypedDesc],
     modules: abi::BootModules,
+    irqs: &'static [abi::IrqDesc],
 }
 
 impl BootInfo {
@@ -32,6 +33,13 @@ impl BootInfo {
     /// Frame capabilities in this task's CSpace (`frame_start..frame_count`).
     pub fn boot_modules(&self) -> abi::BootModules {
         self.modules
+    }
+
+    /// The platform's user-authorizable IRQ lines (docs/irq.md §3.1), in
+    /// generated order: VirtIO MMIO slot lines ascending first, other device
+    /// lines after. `IRQControl_Get` accepts exactly these.
+    pub fn irq_lines(&self) -> &'static [abi::IrqDesc] {
+        self.irqs
     }
 
     /// Capability slot of the largest ordinary Untyped region. A loader that
@@ -136,6 +144,7 @@ pub unsafe fn start(pointer: *const (), main: fn(&mut BootInfo) -> !) -> ! {
         reserved: [0; 4],
     };
     let modules_offset = (untyped_record + untyped_header.len).next_multiple_of(8);
+    let mut modules_end = untyped_record + untyped_header.len;
     if modules_offset + header_size <= raw.extra + raw.extra_size {
         // SAFETY: the record lives inside the validated extra mapping.
         let header = unsafe { &*(modules_offset as *const abi::BootInfoHeader) };
@@ -147,6 +156,26 @@ pub unsafe fn start(pointer: *const (), main: fn(&mut BootInfo) -> !) -> ! {
             modules = unsafe {
                 core::ptr::read((modules_offset + header_size) as *const abi::BootModules)
             };
+            modules_end = modules_offset + header.len as u64;
+        }
+    }
+    // Optional platform IRQ table record (docs/irq.md §3.1).
+    let mut irqs: &'static [abi::IrqDesc] = &[];
+    let irqs_offset = modules_end.next_multiple_of(8);
+    if irqs_offset + header_size <= raw.extra + raw.extra_size {
+        // SAFETY: the record lives inside the validated extra mapping.
+        let header = unsafe { &*(irqs_offset as *const abi::BootInfoHeader) };
+        if header.id == abi::BOOTINFO_HEADER_IRQS
+            && header.len >= header_size
+            && (header.len - header_size) % abi::IrqDesc::RECORD_LEN == 0
+            && irqs_offset + header.len <= raw.extra + raw.extra_size
+        {
+            irqs = unsafe {
+                core::slice::from_raw_parts(
+                    (irqs_offset + header_size) as *const abi::IrqDesc,
+                    ((header.len - header_size) / abi::IrqDesc::RECORD_LEN) as usize,
+                )
+            };
         }
     }
     main(&mut BootInfo {
@@ -154,6 +183,7 @@ pub unsafe fn start(pointer: *const (), main: fn(&mut BootInfo) -> !) -> ! {
         dtb,
         untyped,
         modules,
+        irqs,
     })
 }
 

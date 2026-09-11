@@ -39,11 +39,13 @@ pub struct SpawnInfo {
     pub rom_start: u64,
     pub rom_count: u64,
     /// Service endpoints granted through `extra` slots, by protocol.
-    pub extra: [u64; 8],
+    pub extra: [u64; 12],
 }
 impl SpawnInfo {
     pub const MAGIC: u64 = 0x0000_5253_5449_4e49;
-    pub const VERSION: u64 = 1;
+    /// v2: `extra` widened to 12 entries for the device IRQ handler slot
+    /// (docs/irq.md §7).
+    pub const VERSION: u64 = 2;
     /// `extra[0]`: console client endpoint.
     pub const CONSOLE_EP: usize = 0;
     /// `extra[1]`: first device Untyped slot (ascending physical order).
@@ -54,8 +56,12 @@ impl SpawnInfo {
     pub const DEVICE_COUNT: usize = 3;
     /// `extra[4]`: number of dependency endpoints that follow.
     pub const DEP_COUNT: usize = 4;
-    /// `extra[5..]`: dependency service endpoints in `depends` order.
+    /// `extra[5..8]`: dependency service endpoints in `depends` order.
     pub const DEP_EP_BASE: usize = 5;
+    /// `extra[8]`: device IRQ handler slot (0 = none granted).
+    pub const IRQ_SLOT: usize = 8;
+    /// Length of the `extra` slot array.
+    pub const EXTRA_LEN: usize = 12;
 }
 
 pub const PAGE_SIZE: u64 = kernel_abi::PAGE_SIZE;

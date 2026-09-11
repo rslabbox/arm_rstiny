@@ -16,6 +16,20 @@ pub const LOADER_END: usize = 0x4420_0000;
 /// Scheduling tick policy, converted to counter ticks by task::tick.
 pub const TICK_NS: u64 = 10_000_000;
 
+/// Platform IRQ table (docs/irq.md §3.1), generated into `IRQ_LINES` from the
+/// DTB: `(INTID, level, kind)` per user-authorizable line. VirtIO MMIO slot
+/// lines come first in ascending slot order (kind `IRQ_KIND_VIRTIO_SLOT`);
+/// other device lines (the PL011 today) follow (kind `IRQ_KIND_DEVICE`). The
+/// timer PPI and every unmapped line stay kernel-owned: `IRQControl_Get`
+/// rejects them, so a user driver can never touch kernel or foreign sources.
+/// Authorization policy is this table, not arithmetic over window constants.
+pub fn user_irq_level(intid: u32) -> Option<bool> {
+    IRQ_LINES
+        .iter()
+        .find(|line| line.0 == intid as u64)
+        .map(|&(_, level, _)| level != 0)
+}
+
 bitflags::bitflags! {
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub struct MemFlags: usize {

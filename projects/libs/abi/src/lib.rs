@@ -9,6 +9,8 @@ pub const BOOTINFO_HEADER_BOOT_MODULES: u64 = 8;
 pub const BOOTINFO_MAGIC: u64 = 0x5253_5449_4e59_4249;
 pub const ABI_VERSION: u64 = 6;
 pub const FEATURE_DEBUG_CONSOLE: u64 = 1;
+/// Extra BootInfo record holding the platform's user-authorizable IRQ lines.
+pub const BOOTINFO_HEADER_IRQS: u64 = 9;
 mod syscall;
 pub use syscall::Syscall;
 mod message;
@@ -80,6 +82,32 @@ impl BootModules {
     pub const RECORD_LEN: u64 = core::mem::size_of::<Self>() as u64;
 }
 
+/// Line groups of a platform IRQ table entry. VirtIO slot lines come first in
+/// the table (ascending slot order) so a supervisor can map a device ordinal
+/// to a line positionally; other devices' lines follow.
+pub const IRQ_KIND_VIRTIO_SLOT: u64 = 0;
+pub const IRQ_KIND_DEVICE: u64 = 1;
+
+/// One user-authorizable interrupt line, published to the root task in the
+/// extra BootInfo record `BOOTINFO_HEADER_IRQS` (docs/irq.md §3.1). The table
+/// is generated from the DTB; authorization policy stays kernel-owned.
+#[derive(Clone, Copy, Debug)]
+#[repr(C)]
+pub struct IrqDesc {
+    pub intid: u64,
+    /// Non-zero for a level-triggered line.
+    pub level: u64,
+    pub kind: u64,
+    pub reserved: u64,
+}
+impl IrqDesc {
+    pub const RECORD_LEN: u64 = core::mem::size_of::<Self>() as u64;
+}
+
+/// Upper bound on platform IRQ lines published to the root task. Reserves the
+/// worst-case record extent in the BootInfo layout before the partitioner runs.
+pub const MAX_IRQ_LINES: usize = 64;
+
 /// Address-space and resource limits, not an application link layout.
 pub const USER_ADDRESS_LIMIT: u64 = 128 * 1024 * 1024;
 pub const MAX_USER_PAGES: usize = 1024;
@@ -118,15 +146,18 @@ impl InitialTaskLayout {
         let boot_info = ipc_buffer.checked_add(PAGE_SIZE)?;
         let extra = boot_info.checked_add(PAGE_SIZE)?;
         let header = core::mem::size_of::<BootInfoHeader>() as u64;
-        // FDT record, the worst-case Untyped list record and the fixed-size
-        // boot-module record.
+        // FDT record, the worst-case Untyped list record, the fixed-size
+        // boot-module record and the worst-case platform IRQ table record.
         let untyped_bytes = (MAX_UNTYPED_REGIONS * core::mem::size_of::<UntypedDesc>()) as u64;
+        let irq_bytes = (MAX_IRQ_LINES * core::mem::size_of::<IrqDesc>()) as u64;
         let extra_size = dtb_size
             .checked_add(header)?
             .checked_add(header)?
             .checked_add(untyped_bytes)?
             .checked_add(header)?
-            .checked_add(BootModules::RECORD_LEN)?;
+            .checked_add(BootModules::RECORD_LEN)?
+            .checked_add(header)?
+            .checked_add(irq_bytes)?;
         let extra_pages = extra_size.checked_add(PAGE_SIZE - 1)? / PAGE_SIZE;
         let end = extra.checked_add(extra_pages * PAGE_SIZE)?;
         if end > USER_ADDRESS_LIMIT {

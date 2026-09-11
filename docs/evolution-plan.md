@@ -383,13 +383,13 @@ ABI_VERSION 已升为 4，旧 x8 正调用号协议已删除，不保留兼容 s
 
 风险：中。
 
-### 阶段 5：IRQ 授权与用户态串口
+### 阶段 5：IRQ 授权与用户态串口（IRQ 部分已实现 2026-09-10）
 
-具体设计（`IRQControl`/`IRQHandler`、GIC mask/signal/Ack 时序、block-server 从轮询迁到通知）见 [设备 IRQ 授权与用户态投递](irq.md)。
+具体设计（`IRQControl`/`IRQHandler`、GIC split EOI 时序、block-server 从轮询迁到通知）见 [设备 IRQ 授权与用户态投递](irq.md)，实施记录见其 §13。
 
 目标：用户态驱动闭环。
 
-- `IRQControl`/`IRQHandler` 对象与 GIC ack/mask/notify/Ack 流程。
+- ~~`IRQControl`/`IRQHandler` 对象与 GIC ack/mask/notify/Ack 流程~~ 已实现（split EOI：投递只降优先级，驱动 Ack deactivate；`tools/check_irq.py` + `check_block/check_fat32/check_restart` 回归）。
 - 用户态 PL011 串口服务（轮询 TX）通过 Notification 或 Endpoint 提供 `ConsoleWrite`。
 - `DebugPutChar` 降级为调试专用；正式构建可关闭。
 - 设备 Untyped 只映射给对应驱动。

@@ -29,6 +29,7 @@ const DEV_MASTER_BASE: u64 = 161; // device Untyped masters, +k per DEVICE_NAMES
 // window granted to init (200..200+512) and below the loader's own range.
 const SUB_UNTYPED_BASE: u64 = 5000; // + i*8: per-service budget slots
 const SVC_EP_BASE: u64 = 5004; // + i*8: service main endpoint slots
+const IRQ_COPY_BASE: u64 = 5002; // + i*8: per-service device IRQHandler copies
 const THREAD_SLOT_BASE: u64 = 6000; // thread-group caps (16 per thread)
 const LOGGER_FAULT_SLOT: u64 = 144; // logger's badged fault-endpoint cap
 const DEV_COPY_BASE: u64 = 170; // + i*8 + k: per-service device Untyped copies
@@ -42,6 +43,7 @@ const CHILD_BUDGET: u64 = 32;
 const CHILD_DEV_BASE: u64 = 33;
 const CHILD_SELF_EP: u64 = 52;
 const CHILD_DEP_BASE: u64 = 53;
+const CHILD_IRQ: u64 = 56;
 const MAX_DEVICES: usize = 4;
 const MAX_DEPS: usize = 3;
 
@@ -80,6 +82,10 @@ struct ServiceState {
     budget_slot: u64,
     /// Per-service device Untyped copies (init-side, survive restarts).
     device_copies: [u64; MAX_DEVICES],
+    /// The service's device IRQ line: init-side master slot and per-service
+    /// copy slot (0 = this service drives no interrupt).
+    irq_master: u64,
+    irq_copy: u64,
     /// Restart timestamps inside the observation window (clock ms).
     restart_times: Vec<u64>,
     restarts: u32,
@@ -216,6 +222,10 @@ fn run(info: SpawnInfo) -> ! {
     };
 
     let mut services: Vec<ServiceState> = Vec::new();
+    // IRQHandler masters userboot granted: master i is window slot i, and the
+    // window holds `count` slots (docs/irq.md §8). 0 disables IRQ grants.
+    let irq_master_base = info.extra[SpawnInfo::IRQ_SLOT];
+    let irq_line_count = info.extra[SpawnInfo::IRQ_SLOT + 1];
     for (index, cfg) in config.services.iter().enumerate() {
         // Resolve configured device names to per-service copy slots up front;
         // names were validated against DEVICE_NAMES above.
@@ -231,6 +241,8 @@ fn run(info: SpawnInfo) -> ! {
             svc_ep_obj: SVC_EP_BASE + index as u64 * 8,
             budget_slot: SUB_UNTYPED_BASE + index as u64 * 8,
             device_copies,
+            irq_master: irq_master(&cfg, irq_master_base, irq_line_count),
+            irq_copy: IRQ_COPY_BASE + index as u64 * 8,
             restart_times: Vec::new(),
             restarts: 0,
             infra: false,
@@ -306,6 +318,21 @@ fn run(info: SpawnInfo) -> ! {
                     {
                         fail_reason(&info, 19);
                     }
+                }
+                // Per-service IRQHandler copy, made once like the device
+                // copies; teardown clears the master's binding so the next
+                // incarnation re-binds from scratch (docs/irq.md §8).
+                if services[index].irq_master != 0
+                    && cnode
+                        .copy(
+                            services[index].irq_copy,
+                            CPtr(INIT_CNODE),
+                            services[index].irq_master,
+                            RIGHTS_ALL,
+                        )
+                        .is_err()
+                {
+                    fail_reason(&info, 19);
                 }
                 services[index].infra = true;
             }
@@ -512,6 +539,29 @@ fn badge_for(index: usize) -> u64 {
     SERVICE_BADGE_BASE + index as u64
 }
 
+/// The VirtIO slot line a configured device name refers to. "virtio-mmio-N"
+/// is the Nth VirtIO device in the granted window; QEMU attaches devices to
+/// the window's mmio transports from its END, so device N sits in slot
+/// `count-1-N` and uses that slot's line (fixed-platform contract verified
+/// against `probe`, docs/irq.md §7).
+fn virtio_slot(name: &str, line_count: u64) -> Option<u64> {
+    name.strip_prefix("virtio-mmio-")
+        .and_then(|suffix| suffix.parse::<u64>().ok())
+        .filter(|&device| device < line_count)
+        .map(|device| line_count - 1 - device)
+}
+
+/// The init-side IRQHandler master slot serving `cfg`'s device, if any.
+fn irq_master(cfg: &rstiny_initcfg::ServiceCfg, master_base: u64, line_count: u64) -> u64 {
+    if master_base == 0 {
+        return 0;
+    }
+    cfg.devices
+        .iter()
+        .find_map(|name| virtio_slot(name, line_count).map(|slot| master_base + slot))
+        .unwrap_or(0)
+}
+
 /// STOP handshake (graceful) when the service is Running, then destroy and
 /// reclaim its derivation subtree and budget watermark.
 fn stop_and_reap(service: &mut ServiceState, _graceful_exit: bool) {
@@ -526,6 +576,16 @@ fn stop_and_reap(service: &mut ServiceState, _graceful_exit: bool) {
             unsafe {
                 let _ = cnode.revoke(slot);
             }
+        }
+    }
+    // Quiesce the service's IRQ line through the master: Clear drops the
+    // (possibly dead) notification binding and disables/deactivates the line
+    // so a re-authorized driver starts deliverable (docs/irq.md §8).
+    if service.irq_master != 0 {
+        let _ = IrqHandler(CPtr(service.irq_master)).clear();
+        // SAFETY: the terminated service no longer touches the device.
+        unsafe {
+            let _ = cnode.revoke(service.irq_copy);
         }
     }
     // A faulted or exited service is already halted; the STOP handshake
@@ -646,7 +706,7 @@ fn spawn_service(services: &mut Vec<ServiceState>, index: usize, console_ep: u64
         rom_start: 0,
         rom_count: 0,
         extra: {
-            let mut extra = [0; 8];
+            let mut extra = [0; SpawnInfo::EXTRA_LEN];
             extra[SpawnInfo::CONSOLE_EP] = CHILD_CONSOLE;
             extra[SpawnInfo::DEVICE_SLOT] = CHILD_DEV_BASE;
             extra[SpawnInfo::SELF_EP] = CHILD_SELF_EP;
@@ -655,6 +715,11 @@ fn spawn_service(services: &mut Vec<ServiceState>, index: usize, console_ep: u64
             for (j, (slot, _)) in deps.iter().enumerate() {
                 extra[SpawnInfo::DEP_EP_BASE + j] = *slot;
             }
+            extra[SpawnInfo::IRQ_SLOT] = if service.irq_master != 0 {
+                CHILD_IRQ
+            } else {
+                0
+            };
             extra
         },
     };
@@ -712,6 +777,21 @@ fn spawn_service(services: &mut Vec<ServiceState>, index: usize, console_ep: u64
         caps[used] = ChildCap {
             slot,
             source,
+            rights: RIGHTS_ALL,
+            badge: 0,
+        };
+        used += 1;
+    }
+    // The device IRQ handler, if this service drives an interrupt
+    // (docs/irq.md §8): the child binds its own Notification to it.
+    if service.irq_master != 0 {
+        if used == caps.len() {
+            services[index].status = Status::Failed;
+            return;
+        }
+        caps[used] = ChildCap {
+            slot: CHILD_IRQ,
+            source: service.irq_copy,
             rights: RIGHTS_ALL,
             badge: 0,
         };

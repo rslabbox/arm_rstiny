@@ -16,6 +16,10 @@ pub enum Invocation {
     CNodeCopy = 20,
     CNodeMint = 21,
     CNodeMove = 22,
+    IrqIssueIrqHandler = 26,
+    IrqAckIrq = 27,
+    IrqSetIrqHandler = 28,
+    IrqClearIrqHandler = 29,
     ArmPageTableMap = 38,
     ArmPageTableUnmap = 39,
     ArmPageMap = 40,
@@ -40,6 +44,8 @@ pub enum ObjectType {
 pub const INIT_TCB: u64 = 1;
 pub const INIT_CNODE: u64 = 2;
 pub const INIT_VSPACE: u64 = 3;
+/// Global IRQ authorization singleton (seL4 `seL4_CapIRQControl`); root task only.
+pub const INIT_IRQ_CONTROL: u64 = 4;
 pub const INIT_ASID_POOL: u64 = 6;
 pub const INIT_IPC_BUFFER: u64 = 10;
 /// First initial Untyped capability. The range continues for `BootInfo::untyped_count`
