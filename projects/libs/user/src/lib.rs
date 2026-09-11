@@ -119,6 +119,15 @@ pub fn exit(code: u64) -> ! {
     }
 }
 
+/// Power off the machine (PSCI SYSTEM_OFF; QEMU terminates). Requires the
+/// Runtime capability. Never returns.
+pub fn poweroff() -> ! {
+    let _ = runtime(abi::RuntimeInvocation::Shutdown, &[]);
+    loop {
+        core::hint::spin_loop();
+    }
+}
+
 pub fn yield_now() -> Result<(), Error> {
     unsafe {
         core::arch::asm!("svc #0", in("x7") abi::Syscall::Yield as i64 as u64);

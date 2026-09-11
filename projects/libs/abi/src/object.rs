@@ -90,4 +90,7 @@ pub enum RuntimeInvocation {
     /// siblings. `Destroy` is the group-level counterpart
     /// (docs/thread-group.md §2.2).
     DestroyThread = 0x1013,
+    /// Power off the machine (PSCI SYSTEM_OFF). Trusted: any task holding the
+    /// Runtime cap may call it; used by a shell's `exit`.
+    Shutdown = 0x1014,
 }

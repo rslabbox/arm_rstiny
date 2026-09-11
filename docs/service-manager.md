@@ -100,9 +100,9 @@ userboot 保留为 monitor（决策 1）：它不参与服务管理，但在 ini
 
 - 作为 init 的一个普通服务启动，`depends = [fs]`，`restart = never`（一次性演示）。
 - 直接使用 `fs` 协议（`OPEN/READ/CLOSE/READDIR`）与自己的共享缓冲，不经过 appmgr。
-- 提示符 `[rstiny ~]$: `，命令从 console 服务读取（`CONSOLE_READ` 轮询）；支持 `ls`、`cat <file>`、`./hello`、`help`、`exit`，以及退格/Ctrl-C/Ctrl-D。
-- console 服务目前是轮询 RX（无 RX 中断），shell 在无输入时 `sleep` 后重试，不忙等。
-- `./hello` 用与 appmgr 相同的 ELF loader 从磁盘装载 `HELLO.ELF`，并按 `libs/server` 协议监督它（`READY` 回执、`EXIT` 回收）。
+- 提示符 `[rstiny ~]$: `，命令从 console 服务读取（`CONSOLE_READ` 轮询）；支持 `ls`、`cat <file>`、`./<program>`、`help`、`exit`，以及退格/Ctrl-C/Ctrl-D。
+- `./<program>` 映射到磁盘上的 `<PROGRAM>.ELF`（FAT 8.3 短名，大写，名字限 1..8 个字母数字），用与 appmgr 相同的 ELF loader 装载并按 `libs/server` 协议监督（`READY` 回执、`EXIT` 回收）；所以把 `HELLO.ELF` 改名成 `TEST.ELF` 后 `./test` 就能跑。
+- `exit` / Ctrl-D 退出 shell 并直接关机：`Runtime::Shutdown` → PSCI `SYSTEM_OFF`，QEMU 退出。
 
 ## 4. 目录与构建
 
@@ -604,12 +604,13 @@ fs（`fs_ep`，阶段 D）：
 - 应用与系统服务使用同一套 `libs/server` 协议，但控制端点是 appmgr 的 `control_ep`；应用不接触系统服务的 endpoint（console 例外，经 appmgr Copy）。
 - init 不感知具体应用；只监督 appmgr。
 
-## 15.1 mysh 与 `./hello`
+## 15.1 mysh 与 `./<program>`
 
 - `mysh` 是 init 的普通服务，`depends = [fs]`，在 console 上开一个 REPL（`[rstiny ~]$: `）。
 - 输入来自 `CONSOLE_READ`：console 服务轮询 PL011 RX FIFO，无字节就回空；shell 空读后 `sleep(5ms)`，不忙等。行编辑只做回显、退格和 Ctrl-C/Ctrl-D。
-- `./hello` 复用 appmgr 的 loader：切一个子 untyped、填 `SpawnInfo`（`control_ep = 140`、`console_ep = 51`），并以子进程的 `control_ep` 为 fault/控制端点监督它。
-- 关键差异：`hello` 是标准服务，装载后会 `Call(control_ep, READY)`，因此 shell 必须像 appmgr 一样 `Recv(control_ep)` 并 `Reply`，否则子进程停在 `BlockedSend`、`Wait` 永不返回。
+- `./<program>`（以及不带 `./` 的 `hello`）把 `<program>` 大写后拼上 `.ELF`（8.3 短名），从 fs 读文件，复用 appmgr 的 loader：切一个子 untyped、填 `SpawnInfo`（`control_ep = 140`、`console_ep = 51`），并以子进程的 `control_ep` 为 fault/控制端点监督它。
+- `exit` / Ctrl-D 调 `Runtime::Shutdown`（PSCI `SYSTEM_OFF`）直接关机。
+- 关键差异：子程序是标准服务，装载后会 `Call(control_ep, READY)`，因此 shell 必须像 appmgr 一样 `Recv(control_ep)` 并 `Reply`，否则子进程停在 `BlockedSend`、`Wait` 永不返回。
 
 ## 16. 日志
 
@@ -664,7 +665,7 @@ fs（`fs_ep`，阶段 D）：
 - `userboot` 在 init 崩溃后重建并重启 init（有限次 + 退避）。
 - 权限：服务拿不到别的服务 cap；设备 cap 只给对应驱动；GIC/timer 永不发布（`check_untyped.py` 已覆盖设备策略）。
 - `LOG=off` 下 init/服务仍能经 console 协议输出。
-- `mysh`（`tools/check_mysh.py`）：在串口上按提示符依次输入 `ls`/`./hello`/`cat APPS.CFG`/`exit`；断言列出 `HELLO.ELF`/`APPS.CFG`、打印文件内容、`[mysh] hello exited: 0` 后 `[mysh] bye`。
+- `mysh`（`tools/check_mysh.py`）：在串口上按提示符依次输入 `ls`/`./hello`/`cat APPS.CFG`/`exit`；断言列出文件、打印文件内容、`./hello` 回收到 `[mysh] ./hello exited: 0`，`exit` 后 QEMU 因 PSCI 关机而退出。另用一张把 ELF 装成 `TEST.ELF` 的盘验证 `./test`。
 - 每阶段同时提供正常用例和权限/失败用例；QEMU harness 区分"预期阻塞 / panic 停机 / 死循环"（沿用现有 check 脚本约定）。
 
 ## 20. 与其他微内核对照

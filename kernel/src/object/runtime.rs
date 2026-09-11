@@ -19,6 +19,7 @@ pub(super) fn invoke(request: &Request) -> Result<Completion> {
             R::AvailableFrames as u64,
             R::FindEmptySlot as u64,
             R::DebugConsoleAvailable as u64,
+            R::Shutdown as u64,
         ]
         .contains(&n) =>
         {
@@ -157,6 +158,8 @@ pub(super) fn invoke(request: &Request) -> Result<Completion> {
             )));
         }
         n if n == R::Exit as u64 => return Ok(Completion::park(Disposition::Exit(a[0]))),
+        // Never returns: PSCI SYSTEM_OFF, then halt if firmware ignores it.
+        n if n == R::Shutdown as u64 => crate::utils::shutdown(),
         n if n == R::Clock as u64 => Some(time::now() / (time::frequency() / 1000).max(1)),
         n if n == R::AvailableFrames as u64 => {
             Some((super::available_untyped() / crate::memory::PAGE_SIZE) as u64)

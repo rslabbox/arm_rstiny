@@ -2,9 +2,9 @@
 #![no_main]
 //! mysh: a minimal interactive shell. It reads command lines from the console
 //! service (polling for RX), lists the FAT32 disk through the fs service, runs
-//! commands (`ls`, `cat <file>`, `./hello`, `help`, `exit`) and executes
-//! `./hello` by loading the ELF from disk and supervising it with the same
-//! loader appmgr uses.
+//! commands (`ls`, `cat <file>`, `./<program>`, `help`, `exit`) and runs
+//! `./<program>` by loading `<PROGRAM>.ELF` from disk and supervising it with
+//! the same loader appmgr uses. `exit` powers the machine off (PSCI).
 //!
 //! The console service is polling-only (no RX interrupt yet), so `read_line`
 //! sleeps between polls while it waits for a keystroke.
@@ -128,7 +128,7 @@ fn repl(service: &Service, fs_ep: u64) -> ! {
         }
     }
     logln!(service, "[mysh] bye");
-    service.exit(0)
+    rstiny::poweroff()
 }
 
 /// Poll one byte from the console; `None` when the input FIFO is empty.
@@ -185,7 +185,7 @@ fn execute(service: &Service, fs_ep: u64, line: &str) -> bool {
         "help" => {
             logln!(
                 service,
-                "[mysh] commands: ls, cat <file>, ./hello, help, exit"
+                "[mysh] commands: ls, cat <file>, ./<program>, help, exit"
             );
         }
         "exit" => return false,
@@ -194,10 +194,28 @@ fn execute(service: &Service, fs_ep: u64, line: &str) -> bool {
             Some(name) => cat(service, fs_ep, name.as_bytes()),
             None => logln!(service, "[mysh] cat: missing file name"),
         },
-        "hello" | "./hello" => run_hello(service, fs_ep),
-        other => logln!(service, "[mysh] unknown command: {}", other),
+        "hello" => run_program(service, fs_ep, "hello"),
+        other => match other.strip_prefix("./") {
+            Some(stem) => run_program(service, fs_ep, stem),
+            None => logln!(service, "[mysh] unknown command: {}", other),
+        },
     }
     true
+}
+
+/// Map a `./stem` command to the FAT 8.3 file `<STEM>.ELF`. Names are limited
+/// to eight alphanumerics, matching the on-disk short name.
+fn program_file(stem: &str) -> Option<([u8; 12], usize)> {
+    let bytes = stem.as_bytes();
+    if bytes.is_empty() || bytes.len() > 8 || !bytes.iter().all(u8::is_ascii_alphanumeric) {
+        return None;
+    }
+    let mut name = [0u8; 12];
+    for (index, byte) in bytes.iter().enumerate() {
+        name[index] = byte.to_ascii_uppercase();
+    }
+    name[bytes.len()..bytes.len() + 4].copy_from_slice(b".ELF");
+    Some((name, bytes.len() + 4))
 }
 
 /// `ls`: list the FAT32 root directory, batched through the shared buffer.
@@ -253,19 +271,23 @@ fn cat(service: &Service, fs_ep: u64, name: &[u8]) {
     let _ = ipc::call(fs_ep, fs::CLOSE, &[file_id]);
 }
 
-/// `./hello`: load `HELLO.ELF` from disk and run it as a supervised child.
-fn run_hello(service: &Service, fs_ep: u64) {
+/// `./<name>`: load `<NAME>.ELF` from disk and run it as a supervised child.
+fn run_program(service: &Service, fs_ep: u64, stem: &str) {
     let Some(self_ep) = service
         .extra
         .get(SpawnInfo::SELF_EP)
         .copied()
         .filter(|slot| *slot != 0)
     else {
-        logln!(service, "[mysh] hello: no self endpoint");
+        logln!(service, "[mysh] ./{}: no self endpoint", stem);
         return;
     };
-    let Some(image) = read_file(fs_ep, b"HELLO.ELF") else {
-        logln!(service, "[mysh] hello: cannot read HELLO.ELF");
+    let Some((file, length)) = program_file(stem) else {
+        logln!(service, "[mysh] ./{}: name must be 1-8 alphanumerics", stem);
+        return;
+    };
+    let Some(image) = read_file(fs_ep, &file[..length]) else {
+        logln!(service, "[mysh] ./{}: not on disk", stem);
         return;
     };
     let cnode = CNode(CPtr(INIT_CNODE));
@@ -280,7 +302,7 @@ fn run_hello(service: &Service, fs_ep: u64) {
         )
         .is_err()
     {
-        logln!(service, "[mysh] hello: cannot budget the child");
+        logln!(service, "[mysh] ./{}: cannot budget the child", stem);
         return;
     }
     let child_info = SpawnInfo {
@@ -331,7 +353,7 @@ fn run_hello(service: &Service, fs_ep: u64) {
         },
     ];
     // SAFETY: SCRATCH_VA is an unmapped page this task reserves exclusively.
-    logln!(service, "[mysh] ./hello ({} bytes)", image.len());
+    logln!(service, "[mysh] ./{} ({} bytes)", stem, image.len());
     let spawned = unsafe {
         rstiny::elf::spawn_supervised(
             &image,
@@ -347,7 +369,7 @@ fn run_hello(service: &Service, fs_ep: u64) {
     };
     match spawned {
         Ok(task) => {
-            // hello is a service: it announces READY and later EXIT on the
+            // The child is a service: it announces READY and later EXIT on the
             // control endpoint (our own self endpoint, badged). No other task
             // shares this endpoint, so a flat recv loop supervises it.
             let code = loop {
@@ -368,10 +390,10 @@ fn run_hello(service: &Service, fs_ep: u64) {
                 }
             };
             let _ = task.destroy();
-            logln!(service, "[mysh] hello exited: {}", code);
+            logln!(service, "[mysh] ./{} exited: {}", stem, code);
         }
         Err(error) => {
-            logln!(service, "[mysh] hello spawn failed: {:?}", error);
+            logln!(service, "[mysh] ./{} spawn failed: {:?}", stem, error);
         }
     }
 }

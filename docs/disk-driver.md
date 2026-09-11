@@ -243,7 +243,7 @@ boot 分区把这些 MMIO 区间作为**设备 Untyped** 发布（当前只发�
 - `mysh` 是第五个服务（`depends = [fs]`），直接用 fs 协议读取根目录与文件，不经过 appmgr。
 - 它是一个交互式 REPL：提示符 `[rstiny ~]$: `，输入从 console 服务读取。
 - console 服务新增 `CONSOLE_READ`：轮询 PL011 RX FIFO（`FR.RXFE`），有字节就回 `[1, byte]`，否则回 `[0, 0]`。RX 已在 `UARTCR` 使能，但未接中断。
-- `ls` 走 `FS_READDIR`（短名 8.3）；`cat <file>` 走 `OPEN/READ/CLOSE`；`./hello` 复用 appmgr 的 loader 装载并监督 `HELLO.ELF`。
+- `ls` 走 `FS_READDIR`（短名 8.3）；`cat <file>` 走 `OPEN/READ/CLOSE`；`./<program>` 把命令转成 `<PROGRAM>.ELF` 后复用 appmgr 的 loader 装载并监督（所以 `HELLO.ELF` 改名 `TEST.ELF` 后 `./test` 能跑）；`exit` 经 `Runtime::Shutdown` 关机。
 
 ## 11. 分阶段实施
 
@@ -265,7 +265,7 @@ boot 分区把这些 MMIO 区间作为**设备 Untyped** 发布（当前只发�
 - **D3**：hello 是独立 EL0 进程，正常输出、退出、被回收；替换镜像里的 ELF 后运行内容改变。
 - **D4**：`init.cfg` 增加 block/fs/appmgr 后按依赖顺序启动；console 未 READY 前不启动依赖者。
 - **D5**：杀 fs-server → init 重启 → appmgr 收到 `DEPENDENCY_LOST`/重连；无内存泄漏（`available` 回到基线）。
-- **mysh**：`check_mysh.py` 在串口上按提示符依次输入 `ls`/`./hello`/`cat APPS.CFG`/`exit`，断言列出文件、`cat` 输出内容、`./hello` 回收到 `[mysh] hello exited: 0` 后 `[mysh] bye`。
+- **mysh**：`check_mysh.py` 在串口上按提示符依次输入 `ls`/`./hello`/`cat APPS.CFG`/`exit`，断言列出文件、`cat` 输出内容、`./hello` 回收到 `[mysh] ./hello exited: 0`，`exit` 后 QEMU 因 PSCI 关机退出；另用一张装成 `TEST.ELF` 的盘验证 `./test`。
 - 全部纳入 `tools/check_*`，覆盖 debug/release × LOG=off/info。
 
 ## 13. 开放决策
@@ -329,8 +329,8 @@ boot 分区把这些 MMIO 区间作为**设备 Untyped** 发布（当前只发�
 
 - `fs::READDIR`（= 0x505）加入 fs 协议：`start` 下标分页遍历根目录，`DirEntry { name:[u8;12]; size:u32; is_dir:u32 }` 写入共享缓冲，回复 `count`/`next`。
 - console 协议新增 `CONSOLE_READ`（= 0x102）：console 服务轮询 PL011 RX FIFO，非阻塞返回 `[present, byte]`。RX 已在 `UARTCR` 使能，暂未接 IRQ。
-- `mysh`（`projects/apps/mysh`）是第五个服务，`depends = [fs]`；开一个交互式 REPL（`[rstiny ~]$: `），支持 `ls`/`cat`/`./hello`/`help`/`exit`、回显、退格、Ctrl-C/Ctrl-D。空读时 `sleep(5ms)` 后重试，不忙等。
-- `./hello` 复用 `spawn_supervised`：切子 untyped、填 `SpawnInfo`（`control_ep=140`、`console_ep=51`），并像 appmgr 一样 `Recv(control_ep)`/`Reply` 监督。**关键**：`hello` 是标准服务，装载后 `Call(control_ep, READY)`，监督者不 `Reply` 子进程就卡在 `BlockedSend`、`Wait` 不返回；`EXIT` 同样经 `control_ep`。
+- `mysh`（`projects/apps/mysh`）是第五个服务，`depends = [fs]`；开一个交互式 REPL（`[rstiny ~]$: `），支持 `ls`/`cat`/`./<program>`/`help`/`exit`、回显、退格、Ctrl-C/Ctrl-D。空读时 `sleep(5ms)` 后重试，不忙等。`./<program>` 映射到 `<PROGRAM>.ELF`（8.3 短名）；`exit`/Ctrl-D 调 `Runtime::Shutdown`（PSCI `SYSTEM_OFF`）关机。
+- `./<program>` 复用 `spawn_supervised`：切子 untyped、填 `SpawnInfo`（`control_ep=140`、`console_ep=51`），并像 appmgr 一样 `Recv(control_ep)`/`Reply` 监督。**关键**：子程序是标准服务，装载后 `Call(control_ep, READY)`，监督者不 `Reply` 子进程就卡在 `BlockedSend`、`Wait` 不返回；`EXIT` 同样经 `control_ep`。
 - `mysh` 预算 2M（命令与文件缓冲都在 BSS/共享缓冲，不额外切大 untyped）。
 
 ### 与设计文档的偏差汇总

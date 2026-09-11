@@ -77,9 +77,9 @@ scratch 地址来自 BootInfo 扩展区之后的空闲页，由调用者独占�
 | 0x1000..0x1005 | Current, Create, Start, Status, Destroy, Wait |
 | 0x1006..0x1009 | Sleep, Exit, Clock, AvailableFrames |
 | 0x100a..0x100e | Map, Unmap, Protect, WriteMemory, ReadMemory |
-| 0x100f..0x1013 | FindEmptySlot, DebugConsoleAvailable, Cspace, Vspace, DestroyThread |
+| 0x100f..0x1014 | FindEmptySlot, DebugConsoleAvailable, Cspace, Vspace, DestroyThread, Shutdown |
 
-`Destroy` 是组级语义：句柄命名一个进程（共享 CSpace 的线程组），先停止全部成员线程再回收对象（[进程/线程组生命周期与组内故障监督](thread-group.md) §2.2）；`DestroyThread` 只销毁单个线程，共享 CSpace/VSpace 留给兄弟线程。
+`Destroy` 是组级语义：句柄命名一个进程（共享 CSpace 的线程组），先停止全部成员线程再回收对象（[进程/线程组生命周期与组内故障监督](thread-group.md) §2.2）；`DestroyThread` 只销毁单个线程，共享 CSpace/VSpace 留给兄弟线程。`Shutdown` 执行 PSCI `SYSTEM_OFF`（`hvc #0`，QEMU 平台），不返回；持 Runtime 能力的任务均可调用，shell 的 `exit` 用它。
 
 参数封装见 `projects/libs/user/src/task.rs` 和 `kernel/src/object/runtime.rs`。目标参数也是调用者 CSpace 的 TCB cap，每次调用均重新解析。跨任务授权通过复制 cap 完成，不再依据“目标是不是直接子任务”。托管 Create 仍自动建立默认空间及 IPC 页；托管 Destroy 会收回对应托管 CSpace。标准对象创建的任务退出后，空间对象保留到 capability 生命周期结束。
 

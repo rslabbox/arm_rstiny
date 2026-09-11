@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
 """Phase D4 acceptance: `mysh` is an interactive shell. It prompts on the
-console, lists the FAT32 root directory, prints a file and executes `./hello`
-by loading and supervising `HELLO.ELF` from disk.
+console, lists the FAT32 root directory, prints a file, and runs `./<name>`
+by loading `<NAME>.ELF` from disk and supervising it. `exit` powers the
+machine off (PSCI SYSTEM_OFF), which terminates QEMU.
 
-The shell is the fifth service (console/block/fs/appmgr/mysh). Console RX is
+The shell is the fifth service (console/block/fs/mysh). Console RX is
 polling-only, so the harness drives the guest over the serial line and waits
-for each prompt before typing the next command.
+for each prompt before typing the next command. The renamed-program phase
+runs the same ELF installed as TEST.ELF via `./test`.
 """
 import argparse
 import os
 import select
 import subprocess
-import tempfile
 import time
 from pathlib import Path
 
@@ -23,7 +24,7 @@ PROMPT = b'[rstiny ~]$: '
 DEFAULT_MESSAGE = '[hello] Hello, world! (loaded from disk)'
 
 
-def run(qemu, kernel, disk):
+def run(qemu, kernel, disk, program, expect_poweroff):
     args = [
         qemu, '-machine', 'virt,gic-version=3,virtualization=off', '-cpu', 'cortex-a72',
         '-smp', '1', '-m', '128M', '-display', 'none', '-monitor', 'none', '-nic', 'none',
@@ -35,7 +36,7 @@ def run(qemu, kernel, disk):
     proc = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                             stderr=subprocess.STDOUT)
     try:
-        commands = [b'ls\n', b'./hello\n', b'cat APPS.CFG\n', b'exit\n']
+        commands = [b'ls\n', f'./{program}\n'.encode(), b'cat APPS.CFG\n', b'exit\n']
         sent = 0
         text = b''
         deadline = time.monotonic() + BOOT_TIMEOUT
@@ -58,21 +59,30 @@ def run(qemu, kernel, disk):
         assert sent == len(commands), 'the shell never reached every command'
         assert '[mysh] ready' in decoded, 'mysh never bound the fs service'
         assert '[rstiny ~]$: ' in decoded, 'the shell never printed a prompt'
-        # `ls`: the two files the disk image carries.
-        assert 'HELLO.ELF' in decoded, 'ls did not show HELLO.ELF'
+        # `ls`: the files the disk image carries.
         assert 'APPS.CFG' in decoded, 'ls did not show APPS.CFG'
         # `cat APPS.CFG`: the manifest's first line reaches the console.
         assert '# APPS.CFG' in decoded, 'cat did not print the file contents'
-        # `./hello`: the shell loads the ELF, replies READY, reaps EXIT.
-        assert '[mysh] ./hello' in decoded, 'the shell never started hello'
-        assert DEFAULT_MESSAGE in decoded, 'hello did not run under mysh'
-        assert '[mysh] hello exited: 0' in decoded, 'the clean exit was not reaped'
+        # `./<program>`: the shell loads the ELF, replies READY, reaps EXIT.
+        assert f'[mysh] ./{program}' in decoded, 'the shell never started the program'
+        assert DEFAULT_MESSAGE in decoded, 'the program did not run under mysh'
+        assert f'[mysh] ./{program} exited: 0' in decoded, 'the clean exit was not reaped'
         assert 'kernel panic' not in decoded and 'panicked' not in decoded
-        assert proc.poll() is None, 'system exited early'
-        print('PASS: mysh ran ls, cat and ./hello from interactive input.', flush=True)
+        if expect_poweroff:
+            # `exit` calls PSCI SYSTEM_OFF; QEMU must terminate on its own.
+            try:
+                rc = proc.wait(timeout=15)
+            except subprocess.TimeoutExpired:
+                raise AssertionError('exit did not power the machine off')
+            print(f'PASS: mysh ran ls, cat and ./{program}, then powered off (rc={rc}).',
+                  flush=True)
+        else:
+            assert proc.poll() is None, 'system exited early'
+            print(f'PASS: mysh ran ls, cat and ./{program}.', flush=True)
     finally:
-        proc.terminate()
-        proc.wait(timeout=5)
+        if proc.poll() is None:
+            proc.terminate()
+            proc.wait(timeout=5)
 
 
 def build_and_make_disk(root, mode, level):
@@ -81,6 +91,16 @@ def build_and_make_disk(root, mode, level):
     subprocess.run(['make', 'disk', f'MODE={mode}'], cwd=root, check=True,
                    stdout=subprocess.DEVNULL)
     return root / f'target/kernel/{mode}-log{level}-test0/{TARGET}/{mode}/kernel'
+
+
+def make_renamed_disk(root, mode):
+    """Install the same ELF as TEST.ELF so `./test` proves the name mapping."""
+    disk = root / f'target/apps/{mode}/disk-renamed.img'
+    subprocess.run(['python3', str(root / 'tools/make_disk.py'), str(disk),
+                    '--file', f'TEST.ELF={root}/target/apps/{mode}/hello.elf',
+                    '--file', f'APPS.CFG={root}/apps/APPS.CFG'],
+                   cwd=root, check=True, stdout=subprocess.DEVNULL)
+    return disk
 
 
 def main():
@@ -92,9 +112,11 @@ def main():
         for level in ('off', 'info'):
             kernel = build_and_make_disk(root, mode, level)
             disk = root / f'target/apps/{mode}/disk.img'
-            print(f'CHECK mysh {mode} LOG={level}', flush=True)
-            run(args.qemu, kernel, disk)
-    print('PASS: the interactive shell drives the fs service and supervises ./hello.',
+            print(f'CHECK mysh {mode} LOG={level}: ./hello + poweroff', flush=True)
+            run(args.qemu, kernel, disk, 'hello', expect_poweroff=True)
+            print(f'CHECK mysh {mode} LOG={level}: renamed TEST.ELF as ./test', flush=True)
+            run(args.qemu, kernel, make_renamed_disk(root, mode), 'test', expect_poweroff=True)
+    print('PASS: the interactive shell runs disk programs and powers off on exit.',
           flush=True)
 
 
