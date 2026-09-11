@@ -47,6 +47,7 @@
 | 6 | 崩溃可重启、监督 | 服务协议 + 重启策略已覆盖 | — 直接复用 |
 | 7 | C 与 Rust 混合构建 | 构建只有 Rust | F:C 产物接入构建/磁盘 |
 | 8 | 预算与镜像规模匹配 | `budget` 是 2 的幂、按服务配置 | G:镜像大小 × 页数 ≤ 预算 的验收规则 |
+| 9 | 带参运行:`./python app.py` | `SpawnInfo`/`Supervision` 无 argv;`./cmd` 只取命令 token | H:参数页 argv;I:按需授予 fs 能力 |
 
 ## 4. 决策 A–G
 
@@ -111,6 +112,35 @@
 - 验收:镜像变化时 `check_*` 的帧数与 `Runtime::AvailableFrames` 断言同步更新
   (现有 `check_restart` 已示范该模式)。
 
+### 决策 H:参数页 argv(loader 扩展)
+
+- 现状:`SpawnInfo`(x0 指向)无 argv;`Supervision` 无 argv;`./cmd arg`
+  目前只取命令 token。
+- 设计:参数页仍是 x0 指向的同一页,布局 v2 = `SpawnInfo`(保持不变)+
+  紧跟的 `ArgvBlock`:`magic = 0x41525641_00000002`、`argc: u64`、
+  `total: u64`、随后 argc 个 NUL 结尾字符串;页内剩余空间容纳(默认
+  上限 ~1 KiB,超限抛错)。
+- loader:`spawn_supervised` 的 `Supervision` 增加 `argv` 字段并把字符串
+  拷进参数页;既有调用(hello/init/console/mysh)不传 argv 则页内无
+  `ArgvBlock`,行为与今天完全一致(向后兼容)。
+- EL0 契约:rt0 读 `SpawnInfo` 后检查页内 offset 处的 magic;有则组装
+  `char *argv[]` 交给 `port_main(argc, argv)`;无则 `argc = 1, argv = [name]`
+  或空(依 rt0 约定)。
+- mysh:`execute` 把 `./cmd` 之后的 token 全部传入 `run_program`,经 loader
+  写入参数页;`./python app.py` ⇒ argv = [`python`, `app.py`]。
+
+### 决策 I:依赖能力授予(解释器按需拿 fs)
+
+- 现状:`run_program` 的 caps 固定给 control/console/budget/ASID;hello
+  不需要 fs。解释器要读 `app.py` 却需要 fs client 能力。
+- 设计:监督者按需把自身 `fs_ep` **复制**给子进程,固定槽 53(与 init 的
+  `CHILD_DEP_BASE` 惯例一致),并在 `SpawnInfo.extra` 对应槽登记;EL0 契约
+  声明:"脚本运行类子进程在槽 53 可收到 fs_ep(可能不存在)"。
+- 边界:仍是按需最小权限 —— 无脚本参数的 `./hello` 不获得 fs;能力复制
+  只给一份,badge 沿用 fs 的 0 或监督者自身 badge。
+- C 侧:`port` 需要一个极小的 fs client(OPEN/READ/CLOSE 走既有 fs 协议
+  IPC),属于移植工作量,不改协议。
+
 ## 5. 与现有文档的联动
 
 | 文档 | 联动 |
@@ -124,10 +154,15 @@
 
 - **作为 init 服务**(`restart=on-failure`):开机即有 REPL;崩溃由 init 重启;
   console/future fs 依赖走 `depends`。适合"系统自带 Python"。
-- **作为 mysh 子进程**(`./python`):与 hello 同路径;脚本可用
-  `./python app.py` 或解释器内 REPL。适合"按需"。
-- 两者都复用现有 `Service` 协议(READY/EXIT/fault)与 `spawn_supervised`,
-  不需要新机制;这是"解释器=普通应用"设计最重要的一句话。
+- **作为 mysh 子进程**(`./python`):与 hello 同走 `spawn_supervised`,但多两个
+  机制,支持两种运行方式:
+  - `./python`(无参数):解释器内 REPL,直接读写 console(决策 D 的轮询 RX)。
+  - `./python app.py`:mysh 把命令后的 token 作为 **argv** 传给子进程(决策
+    H:参数页 `ArgvBlock`),并**按需授予一份 fs 能力**(决策 I,槽 53),
+    解释器从磁盘打开并解释 `app.py`。
+  - 两种都只复用现有 `Service` 协议(READY/EXIT/fault)与 `spawn_supervised`。
+- 两种落地方式里,argv 与 fs 授予是仅有的两处架构增量(决策 H/I),其余全部
+  复用现有协议;这是"解释器=普通应用"设计最重要的一句话。
 
 ## 7. 与 seL4/其他微内核对照
 
@@ -147,10 +182,10 @@
 
 | 阶段 | 内容 | 前置 | 验收 |
 | --- | --- | --- | --- |
-| P0 | EL0 加载契约文档化(决策 C);fs v2 与分配器接口定义 | — | 无代码,文档评审 |
+| P0 | EL0 加载契约文档化(决策 C/H/I);fs v2 与分配器接口定义 | — | 无代码,文档评审 |
 | P1 | `libs/alloc` 通用分配器(决策 B);loader 批量映射/大帧(决策 A) | P0 | `check_mysh` debug spawn 时间下降;可用帧断言不变 |
-| P2 | C 工具链接入 + `minic` ELF(决策 F) | P1 | `./minic` 在 mysh 跑通 |
-| P3 | MicroPython port:frozen stdlib、堆、console、time(决策 B/D/E-1) | P2 | `./python` 出 REPL;跑一个脚本断言输出 |
+| P2 | C 工具链接入 + `minic` ELF(决策 F);参数页 argv(决策 H) | P1 | `./minic` 在 mysh 跑通;`./minic arg` 读到 argv |
+| P3 | MicroPython port:frozen stdlib、堆、console、time、argv 解析(决策 B/D/E-1/H);脚本运行类子进程的 fs 授予(决策 I) | P2 | `./python` 出 REPL;`./python app.py` 解释执行并断言输出 |
 | P4 | fs v2(决策 E-2) | P2 | 长名 import 与脚本读写;`check_fs2` |
 
 ## 9. 结论
@@ -160,7 +195,9 @@
 1. 必须(使解释器成为可能):决策 B(通用分配器)、F(C 构建接入)、C(契约文档)。
 2. 值得(性能/规模):决策 A(loader 批量映射)、G(预算规则)。
 3. 演进(非阻塞):决策 D(RX IRQ)、E(fs v2)。
-4. 复用即得的:服务协议、监督/重启、console、时间、budget 模型。
+4. 带参运行(`./python app.py`):决策 H(argv)+ I(fs 授予);REPL 模式(`./python`)
+   不需要它们。
+5. 复用即得的:服务协议、监督/重启、console、时间、budget 模型。
 
 用 MicroPython 换来的主要收益是把上述四点从"设计假设"变成"被一个真实程序
 压测过的结论"。
