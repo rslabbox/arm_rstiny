@@ -62,7 +62,8 @@ def main():
                    check=True, stdout=subprocess.DEVNULL)
     for mode in ('debug', 'release'):
         for level in ('off', 'info'):
-            subprocess.run(['make', 'build', f'MODE={mode}', f'LOG={level}', 'DISK=1'],
+            subprocess.run(['make', 'build', f'MODE={mode}', f'LOG={level}', 'DISK=1',
+                            'INIT_CFG=apps/init-appmgr.cfg'],
                            cwd=root, check=True, stdout=subprocess.DEVNULL)
             kernel = root / f'target/kernel/{mode}-log{level}-test0/{TARGET}/{mode}/kernel'
             print(f'CHECK services {mode} LOG={level}: dependency order', flush=True)
@@ -75,7 +76,7 @@ def main():
             env = dict(os.environ)
             env['BLOCK_TEST'] = 'fail'
             subprocess.run(['make', 'build', f'MODE={mode}', f'LOG={level}', 'DISK=1',
-                            'BLOCK_TEST=fail'], cwd=root, check=True,
+                            'INIT_CFG=apps/init-appmgr.cfg', 'BLOCK_TEST=fail'], cwd=root, check=True,
                            stdout=subprocess.DEVNULL, env=env)
             print(f'CHECK services {mode} LOG={level}: block unavailable', flush=True)
             text, _ = boot(args.qemu, kernel, disk)

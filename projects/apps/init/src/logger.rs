@@ -108,9 +108,14 @@ pub fn take_drill_result() -> u32 {
 /// Blocking console write, chunked to the protocol's inline limit. The
 /// service answers with label 0 and the written byte count; anything else
 /// (including the kernel's error reply after the service was reaped) is an
-/// error.
+/// error. The terminating newline rides in the same chunk as the text, so a
+/// concurrent writer cannot be interleaved into the middle of a line.
 fn write_console(console_ep: u64, bytes: &[u8]) -> Result<(), u64> {
-    for chunk in bytes.chunks(console::MAX_WRITE) {
+    let mut line = [0u8; MAX_LINE + 1];
+    let count = bytes.len().min(MAX_LINE);
+    line[..count].copy_from_slice(&bytes[..count]);
+    line[count] = b'\n';
+    for chunk in line[..count + 1].chunks(console::MAX_WRITE) {
         let received = match ipc::call(console_ep, console::WRITE, &pack_words(chunk)) {
             Ok(received) => received,
             Err(_) => return Err(u64::MAX),
@@ -119,13 +124,7 @@ fn write_console(console_ep: u64, bytes: &[u8]) -> Result<(), u64> {
             return Err(received.label);
         }
     }
-    // Log lines are newline-terminated; the console service turns LF into CRLF.
-    // (The debug-console path terminates via `debug_println!` instead.)
-    match ipc::call(console_ep, console::WRITE, &pack_words(b"\n")) {
-        Ok(received) if received.label == REPLY_OK => Ok(()),
-        Ok(received) => Err(received.label),
-        Err(_) => Err(u64::MAX),
-    }
+    Ok(())
 }
 
 /// Pack `bytes` little-endian behind the byte count, per the console wire

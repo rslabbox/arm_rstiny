@@ -94,6 +94,7 @@ userboot 保留为 monitor（决策 1）：它不参与服务管理，但在 ini
 - 从 `fs-server` 读取应用 ELF，用同一套 ELF loader 创建应用进程。
 - 对应用执行与 init 类似的生命周期管理（READY/report/重启），但策略属于应用域。
 - init 不直接加载应用；应用崩溃由 appmgr 处理，appmgr 崩溃由 init 处理。
+- **缺省不启用**：`apps/init.cfg` 只含 `console`/`block`/`fs`/`mysh`，应用由 shell 的 `./hello` 按需运行。appmgr 保留给“自动加载 + 应用级重启/故障处理”场景，D3/D5 验收用 `apps/init-appmgr.cfg`。
 
 ### 3.5 mysh（交互式 shell）
 
@@ -404,15 +405,8 @@ service fs {
     budget = 1M
 }
 
-service appmgr {
-    elf = "appmgr.elf"
-    depends = fs
-    restart = on-failure
-    budget = 2M
-}
-
-# mysh: script-driven shell (apps/SH.CFG on the disk). Lists the disk, prints
-# files and executes ./hello by loading HELLO.ELF from the disk.
+# mysh: interactive shell. Prompts on the console (CONSOLE_READ) and runs
+# `ls`/`cat <file>`/`./hello`/`help`/`exit`; `./hello` loads HELLO.ELF.
 service mysh {
     elf = "mysh.elf"
     depends = fs
@@ -420,6 +414,8 @@ service mysh {
     budget = 2M
 }
 ```
+
+缺省拓扑是 `console` / `block` / `fs` / `mysh`：应用由 shell 的 `./hello` 按需运行。`appmgr`（应用自动加载与重启策略）不在缺省 `init.cfg` 中，D3/D5 验收用 `apps/init-appmgr.cfg`（`console` / `block` / `fs` / `appmgr`），它列出 `HELLO.ELF`。
 
 键：
 

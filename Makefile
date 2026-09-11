@@ -52,7 +52,7 @@ endif
 # comparison (docs/disk-driver.md section 12).
 INIT_CFG := apps/init.cfg
 ifdef KILL_FS
-INIT_CFG := apps/init-restart.cfg
+INIT_CFG := apps/init-appmgr.cfg
 endif
 
 # Application manifest baked into the disk. The default is empty (the shell
