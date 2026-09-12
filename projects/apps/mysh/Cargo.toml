@@ -14,3 +14,4 @@ rstiny = { path = "../../libs/user" }
 rstiny-runtime = { path = "../../libs/runtime" }
 rstiny-server = { path = "../../libs/server" }
 rstiny-protocol = { path = "../../libs/protocol" }
+rstiny-alloc = { path = "../../libs/alloc" }

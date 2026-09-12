@@ -196,6 +196,7 @@ fn spawn_app(
             budget_slot,
             &Supervision {
                 info: info_bytes,
+                argv: &[],
                 fault_ep: CHILD_CONTROL,
                 caps: &caps,
                 slot_base: LOADER_SLOT_BASE + index as u64 * LOADER_SLOT_STRIDE,

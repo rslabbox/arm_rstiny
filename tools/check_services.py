@@ -58,12 +58,12 @@ def main():
     args = parser.parse_args()
     root = Path(__file__).resolve().parent.parent
     disk = root / 'target/apps/release/disk.img'
-    subprocess.run(['make', 'disk', 'MODE=release', 'APPS_CFG=apps/APPS-hello.CFG'], cwd=root,
+    subprocess.run(['make', 'disk', 'MODE=release', 'APPS_CFG=configs/APPS-hello.CFG'], cwd=root,
                    check=True, stdout=subprocess.DEVNULL)
     for mode in ('debug', 'release'):
         for level in ('off', 'info'):
             subprocess.run(['make', 'build', f'MODE={mode}', f'LOG={level}', 'DISK=1',
-                            'INIT_CFG=apps/init-appmgr.cfg'],
+                            'INIT_CFG=configs/init-appmgr.cfg'],
                            cwd=root, check=True, stdout=subprocess.DEVNULL)
             kernel = root / f'target/kernel/{mode}-log{level}-test0/{TARGET}/{mode}/kernel'
             print(f'CHECK services {mode} LOG={level}: dependency order', flush=True)
@@ -76,7 +76,7 @@ def main():
             env = dict(os.environ)
             env['BLOCK_TEST'] = 'fail'
             subprocess.run(['make', 'build', f'MODE={mode}', f'LOG={level}', 'DISK=1',
-                            'INIT_CFG=apps/init-appmgr.cfg', 'BLOCK_TEST=fail'], cwd=root, check=True,
+                            'INIT_CFG=configs/init-appmgr.cfg', 'BLOCK_TEST=fail'], cwd=root, check=True,
                            stdout=subprocess.DEVNULL, env=env)
             print(f'CHECK services {mode} LOG={level}: block unavailable', flush=True)
             text, _ = boot(args.qemu, kernel, disk)

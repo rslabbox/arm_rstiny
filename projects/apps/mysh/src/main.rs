@@ -32,40 +32,48 @@ const TABLE_SLOT: u64 = 44; // L3 covering FS_BUF_VA
 const FS_RECV_SLOT: u64 = 60; // landing slot for the fs BIND cap transfer
 const CHILD_BUDGET_SLOT: u64 = 90; // sub-Untyped carved for a child
 const CHILD_BUDGET_BITS: u64 = 20; // 1 MiB per child
-const MAX_FILE: usize = 256 * 1024;
+// Largest program the shell will load from disk; the C app (minic) links
+// the debug rstiny-alloc staticlib into a ~260 KiB image in debug builds.
+const MAX_FILE: usize = 512 * 1024;
 
 /// Child CSpace layout, matching init/appmgr's convention.
 const CHILD_CONTROL: u64 = 140;
 const CHILD_CONSOLE: u64 = 51;
 const CHILD_BUDGET: u64 = 32;
+/// fs client endpoint, copied into the child's slot 53 on request only
+/// (interpreter-app.md 决策 I; arg-taking programs get it, plain runs do not).
+const CHILD_FS: u64 = 53;
 
 const PROMPT: &[u8] = b"[rstiny ~]$: ";
 const LINE_MAX: usize = 128;
 
-/// Bump allocator over a fixed BSS pool: file images and script text live here
-/// and are freed only when the supervisor tears the task down.
-const POOL_BYTES: usize = 512 * 1024;
-struct Bump;
-static mut POOL: [u64; POOL_BYTES / 8] = [0; POOL_BYTES / 8];
-static mut POOL_USED: usize = 0;
-unsafe impl alloc::alloc::GlobalAlloc for Bump {
+/// Task heap: rstiny-alloc's first-fit allocator (decision B), wrapped as the
+/// Rust global allocator so Vec/String share the same pool as C programs that
+/// link the staticlib. Grown pages are accounted against this task's budget
+/// via Runtime::Map; freed blocks are reused (no bump-style leaks).
+struct Heap;
+unsafe impl alloc::alloc::GlobalAlloc for Heap {
     unsafe fn alloc(&self, layout: alloc::alloc::Layout) -> *mut u8 {
-        // SAFETY: single-core user task; the cursor is only touched here.
-        unsafe {
-            let used = core::ptr::addr_of_mut!(POOL_USED);
-            let start = core::ptr::addr_of_mut!(POOL) as usize;
-            let offset = (*used).next_multiple_of(layout.align().max(8));
-            if offset + layout.size() > POOL_BYTES {
-                return core::ptr::null_mut();
-            }
-            *used = offset + layout.size();
-            (start + offset) as *mut u8
-        }
+        unsafe { rstiny_alloc::alloc(layout.size()) }
     }
-    unsafe fn dealloc(&self, _pointer: *mut u8, _layout: alloc::alloc::Layout) {}
+    unsafe fn dealloc(&self, pointer: *mut u8, _layout: alloc::alloc::Layout) {
+        unsafe { rstiny_alloc::dealloc(pointer) }
+    }
+    unsafe fn realloc(
+        &self,
+        pointer: *mut u8,
+        _layout: alloc::alloc::Layout,
+        size: usize,
+    ) -> *mut u8 {
+        if size == 0 {
+            unsafe { rstiny_alloc::dealloc(pointer) };
+            return core::ptr::null_mut();
+        }
+        unsafe { rstiny_alloc::reallocate(pointer, size) }
+    }
 }
 #[global_allocator]
-static ALLOCATOR: Bump = Bump;
+static HEAP: Heap = Heap;
 
 #[entry]
 fn main(argument: Argument) -> ! {
@@ -207,9 +215,15 @@ fn execute(service: &Service, fs_ep: u64, line: &str) -> bool {
             Some(name) => cat(service, fs_ep, name.as_bytes()),
             None => logln!(service, "[mysh] cat: missing file name"),
         },
-        "hello" => run_program(service, fs_ep, "hello"),
+        "hello" => run_program(service, fs_ep, "hello", &[]),
         other => match other.strip_prefix("./") {
-            Some(stem) => run_program(service, fs_ep, stem),
+            Some(stem) => {
+                // Remaining tokens become the child's argv (决策 H): the loader
+                // appends an ArgvBlock to the parameter page; the program's
+                // rt0 assembles `argv[]` with the program name in `[0]`.
+                let args: alloc::vec::Vec<&str> = parts.collect();
+                run_program(service, fs_ep, stem, &args)
+            }
             None => logln!(service, "[mysh] unknown command: {}", other),
         },
     }
@@ -278,7 +292,10 @@ fn cat(service: &Service, fs_ep: u64, name: &[u8]) {
 }
 
 /// `./<name>`: load `<NAME>.ELF` from disk and run it as a supervised child.
-fn run_program(service: &Service, fs_ep: u64, stem: &str) {
+/// `args` are passed through the parameter page as an [`ArgvBlock`]; when the
+/// program takes arguments it also receives the fs endpoint at slot 53
+/// (interpreter-app.md 决策 I), bound before its first script read.
+fn run_program(service: &Service, fs_ep: u64, stem: &str, args: &[&str]) {
     let Some(self_ep) = service
         .extra
         .get(SpawnInfo::SELF_EP)
@@ -308,6 +325,10 @@ fn run_program(service: &Service, fs_ep: u64, stem: &str) {
         extra: {
             let mut extra = [0; SpawnInfo::EXTRA_LEN];
             extra[SpawnInfo::CONSOLE_EP] = CHILD_CONSOLE;
+            // fs dependency slot: granted only to arg-taking programs.
+            if !args.is_empty() {
+                extra[SpawnInfo::DEP_EP_BASE] = CHILD_FS;
+            }
             extra
         },
     };
@@ -343,9 +364,31 @@ fn run_program(service: &Service, fs_ep: u64, stem: &str) {
             rights: RIGHTS_ALL,
             badge: 0,
         },
+        // Unused by default; filled in below for arg-taking programs.
+        ChildCap {
+            slot: CHILD_FS,
+            source: fs_ep,
+            rights: RIGHTS_ALL,
+            badge: 0,
+        },
     ];
+    let mut used = 4;
+    if !args.is_empty() {
+        used = 5;
+    }
     // SAFETY: SCRATCH_VA is an unmapped page this task reserves exclusively.
-    logln!(service, "[mysh] ./{} ({} bytes)", stem, image.len());
+    match args.len() {
+        0 => logln!(service, "[mysh] ./{} ({} bytes)", stem, image.len()),
+        count => {
+            logln!(
+                service,
+                "[mysh] ./{} ({} bytes, {} args)",
+                stem,
+                image.len(),
+                count
+            );
+        }
+    }
     let spawned = unsafe {
         rstiny::elf::spawn_supervised(
             &image,
@@ -353,8 +396,9 @@ fn run_program(service: &Service, fs_ep: u64, stem: &str) {
             CHILD_BUDGET_SLOT,
             &Supervision {
                 info,
+                argv: args,
                 fault_ep: CHILD_CONTROL,
-                caps: &caps,
+                caps: &caps[..used],
                 slot_base: LOADER_SLOT_BASE,
             },
         )
@@ -430,7 +474,11 @@ fn read_file(fs_ep: u64, name: &[u8]) -> Option<Vec<u8>> {
     if size > MAX_FILE as u64 {
         return None;
     }
-    let mut data = Vec::new();
+    // Exact pre-allocation: amortised capacity doubling caps out at 512 KiB
+    // (twice the 256 KiB heap total) for a ~270 KiB debug image before the
+    // final read, and Vec::extend panics. One exact allocation stays under
+    // the cap for any image up to MAX_FILE.
+    let mut data = Vec::with_capacity(size as usize);
     let mut offset = 0u64;
     while offset < size {
         let length = (size - offset).min(0x1000);

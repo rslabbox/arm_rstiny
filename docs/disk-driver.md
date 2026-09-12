@@ -232,11 +232,11 @@ boot 分区把这些 MMIO 区间作为**设备 Untyped** 发布（当前只发�
 
 ## 10. appmgr 与应用加载
 
-- `appmgr` 由 init 按 `apps/init-appmgr.cfg` 启动（缺省 `apps/init.cfg` 不含它，应用由 `mysh` 按需运行），`depends = [fs]`，持有 FS client cap 和应用 untyped 预算。
+- `appmgr` 由 init 按 `configs/init-appmgr.cfg` 启动（缺省 `configs/init.cfg` 不含它，应用由 `mysh` 按需运行），`depends = [fs]`，持有 FS client cap 和应用 untyped 预算。
 - 流程：`OPEN("hello")` → 循环 `READ` 到自己的缓冲 → 解析 ELF → `spawn_supervised` 创建应用（独立 VSpace/CSpace/TCB、READY/report/重启协议）。
 - 应用与系统服务共用 `libs/server` 协议；控制端点是 appmgr 的 `control_ep`。
 - 应用来自 FAT32，因此**替换磁盘上的 ELF 即可改变运行内容，无需重编内核或 userboot/init**——这是与现在"hello 嵌入 rodata"的关键区别。
-- 缺省 `APPS.CFG` **不含应用**：appmgr 启动后只报 `manifest lists 0 app(s)` 并阻塞，开机不会自动跑 hello。运行入口是 `mysh` 的 `./hello`。D3/D5 验收用 `apps/APPS-hello.CFG`（`make APPS_CFG=apps/APPS-hello.CFG`），它列出 `hello`。
+- 缺省 `APPS.CFG` **不含应用**：appmgr 启动后只报 `manifest lists 0 app(s)` 并阻塞，开机不会自动跑 hello。运行入口是 `mysh` 的 `./hello`。D3/D5 验收用 `configs/APPS-hello.CFG`（`make APPS_CFG=configs/APPS-hello.CFG`），它列出 `hello`。
 
 ### 10.1 mysh 与 console RX
 

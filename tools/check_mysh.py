@@ -36,7 +36,14 @@ def run(qemu, kernel, disk, program, expect_poweroff):
     proc = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                             stderr=subprocess.STDOUT)
     try:
-        commands = [b'ls\n', f'./{program}\n'.encode(), b'cat APPS.CFG\n', b'exit\n']
+        commands = [
+            b'ls\n',
+            f'./{program}\n'.encode(),
+            b'cat APPS.CFG\n',
+            b'./minic\n',
+            b'./minic one two\n',
+            b'exit\n',
+        ]
         sent = 0
         text = b''
         deadline = time.monotonic() + BOOT_TIMEOUT
@@ -67,6 +74,16 @@ def run(qemu, kernel, disk, program, expect_poweroff):
         assert f'[mysh] ./{program}' in decoded, 'the shell never started the program'
         assert DEFAULT_MESSAGE in decoded, 'the program did not run under mysh'
         assert f'[mysh] ./{program} exited: 0' in decoded, 'the clean exit was not reaped'
+        # `./minic`: the C app exercises the four MicroPython pre-dependencies.
+        assert decoded.count('[mysh] ./minic exited: 0') == 2, 'minic runs must clean-exit'
+        assert decoded.count('[minic] ready') >= 2, 'minic never ran'
+        assert '[minic] argc=0' in decoded and '[minic] alloc ok' in decoded \
+            and '[minic] grow ok' in decoded, 'minic allocator test failed'
+        assert '[minic] argc=2' in decoded, 'minic did not parse two arguments'
+        assert '[minic] argv[0]=one' in decoded and '[minic] argv[1]=two' in decoded, \
+            'minic argument strings are wrong'
+        assert '[minic] fs bound' in decoded and 'APPS.CFG size=' in decoded, \
+            'minic fs probe failed (decision I: slot 53 grant)'
         assert 'kernel panic' not in decoded and 'panicked' not in decoded
         if expect_poweroff:
             # `exit` calls PSCI SYSTEM_OFF; QEMU must terminate on its own.
@@ -98,7 +115,8 @@ def make_renamed_disk(root, mode):
     disk = root / f'target/apps/{mode}/disk-renamed.img'
     subprocess.run(['python3', str(root / 'tools/make_disk.py'), str(disk),
                     '--file', f'test={root}/target/apps/{mode}/hello.elf',
-                    '--file', f'APPS.CFG={root}/apps/APPS.CFG'],
+                    '--file', f'minic={root}/target/apps/{mode}/minic.elf',
+                    '--file', f'APPS.CFG={root}/configs/APPS.CFG'],
                    cwd=root, check=True, stdout=subprocess.DEVNULL)
     return disk
 

@@ -62,9 +62,9 @@ def main():
             env = dict(os.environ)
             env['KILL_FS'] = '1'
             subprocess.run(['make', 'build', f'MODE={mode}', f'LOG={level}', 'KILL_FS=1', 'DISK=1',
-                            'APPS_CFG=apps/APPS-hello.CFG'],
+                            'APPS_CFG=configs/APPS-hello.CFG'],
                            cwd=root, check=True, stdout=subprocess.DEVNULL, env=env)
-            subprocess.run(['make', 'disk', f'MODE={mode}', 'APPS_CFG=apps/APPS-hello.CFG'],
+            subprocess.run(['make', 'disk', f'MODE={mode}', 'APPS_CFG=configs/APPS-hello.CFG'],
                            cwd=root, check=True, stdout=subprocess.DEVNULL, env=env)
             kernel = root / f'target/kernel/{mode}-log{level}-test0/{TARGET}/{mode}/kernel'
             disk = root / f'target/apps/{mode}/disk.img'

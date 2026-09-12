@@ -61,9 +61,9 @@ def build_and_make_disk(root, mode, level, message_env):
     if message_env is not None:
         env['HELLO_MSG'] = message_env
     subprocess.run(['make', 'build', f'MODE={mode}', f'LOG={level}', 'DISK=1',
-                    'INIT_CFG=apps/init-appmgr.cfg', 'APPS_CFG=apps/APPS-hello.CFG'],
+                    'INIT_CFG=configs/init-appmgr.cfg', 'APPS_CFG=configs/APPS-hello.CFG'],
                    cwd=root, check=True, stdout=subprocess.DEVNULL, env=env)
-    subprocess.run(['make', 'disk', f'MODE={mode}', 'APPS_CFG=apps/APPS-hello.CFG'], cwd=root,
+    subprocess.run(['make', 'disk', f'MODE={mode}', 'APPS_CFG=configs/APPS-hello.CFG'], cwd=root,
                    check=True, stdout=subprocess.DEVNULL, env=env)
     return root / f'target/kernel/{mode}-log{level}-test0/{TARGET}/{mode}/kernel'
 

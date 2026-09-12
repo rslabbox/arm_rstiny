@@ -244,6 +244,7 @@ fn main(info: &mut BootInfo) -> ! {
                 INIT_BUDGET_OBJ,
                 &rstiny::elf::Supervision {
                     info: info_bytes,
+                    argv: &[],
                     fault_ep: INIT_CONTROL_SLOT,
                     caps: &caps[..fixed + granted],
                     slot_base: rstiny::elf::LOADER_SLOT_BASE,

@@ -1,3 +1,9 @@
 target/
 test.img
 __pycache__/
+
+# Vendored upstream (Micropython v1.24.1 etc). Fetch per ports/micropython-rstiny/README.
+third_party/
+
+# MicroPython port build artifacts
+ports/micropython-rstiny/build/

@@ -11,6 +11,7 @@ members = [
     "projects/apps/appmgr",
     "projects/apps/mysh",
     "projects/libs/abi",
+    "projects/libs/alloc",
     "projects/libs/elf",
     "projects/libs/newc",
     "projects/libs/protocol",

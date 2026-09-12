@@ -36,6 +36,8 @@ FS_ELF := $(APP_DIR)/$(TARGET)/$(MODE)/fs-server
 APPMGR_ELF := $(APP_DIR)/$(TARGET)/$(MODE)/appmgr
 MYSH_ELF := $(APP_DIR)/$(TARGET)/$(MODE)/mysh
 HELLO_ELF := $(APP_DIR)/$(TARGET)/$(MODE)/hello
+MINIC_ELF := $(APP_DIR)/$(TARGET)/$(MODE)/minic
+PYTHON_ELF := $(APP_DIR)/$(TARGET)/$(MODE)/python
 DISK_IMG := $(APP_DIR)/disk.img
 MODULES := $(INIT_ELF) $(CONSOLE_ELF)
 IMAGE_DIR := $(BUILD_DIR)/image
@@ -52,15 +54,19 @@ endif
 # restart=never mysh leaf is excluded there: its live/dead state legitimately
 # differs before and after the crash, which would perturb the frame-budget
 # comparison (docs/disk-driver.md section 12).
-INIT_CFG := apps/init.cfg
+INIT_CFG := configs/init.cfg
 ifdef KILL_FS
-INIT_CFG := apps/init-appmgr.cfg
+INIT_CFG := configs/init-appmgr.cfg
 endif
 
 # Application manifest baked into the disk. The default is empty (the shell
 # runs apps on demand); the appmgr/restart/services acceptances point this at
-# apps/APPS-hello.CFG, which lists hello.
-APPS_CFG ?= apps/APPS.CFG
+# configs/APPS-hello.CFG, which lists hello.
+APPS_CFG ?= configs/APPS.CFG
+
+# Default MicroPython script on the disk (`./python app` reads it; the
+# python acceptance overrides this with its own APP.PY, see check_python.py).
+APPS_PY ?= configs/APP.PY
 
 # Fixed platform contract; no network backends. The VirtIO block device and
 # its FAT32 image back the userland disk stack (docs/disk-driver.md). The drive
@@ -99,11 +105,24 @@ userboot:
 init console hello block-server fs-server appmgr mysh:
 	python3 tools/build_app.py $@ --mode $(MODE)
 
-# The application disk: bare FAT32 with the app manifest and its ELF.
-disk: hello
+# C applications (interpreter-app.md 决策 F): cross gcc + rstiny-alloc
+# staticlib; the output is already stripped, so disk keeps it as-is.
+minic:
+	python3 tools/build_app.py minic --mode $(MODE) --lang c
+	cp $(MINIC_ELF) $(APP_DIR)/minic.elf
+
+# MicroPython interpreter (docs/micropython-port.md): the port Makefile
+# compiles the py core; build_app.py ensures rstiny-alloc and strips.
+python:
+	python3 tools/build_app.py python --mode $(MODE) --lang python
+	cp $(PYTHON_ELF) $(APP_DIR)/python.elf
+
+# The application disk: bare FAT32 with the app manifest and its ELFs.
+disk: hello minic python
 	rust-objcopy --strip-all $(HELLO_ELF) $(APP_DIR)/hello.elf
 	python3 tools/make_disk.py $(DISK_IMG) \
-	  --file hello=$(APP_DIR)/hello.elf --file APPS.CFG=$(APPS_CFG)
+	  --file hello=$(APP_DIR)/hello.elf --file minic=$(APP_DIR)/minic.elf \
+	  --file python=$(APP_DIR)/python.elf --file APP.PY=$(APPS_PY) --file APPS.CFG=$(APPS_CFG)
 
 # `run` builds the application disk too, so the guest finds a virtio-blk
 # device and the FAT32 image the services need.

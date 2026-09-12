@@ -87,7 +87,7 @@ def main():
             # Negative: bad BPB signature — the mount must fail, bounded.
             subprocess.run(['python3', str(tools), str(disk),
                             f'--file', f'hello={app_dir}/hello.elf',
-                            f'--file', f'APPS.CFG={root}/apps/APPS.CFG',
+                            f'--file', f'APPS.CFG={root}/configs/APPS.CFG',
                             '--corrupt-bpb'], cwd=root, check=True, stdout=subprocess.DEVNULL)
             print(f'CHECK fat32 {mode} LOG={level}: corrupt BPB', flush=True)
             text = run(args.qemu, kernel, disk, lambda t: '[fs] mount failed' in t)
@@ -98,7 +98,7 @@ def main():
             # bounded-but-wrong data; the checksum must expose the corruption.
             subprocess.run(['python3', str(tools), str(disk),
                             f'--file', f'hello={app_dir}/hello.elf',
-                            f'--file', f'APPS.CFG={root}/apps/APPS.CFG',
+                            f'--file', f'APPS.CFG={root}/configs/APPS.CFG',
                             '--cycle-fat'], cwd=root, check=True, stdout=subprocess.DEVNULL)
             print(f'CHECK fat32 {mode} LOG={level}: FAT cycle', flush=True)
 

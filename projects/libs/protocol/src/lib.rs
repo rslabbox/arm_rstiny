@@ -44,7 +44,8 @@ pub struct SpawnInfo {
 impl SpawnInfo {
     pub const MAGIC: u64 = 0x0000_5253_5449_4e49;
     /// v2: `extra` widened to 12 entries for the device IRQ handler slot
-    /// (docs/irq.md §7).
+    /// (docs/irq.md §7). The optional [`ArgvBlock`] follows `SpawnInfo` in
+    /// the same page without changing this version (interpreter-app.md 决策 H).
     pub const VERSION: u64 = 2;
     /// `extra[0]`: console client endpoint.
     pub const CONSOLE_EP: usize = 0;
@@ -62,6 +63,31 @@ impl SpawnInfo {
     pub const IRQ_SLOT: usize = 8;
     /// Length of the `extra` slot array.
     pub const EXTRA_LEN: usize = 12;
+}
+
+/// Argument list block appended to the parameter page right after [`SpawnInfo`]
+/// when the supervisor passed argv (interpreter-app.md 决策 H). Absent when the
+/// child was spawned without arguments — a zero-filled gap, so v1 readers that
+/// do not know the block are unaffected.
+///
+/// The block is [`ArgvBlock`] followed by `argc` NUL-terminated strings.
+/// `total` counts every string byte including the NUL terminators.
+#[derive(Clone, Copy, Debug)]
+#[repr(C)]
+pub struct ArgvBlock {
+    /// `ArgvBlock::MAGIC`.
+    pub magic: u64,
+    /// Number of argument strings that follow the header.
+    pub argc: u64,
+    /// Total bytes of the strings (each NUL-terminated).
+    pub total: u64,
+}
+impl ArgvBlock {
+    /// 'ARVA' + layout v2.
+    pub const MAGIC: u64 = 0x4152_5641_0000_0002;
+    /// Upper bound for the whole block including header and strings; well
+    /// under the 4 KiB parameter page, leaving [`SpawnInfo`] plus room.
+    pub const MAX_BYTES: usize = 1024;
 }
 
 pub const PAGE_SIZE: u64 = kernel_abi::PAGE_SIZE;

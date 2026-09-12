@@ -1,6 +1,7 @@
 //! ELF loading through Untyped, CNode, VSpace, PageTable, Page and TCB invocations.
 use crate::{Error, Task, abi, capability::*, runtime};
 use rstiny_elf::Elf;
+use rstiny_protocol::ArgvBlock;
 
 const PAGE: usize = 4096;
 const STACK_SIZE: usize = 64 * 1024;
@@ -246,6 +247,11 @@ pub struct ChildCap {
 pub struct Supervision<'a> {
     /// Parameter page contents handed to the child as its start argument.
     pub info: &'a [u8],
+    /// Argument strings written to the parameter page after `info` as an
+    /// [`ArgvBlock`] (interpreter-app.md 决策 H). Empty when the child is
+    /// spawned without arguments; the raw `argc`, NUL-terminated strings and
+    /// an `total` byte count follow the child structs on the wire.
+    pub argv: &'a [&'a str],
     /// Child CSpace slot of the fault endpoint (0 = unmonitored).
     pub fault_ep: u64,
     /// Capabilities minted or copied into the child CNode.
@@ -279,11 +285,21 @@ pub unsafe fn spawn_supervised(
     spec: &Supervision<'_>,
 ) -> Result<Task, Error> {
     let elf = Elf::parse(image).map_err(|_| Error::InvalidArgument)?;
+    // ArgvBlock + NUL-terminated strings must fit the remaining page after the
+    // SpawnInfo bytes (decision H bounds the whole block at 1024 bytes).
+    let argv_bytes: usize = spec
+        .argv
+        .iter()
+        .try_fold(0usize, |total, arg| total.checked_add(arg.len() + 1))
+        .ok_or(Error::InvalidArgument)?;
     if scratch < PAGE
         || scratch >= abi::USER_ADDRESS_LIMIT as usize
         || scratch % PAGE != 0
         || elf.segments().any(|s| !matches!(s.flags, 4..=6))
         || spec.info.len() > PAGE
+        || (!spec.argv.is_empty()
+            && (argv_bytes > ArgvBlock::MAX_BYTES
+                || core::mem::size_of::<ArgvBlock>() + argv_bytes > PAGE - spec.info.len()))
     {
         return Err(Error::InvalidArgument);
     }
@@ -428,11 +444,31 @@ pub unsafe fn spawn_supervised(
                     scratch as *mut u8,
                     spec.info.len(),
                 );
-                core::ptr::write_bytes(
-                    (scratch + spec.info.len()) as *mut u8,
-                    0,
-                    PAGE - spec.info.len(),
-                );
+                let mut offset = spec.info.len();
+                if !spec.argv.is_empty() {
+                    let block = ArgvBlock {
+                        magic: ArgvBlock::MAGIC,
+                        argc: spec.argv.len() as u64,
+                        total: argv_bytes as u64,
+                    };
+                    core::ptr::copy_nonoverlapping(
+                        (&block as *const ArgvBlock).cast::<u8>(),
+                        (scratch + offset) as *mut u8,
+                        core::mem::size_of::<ArgvBlock>(),
+                    );
+                    offset += core::mem::size_of::<ArgvBlock>();
+                    for arg in spec.argv {
+                        core::ptr::copy_nonoverlapping(
+                            arg.as_ptr(),
+                            (scratch + offset) as *mut u8,
+                            arg.len(),
+                        );
+                        offset += arg.len();
+                        (scratch as *mut u8).add(offset).write(0);
+                        offset += 1;
+                    }
+                }
+                core::ptr::write_bytes((scratch + offset) as *mut u8, 0, PAGE - offset);
                 alias.unmap()?;
                 cnode.delete(alias_slot)?;
             }

@@ -807,6 +807,7 @@ fn spawn_service(services: &mut Vec<ServiceState>, index: usize, console_ep: u64
             service.budget_slot,
             &rstiny::elf::Supervision {
                 info: info_bytes,
+                argv: &[],
                 fault_ep: CHILD_CONTROL,
                 caps: &caps[..used],
                 slot_base: rstiny::elf::LOADER_SLOT_BASE

@@ -1,0 +1,22 @@
+[package]
+name = "rstiny-alloc"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+# rlib is the default build for Rust tasks. The C-ABI staticlib (`malloc`,
+# `free`, ... for C applications like the MicroPython port) is produced on
+# demand by build_app.py with `--crate-type staticlib --features c-heap-panic`:
+# a staticlib is a link unit that needs its own #[panic_handler], whereas an
+# rlib is not compiled for a final link (tasks bring the handler themselves).
+crate-type = ["rlib"]
+test = false
+bench = false
+
+[dependencies]
+kernel-abi = { path = "../abi" }
+
+[features]
+# Compile the crate's own #[panic_handler] into the C staticlib link; Rust
+# tasks bring theirs via rstiny-runtime and must not see a duplicate lang item.
+c-heap-panic = []

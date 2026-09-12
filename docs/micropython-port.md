@@ -11,6 +11,17 @@
 本文是"实现设计",不是架构(架构见 interpreter-app.md),也不包含第三方
 C 代码正文(移植时从 MicroPython 上游拉取)。
 
+## 0. 落地状态（2026-09，P3 已完成）
+
+- P1 `libs/alloc`（决策 B）✅、P2 C 交叉编译 minic + argv（决策 F/H）✅；
+- P3（本 port）✅：`third_party/micropython`（tag v1.24.1 子模块级固定）+ `ports/micropython-rstiny`，
+  `make disk` 带 `python.elf` 与 `APP.PY`；`./python` REPL（`print(1+2)`→`3`，
+  Ctrl-D 退出）与 `./python app`（fs 槽 53 + ArgvBlock，`APP.PY` 脚本）均以
+  `tools/check_python.py` 验收（debug/release × LOG=off/info）；
+- 已知微瑕：个别内建异常类型名（如 ZeroDivisionError）的 qstr 打印为空
+  （帧与参数在，类型名缺，MINIMUM qstr 表边界）；不影响 REPL/脚本验收。
+- 未做：决策 A 批量映射优化（debug 启动仍逐页）、fs v2、frozen modules。
+
 ## 1. 目标与非目标
 
 | 目标 | 验收 |

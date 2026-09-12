@@ -319,6 +319,7 @@ name = "mysh"
 version = "0.1.0"
 dependencies = [
  "rstiny",
+ "rstiny-alloc",
  "rstiny-protocol",
  "rstiny-runtime",
  "rstiny-server",
@@ -375,6 +376,14 @@ version = "0.1.0"
 dependencies = [
  "kernel-abi",
  "rstiny-elf",
+ "rstiny-protocol",
+]
+
+[[package]]
+name = "rstiny-alloc"
+version = "0.1.0"
+dependencies = [
+ "kernel-abi",
 ]
 
 [[package]]

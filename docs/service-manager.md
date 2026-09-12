@@ -94,7 +94,7 @@ userboot 保留为 monitor（决策 1）：它不参与服务管理，但在 ini
 - 从 `fs-server` 读取应用 ELF，用同一套 ELF loader 创建应用进程。
 - 对应用执行与 init 类似的生命周期管理（READY/report/重启），但策略属于应用域。
 - init 不直接加载应用；应用崩溃由 appmgr 处理，appmgr 崩溃由 init 处理。
-- **缺省不启用**：`apps/init.cfg` 只含 `console`/`block`/`fs`/`mysh`，应用由 shell 的 `./hello` 按需运行。appmgr 保留给“自动加载 + 应用级重启/故障处理”场景，D3/D5 验收用 `apps/init-appmgr.cfg`。
+- **缺省不启用**：`configs/init.cfg` 只含 `console`/`block`/`fs`/`mysh`，应用由 shell 的 `./hello` 按需运行。appmgr 保留给“自动加载 + 应用级重启/故障处理”场景，D3/D5 验收用 `configs/init-appmgr.cfg`。
 
 ### 3.5 mysh（交互式 shell）
 
@@ -125,7 +125,7 @@ projects/libs/fatfs/             # FAT32 只读（阶段 D）
 构建改动：
 
 - `Makefile`：`fatboot` target → `userboot`；新增 `init`、`console`、`block`、`fs`、`appmgr`、`mysh`。
-- 应用磁盘由 `make disk` 生成：`APPS.CFG` + `hello`（无扩展名；FAT 短名存为 `HELLO`，大小写标志让工具显示 `hello`）。缺省 `APPS.CFG` **为空**（appmgr 不自动启动任何应用，由 shell 的 `./hello` 按需运行）；D3/D5 验收用 `apps/APPS-hello.CFG`（`make APPS_CFG=...`）。
+- 应用磁盘由 `make disk` 生成：`APPS.CFG` + `hello`（无扩展名；FAT 短名存为 `HELLO`，大小写标志让工具显示 `hello`）。缺省 `APPS.CFG` **为空**（appmgr 不自动启动任何应用，由 shell 的 `./hello` 按需运行）；D3/D5 验收用 `configs/APPS-hello.CFG`（`make APPS_CFG=...`）。
 - `tools/build_image.py`：CPIO 从 `kernel + dtb + rootserver` 扩展为 `kernel.elf + kernel.dtb + userboot + init + services + init.cfg`；前三个文件名与顺序保持 bootloader 现有校验，其后为模块文件。
 - `tools/build_app.py` 增加多应用构建入口；各应用共用 LLD 默认布局，段保持页不重叠（ELF loader 依赖该性质，见 13.4）。
 - 文档、`tools/check_*.py`、README 中的 fatboot 引用同步改名。
@@ -415,7 +415,7 @@ service mysh {
 }
 ```
 
-缺省拓扑是 `console` / `block` / `fs` / `mysh`：应用由 shell 的 `./hello` 按需运行。`appmgr`（应用自动加载与重启策略）不在缺省 `init.cfg` 中，D3/D5 验收用 `apps/init-appmgr.cfg`（`console` / `block` / `fs` / `appmgr`），它列出 `hello`。
+缺省拓扑是 `console` / `block` / `fs` / `mysh`：应用由 shell 的 `./hello` 按需运行。`appmgr`（应用自动加载与重启策略）不在缺省 `init.cfg` 中，D3/D5 验收用 `configs/init-appmgr.cfg`（`console` / `block` / `fs` / `appmgr`），它列出 `hello`。
 
 键：
 
@@ -650,8 +650,8 @@ fs（`fs_ep`，阶段 D）：
 | 阶段 | 内核 | 用户态 | 工具/测试 |
 | --- | --- | --- | --- |
 | A | `abi`（状态常量、fault label、`ObjectType` 已就绪）；`object/{mod,invoke,cnode,untyped}.rs`（新对象、finalise 递归、retype 扩展）；新增 `object/{endpoint,notification}.rs`；`api/dispatch.rs`（六个 IPC syscall）；`api/faults.rs`（fault 投递）；`task/{scheduler,api}.rs`（阻塞状态、队列链、`Task.execution` 受控写、`editable()` 放宽） | `abi`（fault/状态常量）；`user::SlotAlloc`；`rstiny` retype Untyped/Endpoint 封装 | 新增 `tools/check_ipc.py`、`tools/check_fault_ep.py`；扩展 `check_untyped.py`（切分/递归 Revoke）；宿主 wire 测试 |
-| B | `arch/kernel/boot.rs` + `memory/frame.rs`（archive 帧接管、保留区）；`boot.rs` 发布记录 8 + Frame cap | bootloader（archive 拷贝 + x6/x7）；`build_image.py`；`libs/newc`；`apps/userboot`；`apps/init`（空转 + READY）；`libs/runtime`（v6、boot_modules、SpawnInfo） | `check_bootloader.py` 扩展；新增 `check_userboot.py` |
-| C | — | `apps/console`；`libs/server`；`libs/protocol`（console）；init 服务表/spawn | 新增 `check_service_console.py` |
+| B | `arch/kernel/boot.rs` + `memory/frame.rs`（archive 帧接管、保留区）；`boot.rs` 发布记录 8 + Frame cap | bootloader（archive 拷贝 + x6/x7）；`build_image.py`；`libs/newc`；`projects/apps/userboot`；`projects/apps/init`（空转 + READY）；`libs/runtime`（v6、boot_modules、SpawnInfo） | `check_bootloader.py` 扩展；新增 `check_userboot.py` |
+| C | — | `projects/apps/console`；`libs/server`；`libs/protocol`（console）；init 服务表/spawn | 新增 `check_service_console.py` |
 | D | — | `apps/{block,fs,appmgr}`；`libs/{virtio,fatfs}`；协议补全 | 新增 `check_service_fs.py`（含磁盘镜像） |
 | E | 删 `Runtime` 托管标签、`managed_untyped`、`collect` 缩域 | `libs/user` 移除 Runtime 依赖 | 全量回归 |
 | F | `TCBSetPriority`（可选）、IRQ Notification（可选） | init/appmgr 策略完整化 | 新增策略用例 |
