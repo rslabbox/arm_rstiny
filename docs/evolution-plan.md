@@ -421,15 +421,16 @@ ABI_VERSION 已升为 4，旧 x8 正调用号协议已删除，不保留兼容 s
 解释器。P3 的 MicroPython 落地实现设计见
 [micropython-port.md](micropython-port.md)。
 
-### 阶段 C0–C3（可选）：能力唯一权威 + 资源皆 Untyped
+### 阶段 C0–C3（已实施 2026-09-14）：能力唯一权威 + 资源皆 Untyped
 
-对 seL4 两支柱的结构性差异（`Runtime` 托管层、全局对象表 + 名义记账）的
-落地设计、阶段表（C0 即 F0）与验收见
-[capability-authority-untyped.md](capability-authority-untyped.md)（设计决策
-源 [sel4-philosophy.md](sel4-philosophy.md) §3）。要点：allocator 改从自身
-sub-Untyped 标准 retype+map（先做，收益最大）；对象落账到来源 Untyped 并删
-`managed_untyped`；`Map/WriteMemory` 强制 cap+所有权；`Runtime` 按四分法
-处置，最终降级/删除。与决策 E（移除 Runtime 托管）合并推进。
+C0–C3 已实施：allocator 从自身 sub-Untyped 标准 retype+map 增长；对象落账到
+来源 Untyped 并删除 `managed_untyped`；`Map`/`Create` 强制显式 Untyped cap；
+`Runtime` 按四分法处置，托管任务服务收进 `managed-runtime` 特性门控（生产
+镜像编译掉，仅 managed 回归套件构建）。实施记录、保留的受限原语（Exit/
+Shutdown/Sleep/Unmap/Protect/WriteMemory/ReadMemory）与理由见
+[capability-authority-untyped.md](capability-authority-untyped.md) §7（设计
+决策源 [sel4-philosophy.md](sel4-philosophy.md) §3）。与决策 E（移除 Runtime
+托管）合并推进；用户态定时器服务（Sleep 的完全用户态实现）仍属后续里程碑。
 
 ## 10. 测试与验证计划
 

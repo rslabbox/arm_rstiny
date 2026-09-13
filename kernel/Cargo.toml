@@ -11,7 +11,16 @@ bench = false
 
 [features]
 default = []
-kernel-test = []
+# Kernel-test images exercise the address-space helpers through the managed
+# wrappers, so they imply the transitional feature.
+kernel-test = ["managed-runtime"]
+# Transitional managed-task services (Runtime::Create/Start/Status/Wait/
+# Destroy/DestroyThread/Cspace/Vspace/FindEmptySlot/Map). Production images
+# compile them out: userland is loader-based and every remaining Runtime
+# method is informational or a self-/cap-checked restricted primitive
+# (docs/capability-authority-untyped.md §4, C3). Only the managed-API
+# regression harnesses (check_tasks/check_fpu/check_ipc/check_irq) need this.
+managed-runtime = []
 
 [dependencies]
 log = "0.4"

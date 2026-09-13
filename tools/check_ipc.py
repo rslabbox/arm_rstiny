@@ -295,7 +295,7 @@ def main():
     levels = os.environ.get('IPC_LEVELS', 'off,info').split(',')
     for mode in modes:
         for level in levels:
-            kernel = build(mode, level, False)
+            kernel = build(mode, level, False, managed=True)
             print(f'CHECK ipc {mode} LOG={level}', flush=True)
             run(args.qemu, kernel)
     print('PASS: endpoint call/reply with badges; notification merge and wake; '

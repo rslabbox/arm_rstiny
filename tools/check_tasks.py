@@ -42,6 +42,13 @@ def run(qemu, kernel):
             # too (C1 accounting): 5 pages + 1 KiB + 16 pages = 22 pages.
             assert call('available') == baseline - 22
             call('map', 65535, DATA, PAGE, 3, status=6, caps=[32])
+            # C1 negatives in the gated build: managed Map/Create have no
+            # implicit resource — the frames come only from an Untyped
+            # capability the caller holds.
+            call('map', child, DATA, PAGE, 3, status=7) # no budget cap at all
+            call('map', child, DATA, PAGE, 3, caps=[1], status=2) # TCB is no budget
+            call('create', status=7) # managed create needs a budget cap
+            call('create', caps=[child], status=2)
             for address,length,rights in [(0,PAGE,3),(DATA+1,PAGE,3),(DATA,0,3),
                                           (DATA,PAGE,7),(0x8000000,PAGE,3),(2**64-4096,PAGE,3)]:
                 call('map',child,address,length,rights,status=1, caps=[32])
@@ -216,7 +223,7 @@ def main():
     args = parser.parse_args()
     for mode in ('debug','release'):
         for level in ('off','info'):
-            kernel = build(mode,level,False)
+            kernel = build(mode,level,False,managed=True)
             print(f'CHECK capability runtime {mode} LOG={level}',flush=True)
             run(args.qemu,kernel)
     print('PASS: capability scope/transfer; memory rollback/recycling; timer preemption; suspended wait completion; faults; guarded stack reclamation.',flush=True)

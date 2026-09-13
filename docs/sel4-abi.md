@@ -90,18 +90,18 @@ scratch 地址来自 BootInfo 扩展区之后的空闲页，由调用者独占�
 
 ## 显式运行时扩展
 
-睡眠、时钟、退出状态和托管任务便利接口仍由内核 Runtime 对象提供，通过 Call 调用，标签独立保留在 0x1000 以上。它们不是 seL4 标准对象方法，也不是已经实现的用户态服务端。
+睡眠、时钟、退出状态和受限监督原语由内核 Runtime 对象提供，通过 Call 调用，标签独立保留在 0x1000 以上。它们不是 seL4 标准对象方法，也不是已经实现的用户态服务端。C0–C3（[capability-authority-untyped.md](capability-authority-untyped.md) §7）之后，托管任务服务（Create/Start/Status/Wait/Destroy/DestroyThread/Cspace/Vspace/FindEmptySlot/Map）收进内核 `managed-runtime` 特性门控：生产镜像编译掉，调用返回 `Unsupported`，仅 managed 回归套件构建；其余标签按下列三档保留。
 
-| 标签 | 方法 |
-| --- | --- |
-| 0x1000..0x1005 | Current, Create, Start, Status, Destroy, Wait |
-| 0x1006..0x1009 | Sleep, Exit, Clock, AvailableFrames |
-| 0x100a..0x100e | Map, Unmap, Protect, WriteMemory, ReadMemory |
-| 0x100f..0x1014 | FindEmptySlot, DebugConsoleAvailable, Cspace, Vspace, DestroyThread, Shutdown |
+| 标签 | 方法 | 处置 |
+| --- | --- | --- |
+| 0x1000, 0x1008, 0x1009, 0x1010 | Current, Clock, AvailableFrames, DebugConsoleAvailable | 信息类（只读，无资源/控制效果） |
+| 0x1006, 0x1007, 0x1014 | Sleep, Exit, Shutdown | 受限自指原语（只影响调用者；PSCI 仅 EL1 可达） |
+| 0x100b..0x100e | Unmap, Protect, WriteMemory, ReadMemory | 受限监督原语（目标须为 WRITE TCB cap 且可编辑：self/停止/fault 阻塞） |
+| 0x1001..0x1005, 0x100a, 0x100f..0x1013 中的托管项 | Create, Start, Status, Wait, Destroy, DestroyThread, Cspace, Vspace, FindEmptySlot, Map | `managed-runtime` 门控（生产 `Unsupported`） |
 
-`Destroy` 是组级语义：句柄命名一个进程（共享 CSpace 的线程组），先停止全部成员线程再回收对象（[进程/线程组生命周期与组内故障监督](thread-group.md) §2.2）；`DestroyThread` 只销毁单个线程，共享 CSpace/VSpace 留给兄弟线程。`Shutdown` 执行 PSCI `SYSTEM_OFF`（`hvc #0`，QEMU 平台），不返回；持 Runtime 能力的任务均可调用，shell 的 `exit` 用它。
+`Shutdown` 执行 PSCI `SYSTEM_OFF`（`hvc #0`，QEMU 平台），不返回；持 Runtime 能力的任务均可调用，shell 的 `exit` 用它。`Unmap` 服务于 root 运行时的栈守卫（boot 映射页没有 frame cap），Write/Read 服务于监督者对可编辑目标的检视与修复；二者均无隐式资源路径。
 
-参数封装见 `projects/libs/user/src/task.rs` 和 `kernel/src/object/runtime.rs`。目标参数也是调用者 CSpace 的 TCB cap，每次调用均重新解析。跨任务授权通过复制 cap 完成，不再依据“目标是不是直接子任务”。托管 Create 仍自动建立默认空间及 IPC 页；托管 Destroy 会收回对应托管 CSpace。标准对象创建的任务退出后，空间对象保留到 capability 生命周期结束。
+参数封装见 `projects/libs/user/src/task.rs` 和 `kernel/src/object/runtime.rs`。目标参数也是调用者 CSpace 的 TCB cap，每次调用均重新解析。跨任务授权通过复制 cap 完成，不再依据"目标是不是直接子任务"。用户态任务的销毁是标准能力操作：revoke loader 派生子树（`rstiny::Task::destroy`），终止通知走 control endpoint 协议。
 
 ## 尚未对齐的部分
 

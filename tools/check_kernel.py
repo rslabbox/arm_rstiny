@@ -408,14 +408,20 @@ def boot(qemu, elf, printing, tests=False, probe=None, layout=False, quiet_boot=
                     process.wait()
 
 
-def build(mode, level, tests, load_min=None, root_base=None):
+def build(mode, level, tests, load_min=None, root_base=None, managed=False):
+    # `managed=True` builds the transitional managed-runtime feature in (C3);
+    # production images compile it out and every managed label reports
+    # Unsupported there.
     args = ["make", "build", f"MODE={mode}", f"KERNEL_TEST={int(tests)}", f"LOG={level}"]
+    if managed:
+        args.append("MANAGED=1")
     if root_base is not None:
         args.append(f"ROOT_IMAGE_BASE={root_base:#x}")
     if load_min is not None:
         args.append(f"KERNEL_LOAD_MIN={load_min:#x}")
     subprocess.run(args, cwd=ROOT, check=True)
-    return ROOT / f"target/kernel/{mode}-log{level}-test{int(tests)}/{TARGET}/{mode}/kernel"
+    suffix = "-managed" if managed else ""
+    return ROOT / f"target/kernel/{mode}-log{level}-test{int(tests)}{suffix}/{TARGET}/{mode}/kernel"
 
 
 def main():

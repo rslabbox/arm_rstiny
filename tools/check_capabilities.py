@@ -110,15 +110,21 @@ def run(qemu,kernel):
             c.call(220,41)
             assert pages(g)[scratch][0] == c.call(221,46)
             delete(220); c.call(221,41); delete(221); delete(222)
-            # C1 negatives: managed Map/Create have no implicit resource. The
-            # frames come only from an Untyped capability the caller holds, so
-            # "no cap, no frame" is enforced on the wire.
-            c.runtime('map',1,scratch,4096,3,caps=[32])
-            c.runtime('unmap',1,scratch,4096)
-            c.runtime('map',1,scratch,4096,3,status=7) # no budget cap at all
-            c.runtime('map',1,scratch,4096,3,caps=[3],status=2) # VSpace is no budget
-            c.runtime('create',status=7) # managed create needs a budget cap
-            c.runtime('create',caps=[3],status=2)
+            # C3: the transitional managed-task services are compiled out of
+            # production images. No task reaches another task through Runtime:
+            # create/start/status/wait/destroy/destroy-thread/cspace/vspace/
+            # find-empty-slot/map all report Unsupported. The cap-enforced
+            # behaviour of the gated build is covered by check_tasks.py, and
+            # the restricted Unmap primitive above stays for the root
+            # runtime's stack guard (no frame capability to unmap through the
+            # standard path).
+            for label in (0x1001,0x1002,0x1003,0x1004,0x1005,0x100a,0x100f,0x1011,0x1012,0x1013):
+                c.call(17,label,[1],status=3)
+                c.call(17,label,status=3)
+            # The informational methods still work.
+            assert c.runtime('current') == 1
+            assert c.runtime('clock') > 0
+            assert c.runtime('available') == c.runtime('available')
             revoke(32) # region-granular reclamation resets the Untyped
             assert c.runtime('available') == before
 
@@ -150,8 +156,10 @@ def run(qemu,kernel):
             c.call(103,3,[0,4,0x1000000,0x1003000,5,0],status=1) # EL1 SPSR rejected
             c.call(103,3,[0,4,0x1000000,0x1003000,0,0])
             c.call(103,12)
-            assert c.runtime('wait',103) == 202
-            assert c.runtime('status',103) == 6
+            # Managed Wait/Status are gated out of production images (C3): a
+            # supervisor observes termination through the endpoint protocol
+            # (check_ipc.py). A terminal thread can no longer be resumed.
+            c.call(103,12,status=3)
             # Revoke all descendants of the allocator capability. TCB, CNode,
             # frame aliases and page-table references must all be reclaimed.
             revoke(32)

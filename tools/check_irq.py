@@ -259,7 +259,7 @@ def main():
     levels = os.environ.get('IRQ_LEVELS', 'off,info').split(',')
     for mode in modes:
         for level in levels:
-            kernel = build(mode, level, False)
+            kernel = build(mode, level, False, managed=True)
             print(f'CHECK irq {mode} LOG={level}', flush=True)
             run(args.qemu, kernel)
     print('PASS: platform-table validation; duplicate Get; badge delivery; '

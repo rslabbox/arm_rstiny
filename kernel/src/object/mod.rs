@@ -301,6 +301,7 @@ impl Store {
             .insert(destination_slot as u16, cap);
         Ok(())
     }
+    #[cfg_attr(not(feature = "managed-runtime"), allow(dead_code))]
     fn empty_slot(&self, cspace: ObjectId) -> Result<u64> {
         let cnode = self.cnode(cspace)?;
         (FIRST_FREE_SLOT..CNODE_SLOTS)
@@ -674,6 +675,7 @@ pub(crate) fn edit_vspace<T>(
 /// Map `len` bytes at `va` in `id`. `untyped` names the budget the new frames
 /// and page tables are carved from; `None` uses the kernel boot pool and is
 /// reserved for the boot loader's own address space.
+#[cfg(feature = "managed-runtime")]
 pub(crate) fn map_vspace(
     id: ObjectId,
     va: usize,
@@ -682,9 +684,8 @@ pub(crate) fn map_vspace(
     pinned: bool,
     untyped: Option<ObjectId>,
 ) -> Result<()> {
-    let result = with_store(|store| {
-        store.map_vspace(id, va, len, permissions, pinned, None, untyped)
-    });
+    let result =
+        with_store(|store| store.map_vspace(id, va, len, permissions, pinned, None, untyped));
     if result.is_err() {
         // A failed mapping may have allocated frames before the failure; they
         // are unreferenced and must be reclaimed by the next sweep.
@@ -703,6 +704,7 @@ pub(crate) fn vspace_frame_at(id: ObjectId, va: usize) -> Result<FrameRef> {
 /// page-table frames from the kernel boot pool (kernel loader only); a user
 /// request must name the Untyped budget the space is billed to. The caller
 /// must bind it to a capability or thread before collection runs.
+#[cfg(feature = "managed-runtime")]
 pub(crate) fn create_vspace(untyped: Option<ObjectId>) -> Result<ObjectId> {
     with_store(|store| store.new_vspace(untyped))
 }
@@ -778,6 +780,7 @@ pub(crate) fn init_root(task: u64, vspace: ObjectId, ipc: usize, untyped_start: 
 /// never inferred from a user's integer matching a global task ID. The child's
 /// TCB and CNode are billed to `untyped` like any other object; `None` (kernel
 /// boot path only) leaves them as unowned boot metadata.
+#[cfg(feature = "managed-runtime")]
 pub(crate) fn publish_task(
     task: u64,
     vspace: ObjectId,
@@ -913,6 +916,7 @@ pub(crate) fn forget_task(task: u64, cspace: Option<ObjectId>, shared: bool) {
 /// runtime policy, which owns standard TCBs as well as managed ones. A VSpace
 /// still referenced by a surviving thread — a thread-group sibling — is left
 /// in place; the thread itself is fully retired.
+#[cfg(feature = "managed-runtime")]
 pub(crate) fn release_task_objects(task: u64, vspace: Option<ObjectId>) {
     // After `api::destroy` the target no longer references anything, so any
     // remaining thread root naming `vspace` belongs to a surviving sibling.

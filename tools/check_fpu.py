@@ -190,7 +190,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--qemu', default='qemu-system-aarch64')
     args = parser.parse_args()
-    kernel = build('release', 'info', False)
+    kernel = build('release', 'info', False, managed=True)
     run(args.qemu, kernel)
 
 

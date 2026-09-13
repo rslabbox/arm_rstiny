@@ -4,6 +4,10 @@ MODE ?= release
 KERNEL_TEST ?= 0
 BOOT_TEST ?= 0
 BLK_TEST ?= 0
+# Transitional managed-runtime services (Runtime::Create/Start/.../Map). Only
+# the managed-API regression harnesses build them in; production images and
+# every loader-based userland check run with the feature compiled out (C3).
+MANAGED ?= 0
 LOG ?= info
 KERNEL_LOAD_MIN ?= 0
 DISK ?= 1
@@ -23,7 +27,7 @@ $(error KERNEL_TEST must be 0 or 1)
 endif
 
 # Separate log levels and test configurations to avoid reusing stale images.
-BUILD_DIR := target/kernel/$(MODE)-log$(LOG)-test$(KERNEL_TEST)
+BUILD_DIR := target/kernel/$(MODE)-log$(LOG)-test$(KERNEL_TEST)$(if $(filter 1,$(MANAGED)),-managed,)
 KERNEL_ELF := $(BUILD_DIR)/$(TARGET)/$(MODE)/kernel
 KERNEL_BIN := $(KERNEL_ELF).bin
 PLATFORM_DIR := $(abspath target/platform/qemu-arm-virt)
@@ -48,6 +52,9 @@ CARGO_FLAGS += --release
 endif
 ifeq ($(KERNEL_TEST),1)
 CARGO_FLAGS += --features kernel-test
+endif
+ifeq ($(MANAGED),1)
+CARGO_FLAGS += --features managed-runtime
 endif
 
 # The restart acceptance (KILL_FS) exercises the fs -> appmgr chain. The

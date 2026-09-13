@@ -1,5 +1,8 @@
 # 能力唯一权威 + 资源皆 Untyped：设计与迁移规划
 
+日期：2026-09-14。状态：C0–C3 已实施（C3 采用特性门控而非物理删除，见文末
+[实施记录](#7-实施记录)）。实现与偏差以本记录为准。
+
 对应 [sel4-philosophy.md](sel4-philosophy.md) 的两条结构性差异（`Runtime`
 托管层、全局对象表 + 名义记账），给出**落地设计**与**迁移阶段**。目标:
 让 RSTiny 满足 seL4 支柱 1（能力即唯一权威）与支柱 2（资源皆从 Untyped
@@ -122,4 +125,64 @@
 - 阶段总表:[evolution-plan.md](evolution-plan.md)(把 F0–F3 并入);外设的
   定时器/IRQ 见 [irq.md](irq.md)。
 
-（本文为规划文档:阶段是否实施、实施顺序由后续决策/PR 决定,不在本文承诺。）
+（§1–§5 为设计文本,保留当时的事实与取舍;实施结果与偏差见下节。）
+
+## 7. 实施记录（2026-09-14）
+
+已实施：
+
+- **C0（allocator 标准增长）**：`projects/libs/alloc` 的堆增长改为标准对象
+  操作——`UntypedRetype` 从本任务自己的预算 cap（slot 32,服务链约定）切帧,
+  `Page_Map`/`PageTable_Map` 装进自身 VSpace 的 `ALLOC_GROW_VA` 窗口,槽位用
+  私有游标（`SLOT_BASE = 60_000`,位于 loader 窗口之上、16 位 CNode 之内;
+  最初选的 96_000 超出 65536 槽上限,是落地时修掉的第一个错误）。invoke
+  原语扩展到 6 词 + cap 的 IPC buffer 组包,与用户库同款。部分失败回滚
+  （删除 cap 即解除映射,watermark 由 revoke 统一回卷）。预算从此必须包含
+  堆余量:`init.cfg` 的 mysh 与 `init-appmgr.cfg` 的 appmgr 由 2M 提到 4M
+  （镜像读取最大 512 KiB + mysh 的 1 MiB 每子进程预算）。userland 的
+  `Runtime::Map` 调用点归零;`check_mysh`（4 内核变体 × 2 磁盘）、
+  `check_python` 全绿。
+- **C1（落账 + 删 managed_untyped + cap 强制）**：删除 `Store.managed_untyped`
+  与 `collect` 的全区回卷;`map_vspace`/`create_vspace` 显式携带来源 Untyped
+  （`None` 仅限内核 boot loader 自身地址空间）。`Runtime::Map`/`Create`
+  在消息中强制携带 Untyped cap,帧、页表、被管子进程的 VSpace/TCB/CNode
+  （名义 1 KiB + 64 KiB）全部计入该预算。`check_capabilities` 增加
+  "无 cap 即无帧"负例;记账从"全局区自动回卷"改为区域粒度——只有 Revoke
+  回卷 watermark,相关 harness 的泄漏断言先 revoke 再比较 `AvailableFrames`。
+- **C2（用户态替代）**：loader `FindEmptySlot` → 槽游标（`elf.rs` 的
+  `retype()` 直接吃 `loader_slot()` 游标）;`Task::destroy` → 挂起 + revoke
+  loader 派生子树（标准 `CNode_Revoke/Delete`,组语义由派生关系自然覆盖）;
+  `Task::destroy_thread` → `Tcb_Suspend` + 删除 TCB cap;`rstiny::sleep` →
+  读 `Runtime::Clock` + `yield` 的用户态轮询（零 ms 仅让出一次）;
+  `rstiny_runtime::protect_stack` 改走 `rstiny::unmap_self`（受限原语绑定,
+  仅自身地址空间——root 栈守卫页是内核 boot 映射,没有 frame cap 可走
+  标准路径）。
+- **C3（Runtime 门控降级）**：内核 feature `managed-runtime`（Makefile
+  `MANAGED=1`）。生产镜像编译掉 `Create/Start/Status/Wait/Destroy/
+  DestroyThread/Cspace/Vspace/FindEmptySlot/Map` 十个标签,其余按四分法保留。
+  `check_capabilities` 在生产内核上断言这些标签全部返回 `Unsupported`,
+  信息类方法（Current/Clock/AvailableFrames）继续可用;cap 强制行为的负例
+  移到 `check_tasks`（门控构建）。managed 回归套件
+  （check_tasks/check_fpu/check_ipc/check_irq）用 `managed=True` 构建。
+
+与原设计的偏差（保留的受限原语及理由）：
+
+- `Exit`/`Shutdown` 保留（§3.1 允许"移为受限原语"）：二者均为自指——Exit
+  只终止调用者（服务正常退出走 control_ep 协议 + 监督者 revoke,`rstiny::exit`
+  已无应用调用者）;PSCI 是 EL1 监视调用,EL0 无法直接触达,只能保留为内核
+  扩展而非用户态 power 服务。
+- `Sleep` 保留为内核受限调度原语：自指、无资源;用户态 `rstiny::sleep`
+  已不再依赖它（C2）,它只服务于调度器睡眠态语义与验收。用户态定时器服务
+  （Generic Timer IRQ + Notification）仍是后续里程碑。
+- `Unmap`/`Protect`/`WriteMemory`/`ReadMemory` 保留（§3.1 将其归入
+  "改造成正常能力操作"而非删除）：它们不分配资源、不产生隐式取帧路径,
+  目标必须由 WRITE TCB cap 指认且处于可编辑状态（self/停止/fault 阻塞,
+  §3.3 的 editable/supervisor 语义）。root 栈守卫（Unmap）与监督者检视/
+  修复路径（Write/Read）是现实用户;`Map` 因 C0 无任何调用者而被门控。
+- C3 的"任何任务无法经 Runtime 影响他人"由生产内核上的
+  `Unsupported` 断言 + 剩余方法的 cap/自指性质共同满足;`Object::Runtime`
+  在生产镜像中退化为信息类 + 受限原语载体,托管能力全部位于
+  `managed-runtime` 门控之内。
+
+验收复跑：`make check` 全绿（managed 套件以 `MANAGED=1` 构建,其余全部为
+生产内核）。

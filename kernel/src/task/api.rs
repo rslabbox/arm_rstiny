@@ -41,6 +41,7 @@ pub(crate) fn create() -> Result<u64, u64> {
         Ok(scheduler.tasks[slot].id)
     })
 }
+#[cfg(feature = "managed-runtime")]
 pub(crate) fn start(
     target: u64,
     entry: u64,
@@ -77,6 +78,7 @@ pub(crate) fn status(target: u64) -> Result<u64, u64> {
 /// Every thread id sharing `target`'s CSpace — the thread group a process
 /// handle names (docs/thread-group.md §2.1), `target` included. Terminal
 /// members are listed too so a group destroy also empties their slots.
+#[cfg(feature = "managed-runtime")]
 pub(crate) fn group_members(target: u64) -> Result<alloc::vec::Vec<u64>, u64> {
     with_target(target, |scheduler, _, slot| {
         let Some(cspace) = scheduler.tasks[slot].cspace else {
@@ -149,6 +151,7 @@ pub(crate) fn destroy(target: u64) -> Result<(), u64> {
     })
 }
 /// None means the runtime must commit a wait; it is not a completed syscall.
+#[cfg(feature = "managed-runtime")]
 pub(crate) fn wait_result(target: u64) -> Result<Option<u64>, u64> {
     with_target(target, |scheduler, caller, slot| {
         if caller == slot {
@@ -169,6 +172,7 @@ pub(crate) fn vspace_of(target: u64) -> Result<ObjectId, u64> {
 /// Resolve the VSpace of a task only when the caller may edit it (self or a
 /// created/suspended task). Mapping allocates object memory, so the caller
 /// cannot hold a `&mut AddressSpace`; this returns the identity instead.
+#[cfg(feature = "managed-runtime")]
 pub(crate) fn editable_vspace(target: u64) -> Result<ObjectId, u64> {
     with_target(target, |scheduler, caller, slot| {
         editable(scheduler, caller, slot)?;
