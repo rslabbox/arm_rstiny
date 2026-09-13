@@ -97,12 +97,14 @@ services/mysh/MicroPython P3/FPU 上下文/`rstiny-alloc`）逐条对照。
 
 ## 4. 结论
 
-1. **方向性差异有两条**，都来自"便利内核服务"的残留：
+1. **方向性差异有两条**，都来自“便利内核服务”的残留：
    - `Runtime` 托管层（含 `Runtime::Map` 的全局记账）违背
-     "能力唯一权威 + 资源皆 Untyped"；
-   - 全局对象表 + 名义记账，把"内存/对象"解耦成两个维度。
-   建议分别以"决策 E 提优先级"和"对象实体尽量从 Untyped 切/或明确
-   记为记账约定"两条处理。
+     “能力唯一权威 + 资源皆 Untyped”；
+   - 全局对象表 + 名义记账，把“内存/对象”解耦成两个维度。
+   建议分别以“决策 E 提优先级”和“对象实体尽量从 Untyped 切/或明确
+   记为记账约定”两条处理。两条的落地设计与迁移阶段（allocator 标准
+   Untyped 增长、方法四分法、ObjectOwner 落账、Runtime 降级/删除）见
+   [capability-authority-untyped.md](capability-authority-untyped.md)。
 2. **明确放弃的差异**：形式化验证。正当，但要用测试纪律补齐语义回归。
 3. **待补功能（不是哲学分歧）**：CNode 深度、调度优先级、IPC 语义
    边界、MCS——已按阶段表演进。
