@@ -51,6 +51,8 @@ QEMU / 启动加载器
 
 本路线不承诺直接运行现有 seL4 二进制，也不继承 seL4 的形式化证明。现有 C 程序依赖 `libsel4`、`sel4utils`、`allocman` 等接口，不能只替换内核就继续运行。先移植应用逻辑到本项目用户库；若以后要求兼容，再单独建立 syscall 编码、对象布局、BootInfo、错误码和调度语义的兼容矩阵。
 
+与 seL4 设计理念的逐条对照（含 `Runtime` 托管层、全局对象表记账等差异）见 [sel4-philosophy.md](sel4-philosophy.md)。
+
 SMP、MCS、虚拟化、动态链接、POSIX、网络栈、磁盘写入与形式化验证不进入第一版关键路径。FP/SIMD 已作为独立里程碑实现（见 [FP/SIMD 上下文与惰性切换](fpu.md)）：CPACR_EL1 惰性放行、任务首次 FP 指令陷入后装载 `FpuContext`（16 个 q 寄存器 + FPCR/FPSR，528 字节）并使能，切出时整体保存恢复；内核态始终置回陷阱，softfloat 编译目标下按需启用 NEON 指令。其他语言如需浮点，不再能假设外部 ELF 不会使用这些寄存器。
 
 ## 3. 当前项目与参考系统的差距

@@ -1,5 +1,7 @@
 # seL4 风格 ABI 与内核对象
 
+设计理念层的对照（能力唯一权威、资源皆 Untyped、机制/策略分离、形式化验证等）见 [sel4-philosophy.md](sel4-philosophy.md)。本文只讲 ABI/对象层。
+
 当前实现对齐 seL4 **AArch64、non-MCS、单核、无硬件调试/SMMU/VCPU** 配置的调用协议及部分对象方法，不是完整的 seL4 二进制兼容实现。参考本地 `../seL4/kernel`，提交 `28b8f4c40d4a48a206bedc7875c6695f6106f34b`。
 
 协议依据为 `libsel4/include/api/syscall.xml`、`libsel4/include/interfaces/object-api.xml`、ARM/AArch64 的 `object-api-arch.xml`、`object-api-sel4-arch.xml`，以及 AArch64 `syscalls.h` 和 64 位 `shared_types.bf`。对象调用标签由 XML 顺序和配置共同决定，不能把本表应用于任意 seL4 构建。
