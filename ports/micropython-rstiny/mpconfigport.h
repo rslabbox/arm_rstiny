@@ -40,8 +40,9 @@
 // "ZeroDivisionError: division by zero".
 #define MICROPY_ERROR_REPORTING (MICROPY_ERROR_REPORTING_NORMAL)
 
-// GC heap: a 256 KiB .bss array (docs: micropython-port.md §4). Heap growth
-// of our allocator is separate (C heap via rstiny-alloc, Runtime::Map).
+// GC heap: a 256 KiB .bss array (docs: micropython-port.md §4). C-heap growth
+// of our allocator is separate (C heap via rstiny-alloc, retyped from the
+// task's own Untyped budget).
 #define MICROPY_HEAP_SIZE (256 * 1024)
 
 #define MICROPY_ALLOC_PARSE_CHUNK_INIT (16)

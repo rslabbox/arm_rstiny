@@ -8,8 +8,11 @@
 //! Memory comes from the task's own budget:
 //! - a static bootstrap pool in `.bss` (mapped by the ELF loader out of the
 //!   task's sub-Untyped), and
-//! - pages grown on demand through the kernel `Runtime::Map` service, which
-//!   accounts the frames against the same budget (no new kernel mechanism).
+//! - pages grown on demand with standard object operations: `UntypedRetype`
+//!   carves frames from the task's own Untyped budget cap and `Page_Map`
+//!   installs them in the task's own VSpace. The budget's watermark is the
+//!   single accounting point — there is no kernel convenience service and no
+//!   global frame source (docs/capability-authority-untyped.md §3.2, C0).
 //!
 //! Block layout (16-byte aligned size; the low bit of the size word is the
 //! "in use" flag):
@@ -39,9 +42,10 @@ use kernel_abi as abi;
 
 /// Static bootstrap pool carved from `.bss` by the ELF loader.
 pub const ALLOC_POOL_BYTES: usize = 32 * 1024;
-/// First virtual address the allocator grows into with `Runtime::Map`.
-/// Each task owns its own address space, so this absolute VA is fine unless
-/// the application maps over it (none of the shipped apps do).
+/// First virtual address the allocator grows into. Each task owns its own
+/// address space, so this absolute VA is fine unless the application maps
+/// over it (none of the shipped apps do; the loader windows, ROM, MMIO and
+/// thread groups all sit elsewhere).
 pub const ALLOC_GROW_VA: usize = 0x0780_0000;
 /// Heap ceiling: pool plus grown pages. ~256 KiB covers the MicroPython C heap
 /// budget (128 KiB) with headroom; tune per application.
@@ -49,10 +53,22 @@ pub const ALLOC_GROW_VA: usize = 0x0780_0000;
 /// C app images (rstiny-alloc staticlib carries debug symbols) inside the
 /// heap budget the supervisor grants; release images stay far below.
 pub const ALLOC_MAX_TOTAL: usize = 1024 * 1024;
-/// Bytes grown per `Runtime::Map` call: a page run keeps syscall pressure low.
+/// Bytes grown per page run: a run keeps syscall pressure low.
 pub const ALLOC_GROW_ROUND: usize = 16 * 1024;
 /// Maximum grown segments (each round appends exactly one).
 pub const ALLOC_MAX_SEGMENTS: usize = 16;
+
+/// Well-known capability slots of the *calling* task (same convention as the
+/// user library). Every task in the service chain receives its private Untyped
+/// budget in slot [`abi::INIT_UNTYPED`] and owns `INIT_CNODE`/`INIT_VSPACE`.
+const BUDGET: u64 = abi::INIT_UNTYPED;
+const CNODE: u64 = abi::INIT_CNODE;
+const VSPACE: u64 = abi::INIT_VSPACE;
+/// First CSpace slot the allocator retypes frames into. The slot cursor is
+/// private to this task; the base sits above every documented window (loader
+/// `LOADER_SLOT_BASE` + service strides, thread groups, service endpoints)
+/// and leaves ~5.5k slots for the heap ceiling of 1 MiB (256 pages + table).
+const SLOT_BASE: u64 = 60_000;
 
 const USED: usize = 1;
 /// Header overhead: [size|used : 8][padding : 8].
@@ -82,9 +98,11 @@ static mut SEGMENT_COUNT: usize = 0;
 /// Next VA to grow into and how much of the ceiling is already committed.
 static mut GROW_NEXT: usize = ALLOC_GROW_VA;
 static mut GROWN_BYTES: usize = 0;
-/// Cached slot of this task's TCB capability (from Runtime::Current), used as
-/// the Runtime::Map target; resolved once.
-static mut CURRENT_TCB: usize = 0;
+/// Next free CSpace slot for retyped frames, and whether the L3 table over
+/// the grow window is already mapped. Heap pages are never unmapped, so both
+/// only move forward.
+static mut NEXT_SLOT: u64 = SLOT_BASE + 1;
+static mut TABLE_MAPPED: bool = false;
 
 // ---- block primitives -----------------------------------------------------
 
@@ -199,55 +217,103 @@ unsafe fn take_free(need: usize) -> usize {
 
 // ---- growth ---------------------------------------------------------------
 
-/// Runtime::Map call: `map_vspace(current_task, va, len, R|W)`; frames are
-/// accounted against the task's budget untrusted region.
-unsafe fn runtime_map(va: usize, len: usize) -> Result<(), ()> {
-    let tcb = if ptr::addr_of!(CURRENT_TCB).read() != 0 {
-        ptr::addr_of!(CURRENT_TCB).read()
-    } else {
-        let reply = call(
-            abi::INIT_RUNTIME,
-            abi::RuntimeInvocation::Current as u64,
-            [0; 4],
-            0,
-        );
-        let label = reply.0 >> 12 & 0xF_FFFF_FFFF_FFFF;
-        if label != abi::OK {
-            return Err(());
-        }
-        let slot = reply.1 as usize;
-        ptr::addr_of_mut!(CURRENT_TCB).write(slot);
-        slot
-    };
-    let reply = call(
-        abi::INIT_RUNTIME,
-        abi::RuntimeInvocation::Map as u64,
-        [tcb as u64, va as u64, len as u64, 3],
-        4,
-    );
-    if reply.0 >> 12 & 0xF_FFFF_FFFF_FFFF == abi::OK {
-        Ok(())
-    } else {
-        Err(())
+/// Retype one object of `kind` from the task's budget into `slot`.
+unsafe fn retype(kind: u64, slot: u64) -> Result<(), ()> {
+    unsafe {
+        invoke(
+            BUDGET,
+            abi::Invocation::UntypedRetype as u64,
+            &[kind, 0, 0, 0, slot, 1],
+            &[CNODE],
+        )
+        .map(|_| ())
+    }
+}
+
+/// Map a retyped frame RW/NX at `va` in the task's own VSpace.
+unsafe fn map_frame(slot: u64, va: usize) -> Result<(), ()> {
+    unsafe {
+        invoke(
+            slot,
+            abi::Invocation::ArmPageMap as u64,
+            &[
+                va as u64,
+                abi::RIGHTS_READ | abi::RIGHTS_WRITE,
+                abi::VM_CACHEABLE | abi::VM_EXECUTE_NEVER,
+            ],
+            &[VSPACE],
+        )
+        .map(|_| ())
+    }
+}
+
+/// Delete a frame capability. Deletion unmaps the frame's recorded mapping
+/// and lets the kernel reclaim the frame with its derivation subtree.
+unsafe fn drop_frame(slot: u64) {
+    unsafe {
+        let _ = invoke(slot, abi::Invocation::CNodeDelete as u64, &[slot, 64], &[]);
     }
 }
 
 /// Map one fresh page run and insert it as a free block and a new segment.
-/// Returns 0 on failure.
+/// Every frame is retyped from the task's own budget and mapped with standard
+/// object operations; a failure deletes what this round created, leaving the
+/// heap and the budget watermark untouched. Returns 0 on failure.
 unsafe fn grow(need: usize) -> usize {
     let count = ptr::addr_of!(SEGMENT_COUNT).read();
     if count > ALLOC_MAX_SEGMENTS {
         return 0;
     }
     let ceiling = ALLOC_POOL_BYTES + ptr::addr_of!(GROWN_BYTES).read();
-    // Round up to the page; the map service maps page runs only and the
-    // 41 KiB-style requests (40 KiB argv allocation) must not be rejected.
+    // Round up to the page; large requests (40 KiB argv allocations) must not
+    // be rejected for rounding.
     let length = (need.max(ALLOC_GROW_ROUND) + 4095) & !4095;
     if ceiling + length > ALLOC_MAX_TOTAL || length % 4096 != 0 {
         return 0;
     }
     let va = ptr::addr_of!(GROW_NEXT).read();
-    if runtime_map(va, length).is_err() {
+    // One L3 page table covers the whole grow window (ALLOC_GROW_VA is
+    // 2 MiB aligned and ALLOC_MAX_TOTAL stays inside one 2 MiB region).
+    if !ptr::addr_of!(TABLE_MAPPED).read() {
+        if unsafe { retype(abi::ObjectType::PageTable as u64, SLOT_BASE) }.is_err() {
+            return 0;
+        }
+        // SAFETY: a freshly retyped table in this task's own address space.
+        if unsafe {
+            invoke(
+                SLOT_BASE,
+                abi::Invocation::ArmPageTableMap as u64,
+                &[ALLOC_GROW_VA as u64, abi::VM_CACHEABLE],
+                &[VSPACE],
+            )
+        }
+        .is_err()
+        {
+            unsafe { drop_frame(SLOT_BASE) };
+            return 0;
+        }
+        ptr::addr_of_mut!(TABLE_MAPPED).write(true);
+    }
+    let mut mapped: u64 = 0;
+    for index in 0..(length / 4096) {
+        let slot = ptr::addr_of!(NEXT_SLOT).read();
+        if unsafe { retype(abi::ObjectType::SmallPage as u64, slot) }.is_err() {
+            break;
+        }
+        if unsafe { map_frame(slot, va + index * 4096) }.is_err() {
+            unsafe { drop_frame(slot) };
+            break;
+        }
+        ptr::addr_of_mut!(NEXT_SLOT).write(slot + 1);
+        mapped += 1;
+    }
+    if mapped as usize != length / 4096 {
+        // Roll the partial run back: deletion unmaps each frame and makes it
+        // collectable, so neither the heap nor the budget records it.
+        for index in 0..mapped {
+            unsafe { drop_frame(SLOT_BASE + 1 + index) };
+        }
+        ptr::addr_of_mut!(NEXT_SLOT).write(SLOT_BASE + 1);
         return 0;
     }
     ptr::addr_of_mut!(GROW_NEXT).write(va + length);
@@ -413,25 +479,74 @@ unsafe fn ensure_initialized() {
 
 // ---- kernel invocation (svc #0, Call) -------------------------------------
 
-/// Fire one `svc #0` Call on `cap` with `word_len` message words (0..=4) and
-/// return (reply tag, mr0). Words beyond four would need the IPC buffer; the
-/// allocator only ever sends four.
-unsafe fn call(cap: u64, label: u64, words: [u64; 4], word_len: u64) -> (u64, u64) {
-    let mut tag = (label << 12) | word_len;
-    let mut mr0 = words[0];
+/// IPC buffer of the calling thread; the kernel publishes its address in the
+/// read-only `tpidrro_el0` register (same convention as the user library).
+unsafe fn ipc_buffer() -> *mut abi::IpcBuffer {
+    let address: usize;
+    // SAFETY: read-only system register read; the kernel owns the mapping.
+    unsafe {
+        core::arch::asm!(
+            "mrs {address}, tpidrro_el0",
+            address = out(reg) address,
+            options(nomem, nostack)
+        );
+    }
+    address as *mut abi::IpcBuffer
+}
+
+/// Fire one `svc #0` Call on `cap` and return the reply word. Words beyond the
+/// four register message registers and every capability travel through the
+/// task's IPC buffer (`Retype` carries six words plus the destination CNode).
+unsafe fn invoke(cap: u64, label: u64, args: &[u64], caps: &[u64]) -> Result<u64, ()> {
+    if args.len() > abi::MAX_MESSAGE_WORDS || caps.len() > abi::MAX_EXTRA_CAPS {
+        return Err(());
+    }
+    if args.len() > 4 || !caps.is_empty() {
+        let buffer = unsafe { ipc_buffer() };
+        if buffer.is_null() {
+            return Err(());
+        }
+        // SAFETY: the task's runtime owns this buffer; no same-address-space
+        // thread or signal reentry exists yet.
+        unsafe {
+            for (index, &word) in args.iter().enumerate().skip(4) {
+                core::ptr::addr_of_mut!((*buffer).msg)
+                    .cast::<u64>()
+                    .add(index)
+                    .write_volatile(word);
+            }
+            for (index, &slot) in caps.iter().enumerate() {
+                core::ptr::addr_of_mut!((*buffer).caps_or_badges)
+                    .cast::<u64>()
+                    .add(index)
+                    .write_volatile(slot);
+            }
+        }
+    }
+    let mut tag = abi::MessageInfo::new(label, caps.len(), args.len()).word();
+    let mut mr0 = args.first().copied().unwrap_or(0);
+    let mut mr1 = args.get(1).copied().unwrap_or(0);
+    let mut mr2 = args.get(2).copied().unwrap_or(0);
+    let mut mr3 = args.get(3).copied().unwrap_or(0);
+    // SAFETY: seL4-style Call; register assignments are the platform ABI.
     unsafe {
         core::arch::asm!(
             "svc #0",
             in("x7") abi::Syscall::Call as i64 as u64,
-            in("x0") cap,
+            inlateout("x0") cap => _,
             inlateout("x1") tag,
             inlateout("x2") mr0,
-            in("x3") words[1],
-            in("x4") words[2],
-            in("x5") words[3],
+            inlateout("x3") mr1,
+            inlateout("x4") mr2,
+            inlateout("x5") mr3,
         );
     }
-    (tag, mr0)
+    if abi::MessageInfo::from_word(tag).label() == abi::OK {
+        Ok(mr0)
+    } else {
+        let _ = (mr1, mr2, mr3);
+        Err(())
+    }
 }
 
 // ---- C ABI ----------------------------------------------------------------

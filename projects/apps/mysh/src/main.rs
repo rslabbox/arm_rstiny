@@ -49,8 +49,9 @@ const LINE_MAX: usize = 128;
 
 /// Task heap: rstiny-alloc's first-fit allocator (decision B), wrapped as the
 /// Rust global allocator so Vec/String share the same pool as C programs that
-/// link the staticlib. Grown pages are accounted against this task's budget
-/// via Runtime::Map; freed blocks are reused (no bump-style leaks).
+/// link the staticlib. Grown pages are retyped from this task's own Untyped
+/// budget (slot 32) and mapped with standard object operations; freed blocks
+/// are reused (no bump-style leaks).
 struct Heap;
 unsafe impl alloc::alloc::GlobalAlloc for Heap {
     unsafe fn alloc(&self, layout: alloc::alloc::Layout) -> *mut u8 {
