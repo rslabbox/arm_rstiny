@@ -99,11 +99,22 @@ pub mod elf;
 pub mod ipc;
 pub mod task;
 pub mod thread;
-pub use task::{Permissions, Task, TaskState};
+pub use task::Task;
 
-/// Sleep for at least the requested milliseconds; zero yields to ready tasks.
+/// Sleep for at least the requested milliseconds without a kernel primitive:
+/// poll the (informational) kernel clock and yield between polls, so the
+/// scheduler keeps running other ready tasks. Zero just yields once.
 pub fn sleep(milliseconds: u64) -> Result<(), Error> {
-    runtime(abi::RuntimeInvocation::Sleep, &[milliseconds]).map(|_| ())
+    if milliseconds == 0 {
+        return yield_now();
+    }
+    let deadline = clock_milliseconds()?.saturating_add(milliseconds);
+    loop {
+        yield_now()?;
+        if clock_milliseconds()? >= deadline {
+            return Ok(());
+        }
+    }
 }
 pub fn clock_milliseconds() -> Result<u64, Error> {
     runtime(abi::RuntimeInvocation::Clock, &[])
@@ -111,7 +122,10 @@ pub fn clock_milliseconds() -> Result<u64, Error> {
 pub fn available_frames() -> Result<usize, Error> {
     runtime(abi::RuntimeInvocation::AvailableFrames, &[]).map(|n| n as usize)
 }
-/// Exit and publish a completion value. Object capabilities govern final reclamation.
+/// Exit and publish a completion value. Restricted self-directed primitive
+/// (docs/capability-authority-untyped.md §3.1): it affects only the caller —
+/// services normally announce EXIT on their control endpoint instead and let
+/// the supervisor revoke them.
 pub fn exit(code: u64) -> ! {
     let _ = runtime(abi::RuntimeInvocation::Exit, &[code]);
     loop {
@@ -119,8 +133,9 @@ pub fn exit(code: u64) -> ! {
     }
 }
 
-/// Power off the machine (PSCI SYSTEM_OFF; QEMU terminates). Requires the
-/// Runtime capability. Never returns.
+/// Power off the machine (PSCI SYSTEM_OFF; QEMU terminates). Restricted
+/// primitive: PSCI is only reachable from EL1, so it stays a kernel extension
+/// rather than a userland service. Never returns.
 pub fn poweroff() -> ! {
     let _ = runtime(abi::RuntimeInvocation::Shutdown, &[]);
     loop {
@@ -133,6 +148,19 @@ pub fn yield_now() -> Result<(), Error> {
         core::arch::asm!("svc #0", in("x7") abi::Syscall::Yield as i64 as u64);
     }
     Ok(())
+}
+
+/// Unmap a range in the *calling* task's address space. Restricted primitive
+/// (Runtime::Unmap): self-directed only, needed because the kernel-mapped boot
+/// image pages (the root runtime's stack guard) have no frame capability to
+/// unmap through the standard `Page_Unmap` path.
+pub fn unmap_self(address: usize, length: usize) -> Result<(), Error> {
+    let current = runtime(abi::RuntimeInvocation::Current, &[])?;
+    runtime(
+        abi::RuntimeInvocation::Unmap,
+        &[current, address as u64, length as u64],
+    )
+    .map(|_| ())
 }
 
 /// Permanently park this call site. Use Task::suspend for resumable suspension.

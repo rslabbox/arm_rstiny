@@ -1,16 +1,16 @@
 //! ELF loading through Untyped, CNode, VSpace, PageTable, Page and TCB invocations.
-use crate::{Error, Task, abi, capability::*, runtime};
+use crate::{Error, Task, abi, capability::*};
 use rstiny_elf::Elf;
 use rstiny_protocol::ArgvBlock;
 
 const PAGE: usize = 4096;
 const STACK_SIZE: usize = 64 * 1024;
 
-fn empty_slot() -> Result<u64, Error> {
-    runtime(abi::RuntimeInvocation::FindEmptySlot, &[])
-}
-fn retype(allocator: &Untyped, kind: ObjectType) -> Result<u64, Error> {
-    let slot = empty_slot()?;
+/// Retype one object from `allocator` into the loader's own slot cursor. The
+/// cursor is private to this spawn (started at `slot_base`, clamped by
+/// [`LOADER_SLOT_STRIDE`]), so no kernel slot-search service is needed
+/// (docs/capability-authority-untyped.md §3.4).
+fn retype(allocator: &Untyped, kind: ObjectType, slot: u64) -> Result<u64, Error> {
     allocator.retype(
         kind,
         if kind == ObjectType::CNode {
@@ -102,8 +102,8 @@ pub unsafe fn spawn(image: &[u8], scratch: usize, source_untyped: u64) -> Result
     let _ = &cnode;
     let result = (|| {
         let tcb = retype_at(&allocator, ObjectType::Tcb, &mut loader_slot)?;
-        let space = CPtr(retype(&allocator, ObjectType::VSpace)?);
-        let child_node = CPtr(retype(&allocator, ObjectType::CNode)?);
+        let space = CPtr(retype(&allocator, ObjectType::VSpace, loader_slot())?);
+        let child_node = CPtr(retype(&allocator, ObjectType::CNode, loader_slot())?);
 
         // Assign this root before any page-table/frame invocation can use it.
         unsafe {
@@ -131,7 +131,7 @@ pub unsafe fn spawn(image: &[u8], scratch: usize, source_untyped: u64) -> Result
                     )
                 };
                 if map == Err(Error::FailedLookup) {
-                    let table = retype(&allocator, ObjectType::PageTable)?;
+                    let table = retype(&allocator, ObjectType::PageTable, loader_slot())?;
                     PageTable(CPtr(table)).map(CPtr(INIT_VSPACE), scratch & !(0x200000 - 1))?;
                     scratch_table = Some(table);
                     unsafe {
@@ -330,8 +330,8 @@ pub unsafe fn spawn_supervised(
     let _ = &cnode;
     let result = (|| {
         let tcb = retype_at(&allocator, ObjectType::Tcb, &mut loader_slot)?;
-        let space = CPtr(retype(&allocator, ObjectType::VSpace)?);
-        let child_node = CPtr(retype(&allocator, ObjectType::CNode)?);
+        let space = CPtr(retype(&allocator, ObjectType::VSpace, loader_slot())?);
+        let child_node = CPtr(retype(&allocator, ObjectType::CNode, loader_slot())?);
 
         // Assign this root before any page-table/frame invocation can use it.
         unsafe {
@@ -359,7 +359,7 @@ pub unsafe fn spawn_supervised(
                     )
                 };
                 if map == Err(Error::FailedLookup) {
-                    let table = retype(&allocator, ObjectType::PageTable)?;
+                    let table = retype(&allocator, ObjectType::PageTable, loader_slot())?;
                     PageTable(CPtr(table)).map(CPtr(INIT_VSPACE), scratch & !(0x200000 - 1))?;
                     scratch_table = Some(table);
                     unsafe {

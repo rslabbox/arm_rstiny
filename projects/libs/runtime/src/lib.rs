@@ -201,10 +201,5 @@ fn panic(info: &core::panic::PanicInfo<'_>) -> ! {
 /// references or active stack bytes, reserved by the entry macro.
 #[doc(hidden)]
 pub unsafe fn protect_stack(guard: usize) {
-    unsafe {
-        rstiny::Task::current()
-            .expect("root task")
-            .unmap(guard, abi::PAGE_SIZE as usize)
-    }
-    .expect("root stack guard");
+    rstiny::unmap_self(guard, abi::PAGE_SIZE as usize).expect("root stack guard");
 }
