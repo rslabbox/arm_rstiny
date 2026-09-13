@@ -76,12 +76,21 @@ pub(super) fn invoke(request: &Request) -> Result<Completion> {
             Some(with_store(|store| store.empty_slot(cspace))?)
         }
         n if n == R::Create as u64 => {
+            // The child's address space and every frame it starts with are
+            // billed to the caller-provided Untyped budget: managed creation
+            // has no implicit resource of its own (C1, §3.3).
+            request.require(0, 1)?;
+            let (budget, kind) = resolve(request.caps[0])?;
+            if kind != ObjectKind::Untyped {
+                return Err(INVALID_CAPABILITY);
+            }
+            let budget = budget.object;
             let task = api::create()?;
             let ipc = kernel_abi::USER_ADDRESS_LIMIT as usize - 4096;
             let result = (|| {
-                let space = create_vspace()?;
-                map_vspace(space, ipc, 4096, 3, true)?;
-                publish_task(task, space, ipc)
+                let space = create_vspace(Some(budget))?;
+                map_vspace(space, ipc, 4096, 3, true, Some(budget))?;
+                publish_task(task, space, ipc, Some(budget))
             })();
             if result.is_err() {
                 let _ = api::destroy(task);
@@ -165,8 +174,24 @@ pub(super) fn invoke(request: &Request) -> Result<Completion> {
             Some((super::available_untyped() / crate::memory::PAGE_SIZE) as u64)
         }
         n if n == R::Map as u64 => {
+            // Capability + ownership enforced: the caller names the target
+            // task with a writable TCB capability *and* supplies the Untyped
+            // budget every frame and page table is carved from (§3.3). No
+            // global region stands behind this call.
+            request.require(4, 1)?;
+            let (budget, kind) = resolve(request.caps[0])?;
+            if kind != ObjectKind::Untyped {
+                return Err(INVALID_CAPABILITY);
+            }
             let space = api::editable_vspace(tcb(a[0])?)?;
-            map_vspace(space, a[1] as usize, a[2] as usize, a[3], false)?;
+            map_vspace(
+                space,
+                a[1] as usize,
+                a[2] as usize,
+                a[3],
+                false,
+                Some(budget.object),
+            )?;
             None
         }
         n if n == R::Unmap as u64 => {

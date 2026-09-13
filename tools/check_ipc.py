@@ -88,9 +88,9 @@ def run(qemu, kernel):
             def child(words):
                 """A managed task with a code page; cap 140 is reserved for a
                 badged endpoint copy minted after creation."""
-                handle = c.runtime('create')
+                handle = c.runtime('create', caps=[32])
                 for address in (CODE, DATA, STACK):
-                    c.runtime('map', handle, address, PAGE, 3)
+                    c.runtime('map', handle, address, PAGE, 3, caps=[32])
                 code = struct.pack('<' + 'I' * len(words), *words)
                 write(g, ipc, code)
                 c.runtime('write', handle, CODE, ipc, 4 * len(words))
@@ -185,7 +185,7 @@ def run(qemu, kernel):
             assert g.reg('x3') == FAULT_VA, 'VMFault address'
             assert g.reg('x5') >> 26 == 0x24, 'VMFault FSR'
             assert c.runtime('status', faulty) == TASK_BLOCKED_FAULT
-            c.runtime('map', faulty, FAULT_VA, PAGE, 3)
+            c.runtime('map', faulty, FAULT_VA, PAGE, 3, caps=[32])
             c.sysc(0, REPLY)
             assert c.runtime('wait', faulty) == 77, 'repaired fault resumed'
 

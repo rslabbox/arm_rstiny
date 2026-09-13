@@ -73,9 +73,9 @@ def run(qemu, kernel):
             baseline = call('available')
 
             def task(code):
-                handle = call('create')
+                handle = call('create', caps=[32])
                 for address in (CODE, DATA, STACK):
-                    call('map', handle, address, 4096, 3)
+                    call('map', handle, address, 4096, 3, caps=[32])
                 write(gdb, buffer, struct.pack('<'+'I'*len(code), *code))
                 call('write', handle, CODE, buffer, 4*len(code))
                 call('protect', handle, CODE, 4096, 5)
@@ -171,6 +171,7 @@ def run(qemu, kernel):
             assert call('status', fault) == TASK_FAULTED
             destroy(fault)
 
+            client.call(2, 17, [32, 64])  # region-granular: Revoke returns the budget (C1)
             assert mappings(gdb) and call('available') == baseline
             assert proc.poll() is None
             print('    fpu: numerics fresh-state handover control-regs destroy-owner ubefault OK',

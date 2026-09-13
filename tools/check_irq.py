@@ -143,9 +143,9 @@ def run(qemu, kernel):
 
             def child(words):
                 """A managed task with a code page (see check_ipc.py)."""
-                handle = c.runtime('create')
+                handle = c.runtime('create', caps=[32])
                 for address in (CODE, DATA, STACK):
-                    c.runtime('map', handle, address, PAGE, 3)
+                    c.runtime('map', handle, address, PAGE, 3, caps=[32])
                 code = struct.pack('<' + 'I' * len(words), *words)
                 write(g, ipc, code)
                 c.runtime('write', handle, CODE, ipc, 4 * len(words))
@@ -237,6 +237,7 @@ def run(qemu, kernel):
                 c.runtime('destroy', handle)
             delete(NTFN_BADGED)
             delete(NTFN)
+            c.call(2, 17, [32, 64])  # region-granular: Revoke returns the budget (C1)
             assert c.runtime('available') == baseline, 'IRQ test leaked memory'
             assert proc.poll() is None
         except Exception:

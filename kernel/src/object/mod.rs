@@ -182,9 +182,6 @@ pub(crate) struct Store {
     boot_untyped: Vec<ObjectId>,
     /// Physical pages of the boot-module archive, in ascending order.
     boot_modules: Vec<usize>,
-    /// Untyped region backing the transitional managed runtime. Boot objects
-    /// use the kernel frame pool until `init_root` selects this region.
-    managed_untyped: Option<ObjectId>,
 }
 static STORE: SingleCore<Store> = SingleCore::new(Store {
     objects: ObjectTable::new(),
@@ -194,7 +191,6 @@ static STORE: SingleCore<Store> = SingleCore::new(Store {
     caps: 0,
     boot_untyped: Vec::new(),
     boot_modules: Vec::new(),
-    managed_untyped: None,
 });
 
 pub(crate) fn with_store<T>(f: impl FnOnce(&mut Store) -> T) -> T {
@@ -482,8 +478,8 @@ impl Store {
         permissions: u64,
         pinned: bool,
         loaded: Option<usize>,
+        untyped: Option<ObjectId>,
     ) -> Result<()> {
-        let untyped = self.managed_untyped;
         let watermark = match untyped {
             Some(untyped) => Some(self.untyped(untyped)?.free_offset()),
             None => None,
@@ -675,14 +671,20 @@ pub(crate) fn edit_vspace<T>(
 ) -> Result<T> {
     with_store(|store| operation(store.vspace_mut(id)?).map_err(|e| e as u64))
 }
+/// Map `len` bytes at `va` in `id`. `untyped` names the budget the new frames
+/// and page tables are carved from; `None` uses the kernel boot pool and is
+/// reserved for the boot loader's own address space.
 pub(crate) fn map_vspace(
     id: ObjectId,
     va: usize,
     len: usize,
     permissions: u64,
     pinned: bool,
+    untyped: Option<ObjectId>,
 ) -> Result<()> {
-    let result = with_store(|store| store.map_vspace(id, va, len, permissions, pinned, None));
+    let result = with_store(|store| {
+        store.map_vspace(id, va, len, permissions, pinned, None, untyped)
+    });
     if result.is_err() {
         // A failed mapping may have allocated frames before the failure; they
         // are unreferenced and must be reclaimed by the next sweep.
@@ -697,13 +699,12 @@ pub(crate) fn vspace_frame_at(id: ObjectId, va: usize) -> Result<FrameRef> {
     with_store(|store| store.vspace(id)?.frame_at(va).map_err(|e| e as u64))
 }
 
-/// Create a standalone VSpace object. The caller must bind it to a capability
-/// or thread before collection runs.
-pub(crate) fn create_vspace() -> Result<ObjectId> {
-    with_store(|store| {
-        let untyped = store.managed_untyped;
-        store.new_vspace(untyped)
-    })
+/// Create a standalone VSpace object. `untyped == None` carves the three
+/// page-table frames from the kernel boot pool (kernel loader only); a user
+/// request must name the Untyped budget the space is billed to. The caller
+/// must bind it to a capability or thread before collection runs.
+pub(crate) fn create_vspace(untyped: Option<ObjectId>) -> Result<ObjectId> {
+    with_store(|store| store.new_vspace(untyped))
 }
 
 pub(crate) fn init_root(task: u64, vspace: ObjectId, ipc: usize, untyped_start: u64) -> ObjectId {
@@ -745,20 +746,13 @@ pub(crate) fn init_root(task: u64, vspace: ObjectId, ipc: usize, untyped_start: 
                 .expect("root capability");
         }
         // Publish every boot-partitioned physical region as a contiguous range
-        // of Untyped capabilities. The largest ordinary region also backs the
-        // transitional managed runtime, so its allocations are accounted.
-        let mut managed: Option<(ObjectId, u8)> = None;
+        // of Untyped capabilities. Every later allocation — userland objects,
+        // allocator growth, service budgets — is billed to one of them; there
+        // is no global region behind the kernel's back.
         for (index, &id) in store.boot_untyped.clone().iter().enumerate() {
             store
                 .insert_cap(cnode, untyped_start + index as u64, id, RIGHTS_ALL, 0, 0)
                 .expect("root Untyped capability");
-            if let Object::Untyped(untyped) = store.objects.get(id).expect("boot Untyped") {
-                if !untyped.is_device()
-                    && managed.is_none_or(|(_, bits)| untyped.size_bits() > bits)
-                {
-                    managed = Some((id, untyped.size_bits()));
-                }
-            }
         }
         // Publish the boot-module archive pages as read-only Frame caps so
         // the root task can map and parse its own boot modules.
@@ -775,17 +769,21 @@ pub(crate) fn init_root(task: u64, vspace: ObjectId, ipc: usize, untyped_start: 
                 )
                 .expect("root module capability");
         }
-        // The largest ordinary region also backs the transitional managed
-        // runtime, so its allocations are billed like any other Untyped use.
-        store.managed_untyped = managed.map(|(id, _)| id);
         store.managed.insert(task);
         cnode
     })
 }
 
 /// Managed tasks receive an isolated CSpace. Authority is represented by caps,
-/// never inferred from a user's integer matching a global task ID.
-pub(crate) fn publish_task(task: u64, vspace: ObjectId, ipc: usize) -> Result<u64> {
+/// never inferred from a user's integer matching a global task ID. The child's
+/// TCB and CNode are billed to `untyped` like any other object; `None` (kernel
+/// boot path only) leaves them as unowned boot metadata.
+pub(crate) fn publish_task(
+    task: u64,
+    vspace: ObjectId,
+    ipc: usize,
+    untyped: Option<ObjectId>,
+) -> Result<u64> {
     let parent = api::current_cspace();
     let root = vspace_root(vspace)?;
     let (slot, child_cspace) = with_store(|store| {
@@ -795,13 +793,58 @@ pub(crate) fn publish_task(task: u64, vspace: ObjectId, ipc: usize) -> Result<u6
         {
             return Err(NO_MEMORY);
         }
+        // Reserve the nominal budgets first; a later failure rewinds the
+        // watermark, so no half-billed task survives.
+        let watermark = match untyped {
+            Some(untyped) => Some(store.untyped(untyped)?.free_offset()),
+            None => None,
+        };
+        let reserved = |store: &mut Store, untyped: ObjectId| -> Result<Vec<ObjectOwner>> {
+            let mut owners = Vec::new();
+            for (bytes, align) in [
+                (TCB_BYTES, TCB_ALIGN),
+                (CNODE_SLOT_BYTES << CNODE_BITS, PAGE_SIZE),
+            ] {
+                let (_, offset) = store.untyped_reserve(untyped, bytes, align)?;
+                owners.push(ObjectOwner {
+                    untyped,
+                    offset,
+                    size: bytes,
+                });
+            }
+            Ok(owners)
+        };
+        let owners = match (untyped, watermark) {
+            (Some(untyped), Some(offset)) => match reserved(store, untyped) {
+                Ok(owners) => owners,
+                Err(error) => {
+                    if let Some(Object::Untyped(region)) = store.objects.get_mut(untyped) {
+                        region.reset_to(offset);
+                    }
+                    return Err(error);
+                }
+            },
+            _ => Vec::new(),
+        };
         let slot = store.empty_slot(parent)?;
         let runtime = store.cap(parent, INIT_RUNTIME)?;
-        let tcb = store.objects.insert(Object::Tcb(task)).ok_or(NO_MEMORY)?;
-        let cnode = store
-            .objects
-            .insert(Object::CNode(CNode::new()))
-            .ok_or(NO_MEMORY)?;
+        let tcb = match owners.get(0) {
+            Some(owner) => store
+                .objects
+                .insert_owned(Object::Tcb(task), Some(*owner))
+                .ok_or(NO_MEMORY)?,
+            None => store.objects.insert(Object::Tcb(task)).ok_or(NO_MEMORY)?,
+        };
+        let cnode = match owners.get(1) {
+            Some(owner) => store
+                .objects
+                .insert_owned(Object::CNode(CNode::new()), Some(*owner))
+                .ok_or(NO_MEMORY)?,
+            None => store
+                .objects
+                .insert(Object::CNode(CNode::new()))
+                .ok_or(NO_MEMORY)?,
+        };
         store.insert_cap(parent, slot, tcb, RIGHTS_ALL, 0, 0)?;
         let source = store.cap(parent, slot)?;
         store.insert_cap(cnode, INIT_TCB, tcb, RIGHTS_ALL, source.serial, 0)?;
@@ -1018,17 +1061,6 @@ pub(crate) fn collect() {
                     _ => None,
                 })
                 .sum();
-            // The managed runtime has no per-object free list: once it owns no
-            // objects, its whole region can be rewound and reused.
-            if let Some(managed) = store.managed_untyped
-                && store.objects.children(managed).is_empty()
-                && let Some(Object::Untyped(region)) = store.objects.get_mut(managed)
-                && region.free_offset() > 0
-            {
-                log::info!("DBG collect: managed region reset");
-                region.reset();
-                region.clear();
-            }
             (tasks, changed)
         });
         for task in tasks {
@@ -1099,7 +1131,7 @@ pub(crate) fn boot_map_loaded(
     len: usize,
     permissions: u64,
 ) -> Result<()> {
-    with_store(|store| store.map_vspace(vspace, va, len, permissions, false, Some(physical)))
+    with_store(|store| store.map_vspace(vspace, va, len, permissions, false, Some(physical), None))
 }
 pub(crate) fn boot_map(
     vspace: ObjectId,
@@ -1108,7 +1140,7 @@ pub(crate) fn boot_map(
     permissions: u64,
     pinned: bool,
 ) -> Result<()> {
-    with_store(|store| store.map_vspace(vspace, va, len, permissions, pinned, None))
+    with_store(|store| store.map_vspace(vspace, va, len, permissions, pinned, None, None))
 }
 pub(crate) fn boot_write(vspace: ObjectId, va: usize, bytes: &[u8]) -> Result<()> {
     with_store(|store| {

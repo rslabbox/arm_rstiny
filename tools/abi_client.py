@@ -60,8 +60,10 @@ class Client:
         assert g.reg('x0') == 0 and g.reg('cpsr') & 15 == 0
         return actual, g.reg('x2')
 
-    def runtime(self, name, *args, status=0):
-        return self.call(17, RUNTIME[name], args, status=status)
+    def runtime(self, name, *args, caps=(), status=0):
+        # Managed Map/Create are billed to an explicitly passed Untyped cap
+        # (docs/capability-authority-untyped.md C1); 32 is the first boot one.
+        return self.call(17, RUNTIME[name], args, caps, status=status)
 
     def suspend(self, cap):
         return self.call(cap, 11)

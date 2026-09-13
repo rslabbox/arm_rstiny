@@ -36,15 +36,18 @@ def run(qemu, kernel):
             assert call('current') == 1
             root = 1
             baseline = call('available')
-            child = call('create')
-            assert call('available') == baseline - 5 # VSpace plus IPC mapping
-            call('map', 65535, DATA, PAGE, 3, status=6)
+            child = call('create', caps=[32])
+            # VSpace plus IPC mapping is 5 pages; the child TCB (1 KiB) and
+            # CNode (64 KiB nominal, page aligned) are billed to the budget
+            # too (C1 accounting): 5 pages + 1 KiB + 16 pages = 22 pages.
+            assert call('available') == baseline - 22
+            call('map', 65535, DATA, PAGE, 3, status=6, caps=[32])
             for address,length,rights in [(0,PAGE,3),(DATA+1,PAGE,3),(DATA,0,3),
                                           (DATA,PAGE,7),(0x8000000,PAGE,3),(2**64-4096,PAGE,3)]:
-                call('map',child,address,length,rights,status=1)
-            call('map',child,DATA,2*PAGE,3)
+                call('map',child,address,length,rights,status=1, caps=[32])
+            call('map',child,DATA,2*PAGE,3, caps=[32])
             free = call('available')
-            call('map',child,DATA,PAGE,3,status=8)
+            call('map',child,DATA,PAGE,3,status=8, caps=[32])
             assert call('available') == free
             payload = bytes(range(32))
             write(gdb, buffer, payload)
@@ -72,30 +75,32 @@ def run(qemu, kernel):
                 call(method,root,*args,32)
                 assert gdb.memory(buffer+8,32) == payload
             call('unmap',child,DATA,2*PAGE)
-            call('map',child,DATA,PAGE,3)
+            call('map',child,DATA,PAGE,3, caps=[32])
             call('read',child,DATA,buffer,64)
             assert gdb.memory(buffer,64) == bytes(64)
             call('destroy',child)
+            client.call(2, 17, [32, 64])  # region-granular: Revoke returns the budget (C1)
             assert call('available') == baseline
             call('status',child,status=6)
 
             # Quota/exhaustion rollback, including the managed IPC page. The
             # managed region is large enough for three 1023-page tasks but not a
             # fourth, so the failed mapping must be atomic.
-            tasks = [call('create') for _ in range(4)]
+            tasks = [call('create', caps=[32]) for _ in range(4)]
             for task in tasks[:3]:
-                call('map',task,CODE,1023*PAGE,3)
+                call('map',task,CODE,1023*PAGE,3, caps=[32])
             before = call('available')
-            call('map',tasks[3],CODE,1023*PAGE,3,status=10)
+            call('map',tasks[3],CODE,1023*PAGE,3,status=10, caps=[32])
             assert call('available') == before
             call('read',tasks[3],CODE,buffer,8,status=6)
-            call('map',tasks[3],CODE,1024*PAGE,3,status=10)
+            call('map',tasks[3],CODE,1024*PAGE,3,status=10, caps=[32])
             for task in tasks: call('destroy',task)
+            client.call(2, 17, [32, 64])  # region-granular: Revoke returns the budget (C1)
             assert call('available') == baseline
 
             def task(code):
-                handle = call('create')
-                for address in (CODE,DATA,STACK): call('map',handle,address,PAGE,3)
+                handle = call('create', caps=[32])
+                for address in (CODE,DATA,STACK): call('map',handle,address,PAGE,3, caps=[32])
                 write(gdb,buffer,struct.pack('<'+'I'*len(code),*code))
                 call('write',handle,CODE,buffer,4*len(code))
                 call('protect',handle,CODE,PAGE,5)
@@ -115,7 +120,7 @@ def run(qemu, kernel):
             call('start',a,CODE,STACK+PAGE-1,0,status=1)
             client.resume(a,status=3)
             start(a); start(b)
-            call('map',a,DATA+PAGE,PAGE,3,status=3)
+            call('map',a,DATA+PAGE,PAGE,3,status=3, caps=[32])
             call('sleep',30)
             client.suspend(a); client.suspend(b)
             call('read',a,DATA,buffer,8); count_a = gdb.word(buffer)
@@ -131,6 +136,7 @@ def run(qemu, kernel):
             call('read',a,DATA,buffer,8)
             assert gdb.word(buffer) not in (0,0xfeed)
             call('destroy',a); client.resume(b); call('destroy',b)
+            client.call(2, 17, [32, 64])  # region-granular: Revoke returns the budget (C1)
             assert call('available') == baseline
 
             sleeper = task(invoke_code('sleep',[100])+invoke_code('exit',[43]))
@@ -139,6 +145,7 @@ def run(qemu, kernel):
             client.resume(sleeper)
             assert call('wait',sleeper) == 43 and call('clock')-before >= 100
             call('destroy',sleeper)
+            client.call(2, 17, [32, 64])  # region-granular: Revoke returns the budget (C1)
             assert call('available') == baseline
 
             # Cross-CSpace authority must be granted explicitly. The waiter gets
@@ -153,10 +160,11 @@ def run(qemu, kernel):
             client.resume(waiter)
             assert call('wait',waiter) == 42
             call('destroy',waiter); call('destroy',target)
+            client.call(2, 17, [32, 64])  # region-granular: Revoke returns the budget (C1)
             assert call('available') == baseline
 
             # A number naming a cap in root's CSpace has no authority in a child.
-            victim = call('create')
+            victim = call('create', caps=[32])
             denied = task(invoke_code('status',[victim])+[0xd34cfc22]+invoke_code('exit',[('reg',2)]))
             start(denied)
             assert call('wait',denied) == 6
@@ -171,23 +179,28 @@ def run(qemu, kernel):
                 assert call('wait',fault) >> 26 == ec
                 assert call('status',fault) == 3
                 call('destroy',fault)
-                assert call('available') == baseline
+            client.call(2, 17, [32, 64])  # region-granular: Revoke returns the budget (C1)
+            assert call('available') == baseline
 
             before_stacks = mappings(gdb)
             sleepers = [task(invoke_code('sleep',[60000])+[0x14000000]) for _ in range(31)]
             before_failure = call('available')
-            call('create',status=10)
+            call('create', caps=[32], status=10)
             assert call('available') == before_failure
             for sleeper in sleepers:
                 start(sleeper); wait_state(sleeper,5)
             assert len(before_stacks.keys()-mappings(gdb).keys()) == 62
             for sleeper in sleepers: call('destroy',sleeper)
+            client.call(2, 17, [32, 64])  # region-granular: Revoke returns the budget (C1)
             assert mappings(gdb) == before_stacks and call('available') == baseline
             for _ in range(260):
                 exited = task(invoke_code('exit',[42]))
                 start(exited)
                 assert call('wait',exited) == 42
                 call('destroy',exited)
+                # The budget watermark is region-granular: without a Revoke
+                # each iteration would keep its 22 pages until the end.
+                client.call(2, 17, [32, 64])
             assert mappings(gdb) == before_stacks and call('available') == baseline
             assert proc.poll() is None
         except Exception:

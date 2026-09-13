@@ -81,11 +81,11 @@ fn kernel() {
 fn user() {
     let before = memory::available_frames();
     {
-        let first = crate::object::create_vspace().unwrap();
-        let second = crate::object::create_vspace().unwrap();
+        let first = crate::object::create_vspace(None).unwrap();
+        let second = crate::object::create_vspace(None).unwrap();
         let base = 0x1000000;
-        crate::object::map_vspace(first, base, 2 * PAGE_SIZE, 3, false).unwrap();
-        crate::object::map_vspace(second, base, PAGE_SIZE, 3, false).unwrap();
+        crate::object::map_vspace(first, base, 2 * PAGE_SIZE, 3, false, None).unwrap();
+        crate::object::map_vspace(second, base, PAGE_SIZE, 3, false, None).unwrap();
         let va = VirtAddr::from_usize(base + 37);
         let mapping = crate::object::with_vspace(first, |space| space.translate(va)).unwrap();
         let frame = crate::object::with_vspace(first, |space| space.frame_at(base)).unwrap();
