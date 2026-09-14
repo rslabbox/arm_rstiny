@@ -110,6 +110,16 @@ void port_main(void) {
     #endif
     mp_init();
 
+    // sys.argv = shell tokens verbatim: argv[0] is the script path, the rest
+    // are the script's arguments (docs/micropython-port.md 决策, P2.3). Empty
+    // argv means no script was named and the REPL starts below.
+    #if MICROPY_PY_SYS_ARGV
+    mp_obj_list_init(MP_OBJ_TO_PTR(mp_sys_argv), 0);
+    for (int i = 0; i < g_argc; i++) {
+        mp_obj_list_append(mp_sys_argv, mp_obj_new_str(g_argv[i], strlen(g_argv[i])));
+    }
+    #endif
+
     int code = 0;
     #if MICROPY_ENABLE_COMPILER
     if (g_argc > 0) {

@@ -26,6 +26,14 @@ void NORETURN __fatal_error(const char *msg) {
     }
 }
 
+#if MICROPY_FLOAT_IMPL != MICROPY_FLOAT_IMPL_NONE
+// parsenum.c's MICROPY_FLOAT_C_FUN(nan)(""); freestanding: no libm to link.
+double nan(const char *tag) {
+    (void)tag;
+    return __builtin_nan("");
+}
+#endif
+
 #ifndef NDEBUG
 void MP_WEAK __assert_func(const char *file, int line, const char *func, const char *expr) {
     (void)file;

@@ -157,8 +157,10 @@ check:
 	python3 tools/check_relocation.py --qemu $(QEMU)
 	python3 tools/check_block.py --qemu $(QEMU)
 	python3 tools/check_fat32.py --qemu $(QEMU)
+	python3 tools/check_fs2.py --qemu $(QEMU)
 	python3 tools/check_appmgr.py --qemu $(QEMU)
 	python3 tools/check_mysh.py --qemu $(QEMU)
+	python3 tools/check_python.py --qemu $(QEMU)
 	python3 tools/check_services.py --qemu $(QEMU)
 	python3 tools/check_restart.py --qemu $(QEMU)
 

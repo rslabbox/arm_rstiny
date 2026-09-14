@@ -5,8 +5,9 @@
 use super::{Error, abi};
 use core::arch::asm;
 
-/// Message words carried beyond the four register MRs.
-pub const MAX_WORDS: usize = 16;
+/// Message words carried beyond the four register MRs. 128 covers the kernel
+/// wire maximum (120 payload words), so a full fs long-name fits one message.
+pub const MAX_WORDS: usize = 128;
 
 /// Where the kernel lands caps carried by an incoming message: a CNode slot in
 /// the receiver's own CSpace. The spec is sticky in the IPC buffer (the kernel

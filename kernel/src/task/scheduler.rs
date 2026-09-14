@@ -7,8 +7,7 @@ use crate::utils::single_core::SingleCore;
 use crate::{
     arch::{
         kernel::thread::{
-            TrapFrame,
-            fpu,
+            TrapFrame, fpu,
             kernel_context::{self, KernelContext},
             user::UserContext,
         },
@@ -90,6 +89,9 @@ pub(super) struct Task {
     caller: Option<Caller>,
     restart_pc: u64,
     fault_msg: Option<FaultMsg>,
+    /// Scheduling priority; 0 is the default so a system without explicit
+    /// `TcbSetPriority` calls schedules exactly like the old FIFO (P1.1).
+    priority: u8,
 }
 impl Task {
     const fn empty() -> Self {
@@ -113,6 +115,7 @@ impl Task {
             caller: None,
             restart_pc: 0,
             fault_msg: None,
+            priority: 0,
         }
     }
     fn terminal(&self) -> bool {
@@ -280,7 +283,7 @@ impl Scheduler {
     fn take_next(&mut self) -> Option<ActiveTask> {
         self.reap_orphans();
         self.wake_sleepers();
-        let index = self.queue.pop()?;
+        let index = self.queue.pop_best(|slot| self.tasks[slot].priority)?;
         assert!(self.current.is_none());
         let task = &mut self.tasks[index];
         assert_eq!(task.state, TASK_READY);

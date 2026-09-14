@@ -189,7 +189,7 @@ boot 分区把这些 MMIO 区间作为**设备 Untyped** 发布（当前只发�
 ### 7.3 目录与文件
 
 - 目录项 32 字节：`name[11]`、`attr` (`0x0B`)、`FstClusHI` (`0x14`)、`FstClusLO` (`0x1A`)、`file_size` (`0x1C`)。
-- 阶段 D 只支持 **8.3 短名**；跳过 `0xE5`（删除）、`.`/`..`、`attr & 0x0F == LFN`。
+- 阶段 D 只支持 **8.3 短名**；跳过 `0xE5`（删除）、`.`/`..`、`attr & 0x0F == LFN`。fs v2（2026-09 P2.1）起启用 `hadris-fat` 的 `lfn` 特性：`OPEN`/`STAT` 按长名匹配（大小写不敏感），`READDIR` 仍列 8.3 短名（LFN 文件以短别名出现）。
 - `attr & 0x10` 为目录；`attr & 0x08` 为卷标。
 - 读文件：按簇链逐簇读入共享缓冲，校验 `offset + length <= file_size`、簇边界与扇区对齐。
 
@@ -211,16 +211,26 @@ boot 分区把这些 MMIO 区间作为**设备 Untyped** 发布（当前只发�
 | `CAPACITY` = 0x402 | client → server | 无 | 扇区总数 |
 | `INFO` = 0x403 | client → server | 无 | `sector_size`、`max_sectors` |
 
-### 8.2 FS 协议（`fs_ep`）
+### 8.2 FS 协议（`fs_ep`，v2 = 2026-09 P2.1）
+
+v2 相比 v1 的变化：多 client 并发绑定（绑定表按 **endpoint badge** 区分，每个
+client 一张私有句柄表 + 一页私有共享缓冲，BIND 回应授予属于该 client 的那页）、
+长名经 IPC buffer（`OPEN`/`STAT` 的 `mr0` = 名字长度，名字字节按每 MR 8 字节
+打包，上限 255 字节，依赖 P0 的长消息正确性）。服务端接受 v1 `BIND` 并按
+client 请求的版本回应（≤2），旧客户端（MicroPython C 端）零改动继续工作。
+badge 语义：badge 0（匿名）允许**一个**绑定槽——即 v1 的单 client 世界，
+未改造的服务（appmgr 等 init 依赖授予的 unbadged cap）继续工作；第二个匿名
+绑定被拒。真正并发的 client 必须各自 mint badge（mysh 自身 badge 1，spawn 的
+子进程统一 badge 2，同一时刻至多一个子进程）。
 
 | label | 方向 | 参数 | 返回 |
 | --- | --- | --- | --- |
-| `BIND` = 0x500 | client → server | 共享缓冲 Frame cap | `max_bytes` |
-| `OPEN` = 0x501 | client → server | 8.3 短名（打包进 2 个 MR） | `file_id`、`size` |
-| `READ` = 0x502 | client → server | `file_id`、`offset`、`length` | 实际读取字节数 |
-| `CLOSE` = 0x503 | client → server | `file_id` | 状态 |
-| `STAT` = 0x504 | client → server | 短名 | `size`、`is_dir` |
-| `READDIR` = 0x505 | client → server | `start`（起始条目下标） | `status`、`count`、`next`（0 = 结束）；条目为 `DirEntry` 数组，写入共享缓冲 |
+| `BIND` = 0x500 | client → server | `mr0` = 协议版本（1 或 2） | `mr0` = 服务版本（≤ 请求值）、`mr1` = 缓冲字节数；附带该 client 的共享缓冲 Frame cap |
+| `OPEN` = 0x501 | client → server | `mr0` = 名字长度，`mr1..` = 名字（v1 限 8.3 短名 2 个 MR） | `file_id`、`size` |
+| `READ` = 0x502 | client → server | `file_id`、`offset`、`length` | 实际读取字节数（写入调用者的共享缓冲页） |
+| `CLOSE` = 0x503 | client → server | `file_id`（仅本 client 的句柄表） | 状态 |
+| `STAT` = 0x504 | client → server | 名字（同 OPEN） | `size`、`is_dir` |
+| `READDIR` = 0x505 | client → server | `start`（起始条目下标） | `status`、`count`、`next`（0 = 结束）；条目为 `DirEntry` 数组（8.3 短名；LFN 文件以其短别名出现），写入调用者的共享缓冲页 |
 
 ## 9. 共享内存、DMA 与安全边界
 
@@ -273,9 +283,9 @@ boot 分区把这些 MMIO 区间作为**设备 Untyped** 发布（当前只发�
 1. 磁盘布局：裸 FAT32（建议）vs GPT/MBR。
 2. 共享缓冲：server 持有、client 只读映射（建议）vs client 提供。
 3. IRQ：设备 IRQ → Notification（已落地，[irq.md](irq.md) §13）；预绑定验收路径（`BLK_TEST`）保留轮询作驱动级自检。
-4. **fs v2（解释器驱动的登记）**：解释器 import/脚本读写需要长名（≥255）、多绑定 client（或按 badge 多缓冲）、更强的目录遍历；现状单 client / ≤13 字节短名 / 4 句柄不够。不做时先用 frozen 标准库规避，见 [interpreter-app.md](interpreter-app.md) 决策 E。
+4. ~~**fs v2（解释器驱动的登记）**：解释器 import/脚本读写需要长名（≥255）、多绑定 client（或按 badge 多缓冲）、更强的目录遍历；现状单 client / ≤13 字节短名 / 4 句柄不够。~~ 已实施（2026-09 P2.1）：长名经 IPC buffer、按 badge 的多 client 绑定表 + 每 client 句柄表与私有共享页，见 §8.2；更强的目录遍历（长名 READDIR、写支持）仍开放。
 4. appmgr 与 init 的边界：应用清单放 `init.cfg` 还是 appmgr 自己的配置。
-5. 文件名：先只支持 8.3 短名，LFN 后置。
+5. ~~文件名：先只支持 8.3 短名，LFN 后置。~~ LFN 读取已随 fs v2 启用（2026-09 P2.1，`lfn` 特性）；LFN 的 READDIR 展示与写路径仍后置。
 
 ## 14. 参考
 

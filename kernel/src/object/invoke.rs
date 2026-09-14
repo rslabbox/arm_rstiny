@@ -324,6 +324,16 @@ fn tcb_invoke(target: u64, request: &Request) -> Result<Completion> {
             }
         }
         n if n == Invocation::TcbResume as u64 => api::resume(target)?,
+        n if n == Invocation::TcbSetPriority as u64 => {
+            // seL4 `TCB_SetPriority` (label 7), simplified: the invoked TCB cap
+            // is its own authority — no separate authority cap or per-thread
+            // max-priority bookkeeping (docs/sel4-abi.md). The value applies at
+            // the next scheduling point; queued entries are re-ordered by the
+            // ready queue, not here.
+            request.require(1, 0)?;
+            let priority = u8::try_from(a[0]).map_err(|_| RANGE_ERROR)?;
+            api::set_priority(target, priority)?;
+        }
         n if n == Invocation::TcbConfigure as u64 => {
             request.require(4, 3)?;
             // `a[0]` is the fault-endpoint slot, resolved in this task's own

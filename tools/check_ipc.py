@@ -239,6 +239,27 @@ def run(qemu, kernel):
             assert c.sysc(152, SEND)[1] >> 12 == 3, 'read-only endpoint send'
             assert c.sysc(0, REPLY)[1] >> 12 == 2, 'reply without a caller'
 
+            # An over-long message (length > MAX_MESSAGE_WORDS = 120) errors
+            # its own sender at the syscall boundary instead of overflowing
+            # the kernel IPC assembly buffer, and never reaches a receiver.
+            truncated = child(sysipc(140, (0x55 << 12) | 127, CALL, 41) +
+                              mov_reg(2, 1) + invoke_code('exit', [('reg', 2)]))
+            node = c.runtime('cspace', truncated)
+            mint(node, 140, 130)
+            start(truncated)
+            assert c.runtime('wait', truncated) == (7 << 12) | 1, 'overlong send failed truncated'
+            assert c.nbrecv(120) == (0, 0, 0), 'overlong message must not deliver'
+
+            # A Call without GrantReply can never be replied to, so it errors
+            # immediately instead of parking the caller on a dead relation.
+            mute = child(sysipc(140, 0, CALL, 41) + mov_reg(2, 1) +
+                         invoke_code('exit', [('reg', 2)]))
+            node = c.runtime('cspace', mute)
+            mint(node, 140, 130, rights=1)
+            start(mute)
+            assert c.runtime('wait', mute) == (3 << 12) | 1, 'grant-less call failed permission'
+            assert c.nbrecv(120) == (0, 0, 0), 'grant-less call must not deliver'
+
             # Untyped children: split, region revoke, nested teardown, limits.
             retype(0, 160, bits=20)
             retype(2, 161, alloc=160)

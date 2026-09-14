@@ -21,9 +21,10 @@ from pathlib import Path
 
 
 def check_name(name):
-    stem, _, extension = name.partition('.')
-    if not stem.isalnum() or len(stem) > 8 or len(extension) > 3:
-        raise SystemExit(f'not an 8.3 name: {name}')
+    # 8.3 names stay the norm; longer names are stored as FAT long names by
+    # mcopy and read back via hadris (fs v2, docs/roadmap-next.md P2.1).
+    if not name or len(name) > 255 or '/' in name:
+        raise SystemExit(f'not a usable FAT name: {name}')
 
 
 def bpb_fields(image):

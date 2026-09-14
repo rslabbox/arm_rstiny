@@ -5,11 +5,13 @@ Boots the stock topology (console/block/fs/mysh) with `python.elf` and a
 script `APP.PY` on the FAT32 disk, then drives the REPL over the serial line:
 
   1. `./python` -> a `MicroPython v1.24.x` banner and the `>>>` prompt;
-     `print(1+2)` evaluates to `3`, and Ctrl-D ends the REPL so mysh reaps
-     `[mysh] ./python exited: 0`;
+     `print(1+2)` evaluates to `3`, `print(1.5*2.0, 7//2)` to `3.0 3`
+     (P2.2: hardware FPU + double floats), and Ctrl-D ends the REPL so mysh
+     reaps `[mysh] ./python exited: 0`;
   2. `./python app` -> the fs-backed script path (决策 I: slot 53 fs grant +
-     ArgvBlock for "app"): `print('hi from disk')` and `print(6*7)` reach the
-     console, then a clean `exited: 0`;
+     ArgvBlock for "app"): `print('hi from disk')`, `print(6*7)`, a float
+     print, the math module, and `sys.argv[0] == 'app'` (P2.3 convention)
+     reach the console, then a clean `exited: 0`;
   3. `exit` powers the machine off.
 
 Every keystroke is sent immediately after its trigger output appears (the
@@ -51,10 +53,14 @@ def run(qemu, kernel, disk):
     stages = [
         (b'[rstiny ~]$: ', b'./python\n', b'MicroPython v'),
         (b'>>> ', b'print(1+2)\r', b'3'),
+        (b'>>> ', b'print(1.5*2.0, 7//2)\r', b'3.0 3'),
         (b'>>> ', b'\x04', b'[mysh] ./python exited: 0'),   # Ctrl-D ends REPL
         (b'[mysh] ./python exited: 0', b'./python app\n', b'hi from disk'),
         (b'hi from disk', b'', b'42'),                        # second script print
-        (b'[mysh] ./python exited: 0', b'exit\n', b'[mysh] bye'),
+        (b'42', b'', b'3.0'),                                 # float arithmetic
+        (b'3.0', b'', b'math ok'),                            # math module (P2.2)
+        (b'math ok', b'', b'argv0=app'),                      # sys.argv (P2.3)
+        (b'argv0=app', b'exit\n', b'[mysh] bye'),
     ]
     try:
         text = b''
@@ -98,10 +104,14 @@ def run(qemu, kernel, disk):
         assert 'MicroPython v1.24' in decoded, 'REPL banner missing'
         assert '>>> ' in decoded, 'REPL prompt missing'
         assert 'print(1+2)' in decoded, 'print(1+2) echo missing'
+        assert '3.0 3' in decoded, 'REPL float arithmetic missing (P2.2)'
         assert decoded.count('[mysh] ./python exited: 0') >= 2, \
             'both runs must be reaped with exit code 0'
         assert 'hi from disk' in decoded, 'script print did not reach the console'
         assert '42' in decoded, 'script arithmetic print missing'
+        assert '3.0' in decoded, 'script float print missing (P2.2)'
+        assert 'math ok' in decoded, 'math module missing (P2.2)'
+        assert 'argv0=app' in decoded, 'sys.argv[0] must be the script path (P2.3)'
         assert 'kernel panic' not in decoded and 'panicked' not in decoded
         try:
             rc = proc.wait(timeout=20)
@@ -130,7 +140,14 @@ def main():
     parser.add_argument('--level', choices=('off', 'info'), default=None)
     args = parser.parse_args()
     root = Path(__file__).resolve().parent.parent
-    script = b"print('hi from disk')\nprint(6*7)\n"
+    script = (b"print('hi from disk')\n"
+              b"print(6*7)\n"
+              b"print(1.5 * 2.0)\n"
+              b"import math\n"
+              b"if math.sqrt(2.0) * math.sqrt(2.0) > 1.99 and abs(-2.5) == 2.5:\n"
+              b"    print('math ok')\n"
+              b"import sys\n"
+              b"print('argv0=' + sys.argv[0])\n")
     modes = [args.mode] if args.mode else ('debug', 'release')
     levels = [args.level] if args.level else ('off', 'info')
     for mode in modes:
@@ -153,7 +170,8 @@ def main():
             print(f'CHECK python {mode} LOG={level}: REPL + ./python app + poweroff',
                   flush=True)
             run(args.qemu, kernel, disk)
-    print('PASS: the MicroPython port runs the REPL and disk scripts.', flush=True)
+    print('PASS: the MicroPython port runs the REPL, double floats + math, '
+          'and disk scripts with sys.argv[0] = script path.', flush=True)
 
 
 if __name__ == '__main__':

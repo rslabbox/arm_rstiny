@@ -7,6 +7,7 @@ pub enum Invocation {
     TcbReadRegisters = 2,
     TcbWriteRegisters = 3,
     TcbConfigure = 5,
+    TcbSetPriority = 7,
     TcbSetIpcBuffer = 9,
     TcbSetSpace = 10,
     TcbSuspend = 11,

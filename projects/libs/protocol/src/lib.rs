@@ -157,23 +157,36 @@ pub mod block {
 /// File payloads travel through the shared buffer frame granted in `BIND`.
 pub mod fs {
     pub const BASE: u64 = 0x500;
-    pub const PROTOCOL_VERSION: u64 = 1;
-    /// mr0 = version. Reply: mr0 = version, mr1 = buffer bytes.
+    /// v2 (P2.1): long names over the IPC buffer and per-client shared buffer
+    /// pages. The server accepts v1 BINDs too and echoes the client's version,
+    /// so v1-only clients (the C fs client in the MicroPython port) keep
+    /// working unchanged.
+    pub const PROTOCOL_VERSION: u64 = 2;
+    /// mr0 = version. Reply: mr0 = served version (≤ requested), mr1 = buffer
+    /// bytes. The reply grants this client's private shared-buffer page.
     pub const BIND: u64 = BASE + 0x00;
-    /// mr0 = name length, mr1 = packed 8.3 short name. Reply: mr0 = file id,
-    /// mr1 = file size in bytes.
+    /// mr0 = name length, mr1.. = name bytes packed 8 per message word (v2:
+    /// up to [`MAX_NAME_LEN`] bytes via the IPC buffer; v1 kept the 8.3 short
+    /// name within two words). Reply: mr0 = file id, mr1 = file size in bytes.
     pub const OPEN: u64 = BASE + 0x01;
     /// mr0 = file id, mr1 = offset, mr2 = length. Reply: mr0 = status,
-    /// mr1 = bytes delivered into the shared buffer.
+    /// mr1 = bytes delivered into the caller's shared-buffer page.
     pub const READ: u64 = BASE + 0x02;
     /// mr0 = file id. Reply: mr0 = status.
     pub const CLOSE: u64 = BASE + 0x03;
-    /// mr0 = name length, mr1 = packed 8.3 short name. Reply: mr0 = size,
-    /// mr1 = is_dir.
+    /// mr0 = name length, mr1.. = name bytes packed as in OPEN. Reply:
+    /// mr0 = size, mr1 = is_dir.
     pub const STAT: u64 = BASE + 0x04;
     /// mr0 = start entry index. Reply: mr0 = status, mr1 = entries written
-    /// into the shared buffer, mr2 = next index (0 = no more).
+    /// into the caller's shared-buffer page, mr2 = next index (0 = no more).
+    /// Entries carry 8.3 short names; long names still have short aliases.
     pub const READDIR: u64 = BASE + 0x05;
+
+    /// Longest name a v2 OPEN/STAT may carry (FAT long-name maximum).
+    pub const MAX_NAME_LEN: usize = 255;
+    /// Concurrently bound clients the server serves, each with a private
+    /// shared-buffer page and its own file-handle table.
+    pub const MAX_CLIENTS: usize = 4;
 
     /// One directory entry written into the shared buffer by `READDIR`.
     #[repr(C)]

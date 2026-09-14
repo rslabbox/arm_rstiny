@@ -107,23 +107,31 @@ _start(x0 = 参数页 VA)            ; loader 已设 SP=栈顶,段/DSS 已就绪
 - 崩溃:解释器 fault → 经 control_ep 投给 mysh,`[mysh] ./python spawn failed
   / exited` 按既有路径处理;做 init 服务(可选项)时 `restart = on-failure`。
 
-## 7. 整数模式（可选浮点）
+## 7. 浮点（2026-09 P2.2 已启用；整数模式可回退）
 
 EL0 浮点已在内核侧落地：`UserContext` 附带 528 字节 FP 现场，CPACR_EL1 按任务
 惰性放行，首次执行 FP 指令时陷入保存/恢复（见 [FP/SIMD 上下文与惰性切换](fpu.md)）。
-本端口仍保持 `MICROPY_PY_BUILTINS_FLOAT = 0`（整数 Python）：
+P2.2 据此开启了浮点：
 
-- 微观层面 `MICROPY_FLOAT_IMPL` 相关宏不启用；
-- `mpconfigport.h` 里显式关闭 float；如需启用浮点，前置条件（FP/SIMD 上下文）
-  已实现，再为 MicroPython 选择 float 实现并接入即可，不再是内核级硬门槛；
-- 测试脚本只能用整数语义（`1+2`，字节串等），验收断言里全是整数输出。
+- `mpconfigport.h`：`MICROPY_FLOAT_IMPL = MICROPY_FLOAT_IMPL_DOUBLE`（double，
+  配合目标三元组的 soft-float ABI）、`MICROPY_PY_BUILTINS_FLOAT = 1`、
+  `MICROPY_PY_MATH = 1`（配 vendored `lib/libm_dbl`，经端口自带的最小
+  `libm_shim/math.h` 编译，绕开 glibc `<math.h>` 与 musl 派生内部符号的冲突）；
+- 端口 Makefile 放行 FP/NEON 指令（内核惰性 FPU 现场会接住 `-Os` 向量化），
+  `make FP=0` 回退整数模式（恢复 `-mgeneral-regs-only` + `FLOAT_IMPL_NONE`）；
+- `stubs.c` 补了 freestanding 的 `nan()`（parsenum 需要）；
+- `check_python.py` 加浮点断言（REPL `print(1.5*2.0, 7//2)` → `3.0 3`；脚本
+  `1.5 * 2.0` → `3.0`、`math.sqrt`/`abs` → `math ok`）。
 
 ## 8. 脚本执行(`./python app.py`)
 
 1. mysh:`execute("python app.py")` 解析 token → `run_program("python", args=["app.py"])`;
    `Supervision.args` 非空 ⇒ loader 写 `ArgvBlock`(决策 H),并在槽 53 复制
    `fs_ep` 给子进程(决策 I)。
-2. rt0 组装 `argv = ["python","app.py"]` → `port_main(2, argv)`。
+2. rt0 把 `ArgvBlock` 原样组装为 `argv = ["app.py", …]` → `port_main(argc, argv)`
+   （P2.3 约定：argv 即 `./python` 之后的 token 序列，**无程序名前缀**，
+   `argv[0]` = 脚本路径；解释器自己知道它是 python）。`port_main` 把 argv
+   同步进 `sys.argv`（`MICROPY_PY_SYS_ARGV`），脚本内 `sys.argv[0]` 即脚本路径。
 3. `port_main` 用 **fs client**(槽 53,`OPEN("APP.PY")→READ→CLOSE`)把整个脚本
    读进 C 堆缓冲区(≤ 64 KB,超出报 `OverflowError` 语义)。
 4. 内存中执行:`mp_parse(src, MP_PARSE_FILE_INPUT)` → `mp_compile` →

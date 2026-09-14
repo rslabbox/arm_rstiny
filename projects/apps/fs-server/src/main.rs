@@ -2,8 +2,10 @@
 #![no_main]
 //! fs-server: a read-only FAT32 service on top of the block protocol
 //! (docs/disk-driver.md section 7), built on the maintained `hadris-fat`
-//! crate. One bound client at a time; file data is served through a
-//! server-owned shared buffer frame granted on BIND.
+//! crate. Protocol v2 (docs/roadmap-next.md P2.1): several concurrently bound
+//! clients, each with a private shared-buffer page and its own file-handle
+//! table, and long names (up to 255 bytes) carried through the IPC buffer.
+//! v1 clients (short 8.3 names) keep working unchanged.
 
 extern crate alloc;
 
@@ -22,16 +24,28 @@ use rstiny_runtime::entry;
 use rstiny_server::{Service, logln};
 
 // One 2 MiB window with a single L3 from the budget covers the block device's
-// shared buffer and the buffer this service grants to its own client.
+// shared buffer and one buffer page per fs client.
 const WINDOW_VA: usize = 0x0400_0000;
 const CLIENT_BUF_VA: usize = WINDOW_VA; // block's shared buffer (received)
-const SHARE_VA: usize = WINDOW_VA + 0x1000; // frame granted to fs clients
+const SHARE_VA: usize = WINDOW_VA + 0x1000; // first per-client page
 const TABLE_SLOT: u64 = 44;
 const RECV_SLOT: u64 = 60; // landing slot for block's BIND cap transfer
-const SHARE_SLOT: u64 = 61; // frame granted to the fs client on BIND
+const SHARE_SLOT: u64 = 61; // first frame granted to an fs client on BIND
 const MAX_FILES: usize = 4;
+const MAX_CLIENTS: usize = fs::MAX_CLIENTS as usize;
 const SECTOR_SIZE: u64 = 512;
 const SECTORS_PER_READ: u64 = 8;
+
+/// One bound client: its badge, its granted shared-buffer page and its own
+/// file-handle table, so concurrent clients cannot read each other's handles
+/// or clobber each other's buffers. The table lives on the bump heap: with
+/// the `lfn` feature a `FileEntry` is ~580 bytes (inline UTF-16 long name),
+/// and four clients of those would not fit main's stack frame.
+struct Client {
+    badge: u64,
+    share_va: usize,
+    files: alloc::boxed::Box<[Option<FileEntry>; MAX_FILES]>,
+}
 
 /// Bump allocator over a fixed BSS pool: hadris-fat path names need owned
 /// strings, and nothing is freed before the supervisor tears the task down.
@@ -127,9 +141,11 @@ impl IoSeek for BlockDevice {
 }
 
 /// Extract a file name packed into the message registers (8 bytes per MR).
+/// v2 names reach [`fs::MAX_NAME_LEN`] bytes through the IPC buffer; the
+/// kernel checks the receive side, so `word()` sees every message word.
 fn name_from_words(received: &rstiny::ipc::Received) -> Option<Vec<u8>> {
     let length = received.word(0) as usize;
-    if length == 0 || length > 12 + 1 || length > 2 * 8 {
+    if length == 0 || length > fs::MAX_NAME_LEN + 1 {
         return None;
     }
     let mut name = Vec::with_capacity(length);
@@ -166,12 +182,19 @@ fn main(argument: Argument) -> ! {
     let _ = dep_count;
     let cnode = CNode(CPtr(INIT_CNODE));
     let vspace = CPtr(INIT_VSPACE);
-    // The covering L3 and the client-shared frame come from the budget.
+    // The covering L3 and one client-shared frame per served client come from
+    // the budget.
     if Untyped(CPtr(INIT_UNTYPED))
         .retype(ObjectType::PageTable, 0, cnode.0, TABLE_SLOT, 1)
         .is_err()
         || Untyped(CPtr(INIT_UNTYPED))
-            .retype(ObjectType::SmallPage, 0, cnode.0, SHARE_SLOT, 1)
+            .retype(
+                ObjectType::SmallPage,
+                0,
+                cnode.0,
+                SHARE_SLOT,
+                MAX_CLIENTS as u64,
+            )
             .is_err()
     {
         logln!(service, "[fs] cannot budget the fs structures");
@@ -180,18 +203,21 @@ fn main(argument: Argument) -> ! {
     // SAFETY: mappings exclusive to this task; the shared frames have no
     // cached aliases on either side.
     unsafe {
-        if PageTable(CPtr(TABLE_SLOT))
+        let mut mapped = PageTable(CPtr(TABLE_SLOT))
             .map(vspace, WINDOW_VA & !0x1F_FFFF)
-            .is_err()
-            || Page(CPtr(SHARE_SLOT))
-                .map(
-                    vspace,
-                    SHARE_VA,
-                    RIGHTS_READ | RIGHTS_WRITE,
-                    VM_CACHEABLE | VM_EXECUTE_NEVER,
-                )
-                .is_err()
-        {
+            .is_ok();
+        for index in 0..MAX_CLIENTS {
+            mapped = mapped
+                && Page(CPtr(SHARE_SLOT + index as u64))
+                    .map(
+                        vspace,
+                        SHARE_VA + index * 0x1000,
+                        RIGHTS_READ | RIGHTS_WRITE,
+                        VM_CACHEABLE | VM_EXECUTE_NEVER,
+                    )
+                    .is_ok();
+        }
+        if !mapped {
             logln!(service, "[fs] cannot map the fs window");
             service.exit(3);
         }
@@ -277,8 +303,8 @@ fn main(argument: Argument) -> ! {
         }
     }
 
-    let mut files: [Option<FileEntry>; MAX_FILES] = core::array::from_fn(|_| None);
-    let mut bound: Option<u64> = None;
+    // Per-client state: badge, granted shared page, private handle table.
+    let mut clients: [Option<Client>; MAX_CLIENTS] = core::array::from_fn(|_| None);
     loop {
         let Ok(received) = ipc::recv(self_ep) else {
             continue;
@@ -286,22 +312,52 @@ fn main(argument: Argument) -> ! {
         match received.label {
             fs::BIND => {
                 let version = received.word(0);
-                if version != fs::PROTOCOL_VERSION {
+                // v2 serves long names and per-client buffers; v1 clients keep
+                // their exact wire behaviour. Negotiate down to what the
+                // client asked for so old clients accept the reply.
+                if version == 0 || version > fs::PROTOCOL_VERSION {
                     let _ = ipc::reply(status::ERROR, &[0]);
                     continue;
                 }
-                let reply =
-                    ipc::reply_cap(status::OK, &[fs::PROTOCOL_VERSION, 0x1000], &[SHARE_SLOT]);
+                let Some(slot) = clients.iter_mut().position(|slot| slot.is_none()) else {
+                    let _ = ipc::reply(status::ERROR, &[0]);
+                    continue;
+                };
+                // A badge names the client in the binding table. An unbadged
+                // (badge 0) caller is admitted as the single anonymous client —
+                // exactly the v1 single-client world, so unmodified v1
+                // services keep binding — but a second one would be
+                // indistinguishable from the first and is refused: concurrent
+                // clients must mint their own badges (mysh: badge 1, its
+                // children: badge 2).
+                if received.badge == 0
+                    && clients.iter().flatten().any(|client| client.badge == 0)
+                {
+                    let _ = ipc::reply(status::ERROR, &[0]);
+                    continue;
+                }
+                let share_slot = SHARE_SLOT + slot as u64;
+                let share_va = SHARE_VA + slot * 0x1000;
+                let reply = ipc::reply_cap(status::OK, &[version, 0x1000], &[share_slot]);
                 if reply.is_ok() {
-                    bound = Some(received.badge);
-                    logln!(service, "[fs] client 0x{:x} bound", received.badge);
+                    clients[slot] = Some(Client {
+                        badge: received.badge,
+                        share_va,
+                        files: alloc::boxed::Box::new(core::array::from_fn(|_| None)),
+                    });
+                    logln!(
+                        service,
+                        "[fs] client 0x{:x} bound as #{}",
+                        received.badge,
+                        slot
+                    );
                 }
             }
             fs::OPEN => {
-                if bound != Some(received.badge) {
+                let Some(client) = client_by_badge_mut(&mut clients, received.badge) else {
                     let _ = ipc::reply(status::ERROR, &[0]);
                     continue;
-                }
+                };
                 let Some(name) = name_from_words(&received) else {
                     let _ = ipc::reply(status::ERROR, &[0]);
                     continue;
@@ -310,31 +366,32 @@ fn main(argument: Argument) -> ! {
                     let _ = ipc::reply(status::ERROR, &[0]);
                     continue;
                 };
-                let Some(slot) = files.iter_mut().position(|slot| slot.is_none()) else {
+                let Some(slot) = client.files.iter_mut().position(|slot| slot.is_none()) else {
                     let _ = ipc::reply(status::ERROR, &[0]);
                     continue;
                 };
-                files[slot] = Some(entry.clone());
-                let _ = ipc::reply(status::OK, &[slot as u64, entry.len()]);
+                let size = entry.len();
+                client.files[slot] = Some(entry);
+                let _ = ipc::reply(status::OK, &[slot as u64, size]);
             }
             fs::READ => {
-                if bound != Some(received.badge) {
+                let Some(client) = client_by_badge_mut(&mut clients, received.badge) else {
                     let _ = ipc::reply(status::ERROR, &[0]);
                     continue;
-                }
+                };
+                let share_va = client.share_va;
                 let file_id = received.word(0) as usize;
                 let offset = received.word(1);
                 let length = received.word(2) as usize;
-                let Some(Some(entry)) = files.get_mut(file_id) else {
+                let Some(Some(entry)) = client.files.get_mut(file_id) else {
                     let _ = ipc::reply(status::ERROR, &[0]);
                     continue;
                 };
-                let entry = entry.clone();
                 if length == 0 || length > 0x1000 {
                     let _ = ipc::reply(status::ERROR, &[0]);
                     continue;
                 }
-                let Ok(mut reader) = volume.read_file(&entry) else {
+                let Ok(mut reader) = volume.read_file(entry) else {
                     let _ = ipc::reply(status::ERROR, &[0]);
                     continue;
                 };
@@ -342,10 +399,10 @@ fn main(argument: Argument) -> ! {
                     let _ = ipc::reply(status::ERROR, &[0]);
                     continue;
                 }
-                // SAFETY: SHARE_VA is exclusively mapped; the client reads it
-                // only after this reply arrives.
+                // SAFETY: the caller's shared page is exclusively mapped here
+                // and the client reads it only after this reply arrives.
                 let buffer =
-                    unsafe { core::slice::from_raw_parts_mut(SHARE_VA as *mut u8, length) };
+                    unsafe { core::slice::from_raw_parts_mut(share_va as *mut u8, length) };
                 match reader.read(buffer) {
                     Ok(read) => {
                         let _ = ipc::reply(status::OK, &[read as u64]);
@@ -356,8 +413,12 @@ fn main(argument: Argument) -> ! {
                 }
             }
             fs::CLOSE => {
+                let Some(client) = client_by_badge_mut(&mut clients, received.badge) else {
+                    let _ = ipc::reply(status::ERROR, &[0]);
+                    continue;
+                };
                 let file_id = received.word(0) as usize;
-                if let Some(slot) = files.get_mut(file_id) {
+                if let Some(slot) = client.files.get_mut(file_id) {
                     *slot = None;
                 }
                 let _ = ipc::reply(status::OK, &[]);
@@ -377,16 +438,16 @@ fn main(argument: Argument) -> ! {
                 }
             }
             fs::READDIR => {
-                if bound != Some(received.badge) {
+                let Some(client) = client_by_badge_mut(&mut clients, received.badge) else {
                     let _ = ipc::reply(status::ERROR, &[0]);
                     continue;
-                }
+                };
                 let start = received.word(0) as usize;
                 let capacity = fs::DIR_ENTRIES_PER_PAGE;
-                // SAFETY: SHARE_VA is exclusively mapped; the client reads it
-                // only after this reply arrives.
+                // SAFETY: the caller's shared page is exclusively mapped here
+                // and the client reads it only after this reply arrives.
                 let records = unsafe {
-                    core::slice::from_raw_parts_mut(SHARE_VA as *mut fs::DirEntry, capacity)
+                    core::slice::from_raw_parts_mut(client.share_va as *mut fs::DirEntry, capacity)
                 };
                 let mut written = 0usize;
                 let mut index = 0usize;
@@ -453,7 +514,8 @@ fn lookup(volume: &FatVolume<BlockDevice>, name: &[u8]) -> Option<FileEntry> {
     for entry in dir.entries() {
         let Ok(entry) = entry else { continue };
         // FAT names are case-insensitive: `hello` matches a short name stored
-        // as `HELLO` (and vice versa).
+        // as `HELLO` (and vice versa). `entry.name()` yields the long name
+        // when the directory carries an LFN record (P2.1).
         if entry.name().as_bytes().eq_ignore_ascii_case(name)
             && entry.as_entry().is_some_and(|file| file.is_file())
         {
@@ -461,4 +523,11 @@ fn lookup(volume: &FatVolume<BlockDevice>, name: &[u8]) -> Option<FileEntry> {
         }
     }
     None
+}
+
+fn client_by_badge_mut(clients: &mut [Option<Client>], badge: u64) -> Option<&mut Client> {
+    clients
+        .iter_mut()
+        .flatten()
+        .find(|client| client.badge == badge)
 }

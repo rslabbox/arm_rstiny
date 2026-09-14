@@ -7,8 +7,9 @@ import subprocess
 import tempfile
 from check_kernel import Gdb, build, boot_image, mappings
 from check_fatboot import write
+from check_ipc import IpcClient, SEND, RECV, SVC
 from elf_image import parse_elf, root_layout
-from abi_client import Client, mov, invoke_code
+from abi_client import mov, invoke_code
 
 CODE, DATA, STACK = 0x1000000, 0x1100000, 0x1200000
 PAGE = 4096
@@ -31,7 +32,7 @@ def run(qemu, kernel):
         try:
             gdb = Gdb(tmp / 'gdb', proc)
             gdb.run_to(entry)
-            client = Client(gdb, entry, buffer)
+            client = IpcClient(gdb, entry, buffer)
             call = client.runtime
             assert call('current') == 1
             root = 1
@@ -146,6 +147,75 @@ def run(qemu, kernel):
             client.call(2, 17, [32, 64])  # region-granular: Revoke returns the budget (C1)
             assert call('available') == baseline
 
+            # Priority scheduling (P1.1). Workers block on an endpoint, are
+            # woken back-to-back, and then spin on the wall clock — the wake
+            # windows hold in both build modes. A raised sibling must run to
+            # completion — starved peer silent the whole time — where the FIFO
+            # control below finishes the earlier worker first.
+            def retype_object(kind, slot):
+                client.call(32, 1, [kind, 0, 0, 0, slot, 1], [2])
+            def bind_caps(handle, signal_slot, signal_badge):
+                # Child CNode slots: 141 = go endpoint, 140 = badged signal.
+                node = call('cspace', handle)
+                client.call(node, 21, [141, 64, 205, 64, 15, 0], [2])
+                client.call(node, 21, [140, 64, signal_slot, 64, 15, signal_badge], [2])
+            def clock_spin(ms):
+                # now in x2, deadline = first now + ms, spin until it passes.
+                add = 0x91000000 | (ms << 10) | (2 << 5) | 11  # add x11, x2, #ms
+                return (invoke_code('clock') + [add] +
+                        invoke_code('clock') + [0xEB0B005F, 0x54FFFEEB])
+            def gated_worker(signal_slot, badge, ms, code):
+                return (mov(0, 141) + mov(7, RECV) + [SVC] + clock_spin(ms) +
+                        mov(0, signal_slot) + mov(7, SEND) + [SVC] +
+                        invoke_code('exit', [code]))
+            def wait_signal(slot, badge, what):
+                seen = (0, 0, 0)
+                for _ in range(100):
+                    seen = client.nbrecv(slot)
+                    if seen[0]:
+                        break
+                    call('sleep', 10)
+                assert seen[0] == badge, (what, seen)
+
+            retype_object(2, 205)                  # the go endpoint
+            retype_object(3, 200); retype_object(3, 201)
+            low = task(gated_worker(140, 7, 200, 11))
+            high = task(gated_worker(140, 5, 40, 22))
+            bind_caps(low, 200, 7); bind_caps(high, 201, 5)
+            client.call(high, 7, [256], status=4)  # priority above u8: RangeError
+            client.call(high, 7, [1])              # TCB_SetPriority(high) = 1
+            client.call(32, 7, [1], status=3)      # only a TCB carries the authority
+            client.copy(2, 202, high, rights=2)
+            client.call(202, 7, [1], status=3)     # WRITE required
+            start(low); start(high)
+            client.sysc(205, SEND)                 # wake low (runs one slice)
+            client.sysc(205, SEND)                 # wake high: preempts low
+            wait_signal(201, 5, 'raised sibling did not signal first')
+            assert client.nbrecv(200)[0] == 0, 'starved peer must not have signalled'
+            assert call('wait', high) == 22
+            assert call('wait', low) == 11
+            call('destroy', high); call('destroy', low)
+            client.call(2, 17, [32, 64])
+            assert call('available') == baseline
+
+            # Control: equal priorities keep FIFO order — the earlier worker
+            # finishes (and signals) while the later one is still spinning.
+            retype_object(2, 205)                  # Revoke(32) above took the endpoint
+            retype_object(3, 203); retype_object(3, 204)
+            first = task(gated_worker(140, 9, 100, 33))
+            second = task(gated_worker(140, 10, 300, 44))
+            bind_caps(first, 203, 9); bind_caps(second, 204, 10)
+            start(first); start(second)
+            client.sysc(205, SEND)
+            client.sysc(205, SEND)
+            wait_signal(203, 9, 'FIFO peer did not signal first')
+            assert client.nbrecv(204)[0] == 0, 'later peer must still be spinning'
+            assert call('wait', first) == 33
+            assert call('wait', second) == 44
+            call('destroy', second); call('destroy', first)
+            client.call(2, 17, [32, 64])
+            assert call('available') == baseline
+
             sleeper = task(invoke_code('sleep',[100])+invoke_code('exit',[43]))
             before = call('clock'); start(sleeper); client.suspend(sleeper)
             assert call('status',sleeper) == 2
@@ -226,6 +296,6 @@ def main():
             kernel = build(mode,level,False,managed=True)
             print(f'CHECK capability runtime {mode} LOG={level}',flush=True)
             run(args.qemu,kernel)
-    print('PASS: capability scope/transfer; memory rollback/recycling; timer preemption; suspended wait completion; faults; guarded stack reclamation.',flush=True)
+    print('PASS: capability scope/transfer; memory rollback/recycling; timer preemption; priority preemption with FIFO peer control; suspended wait completion; faults; guarded stack reclamation.',flush=True)
 
 if __name__ == '__main__': main()

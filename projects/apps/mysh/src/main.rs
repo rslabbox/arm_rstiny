@@ -30,6 +30,7 @@ const FS_BUF_VA: usize = 0x0400_0000; // fs shared buffer, granted on BIND
 const SCRATCH_VA: usize = 0x07E0_0000; // loader alias while spawning a child
 const TABLE_SLOT: u64 = 44; // L3 covering FS_BUF_VA
 const FS_RECV_SLOT: u64 = 60; // landing slot for the fs BIND cap transfer
+const FS_SELF_SLOT: u64 = 54; // mysh's own badged fs client cap
 const CHILD_BUDGET_SLOT: u64 = 90; // sub-Untyped carved for a child
 const CHILD_BUDGET_BITS: u64 = 20; // 1 MiB per child
 // Largest program the shell will load from disk; the C app (minic) links
@@ -43,6 +44,12 @@ const CHILD_BUDGET: u64 = 32;
 /// fs client endpoint, copied into the child's slot 53 on request only
 /// (interpreter-app.md 决策 I; arg-taking programs get it, plain runs do not).
 const CHILD_FS: u64 = 53;
+/// fs v2 client identities (P2.1): the server's binding table keys on the
+/// endpoint badge, so each concurrent client mints a distinct badge onto the
+/// unbadged dependency cap — the shell itself uses badge 1, every spawned
+/// child shares badge 2 (the shell runs one child at a time).
+const FS_SELF_BADGE: u64 = 1;
+const FS_CHILD_BADGE: u64 = 2;
 
 const PROMPT: &[u8] = b"[rstiny ~]$: ";
 const LINE_MAX: usize = 128;
@@ -106,7 +113,7 @@ fn main(argument: Argument) -> ! {
         service.exit(4);
     }
     logln!(service, "[mysh] ready");
-    repl(&service, fs_ep)
+    repl(&service, FS_SELF_SLOT)
 }
 
 /// Map the fs shared buffer and bind the fs service.
@@ -119,7 +126,16 @@ fn bind_fs(fs_ep: u64) -> Result<(), Error> {
         index: FS_RECV_SLOT,
         depth: 64,
     })?;
-    let reply = ipc::call_cap(fs_ep, fs::BIND, &[fs::PROTOCOL_VERSION], &[])?;
+    // The fs server's v2 binding table identifies clients by endpoint badge
+    // (P2.1): mint this shell's own identity onto the unbadged dependency cap.
+    cnode.mint(
+        FS_SELF_SLOT,
+        CPtr(INIT_CNODE),
+        fs_ep,
+        RIGHTS_ALL,
+        FS_SELF_BADGE,
+    )?;
+    let reply = ipc::call_cap(FS_SELF_SLOT, fs::BIND, &[fs::PROTOCOL_VERSION], &[])?;
     if reply.label != status::OK || reply.word(0) != fs::PROTOCOL_VERSION {
         return Err(Error::FailedLookup);
     }
@@ -219,9 +235,11 @@ fn execute(service: &Service, fs_ep: u64, line: &str) -> bool {
         "hello" => run_program(service, fs_ep, "hello", &[]),
         other => match other.strip_prefix("./") {
             Some(stem) => {
-                // Remaining tokens become the child's argv (决策 H): the loader
-                // appends an ArgvBlock to the parameter page; the program's
-                // rt0 assembles `argv[]` with the program name in `[0]`.
+                // The tokens after `./name` become the child's argv verbatim
+                // (决策 H, P2.3 convention): the loader appends an ArgvBlock to
+                // the parameter page and the shell does NOT prepend the program
+                // name — argv[0] is the first token (for script runners that is
+                // the script path; the program knows its own name).
                 let args: alloc::vec::Vec<&str> = parts.collect();
                 run_program(service, fs_ep, stem, &args)
             }
@@ -233,10 +251,11 @@ fn execute(service: &Service, fs_ep: u64, line: &str) -> bool {
 
 /// Validate a `./name` token. The name is opened literally; the FAT server
 /// resolves it case-insensitively, so `./hello` finds a file stored as
-/// `HELLO` (the usual 8.3 short-name form).
+/// `HELLO` (the usual 8.3 short-name form). Long names work too since fs v2
+/// (P2.1) carries them through the IPC buffer.
 fn program_file(stem: &str) -> Option<&[u8]> {
     let bytes = stem.as_bytes();
-    (!bytes.is_empty() && bytes.len() <= 12).then_some(bytes)
+    (!bytes.is_empty() && bytes.len() <= fs::MAX_NAME_LEN).then_some(bytes)
 }
 
 /// `ls`: list the FAT32 root directory, batched through the shared buffer.
@@ -365,12 +384,15 @@ fn run_program(service: &Service, fs_ep: u64, stem: &str, args: &[&str]) {
             rights: RIGHTS_ALL,
             badge: 0,
         },
-        // Unused by default; filled in below for arg-taking programs.
+        // Unused by default; filled in below for arg-taking programs. The
+        // badge gives the child its own fs v2 client identity, distinct from
+        // the shell's (P2.1 binding table). The mint source stays the
+        // unbadged dependency cap — a badge can only be minted once.
         ChildCap {
             slot: CHILD_FS,
-            source: fs_ep,
+            source: service.extra[SpawnInfo::DEP_EP_BASE],
             rights: RIGHTS_ALL,
-            badge: 0,
+            badge: FS_CHILD_BADGE,
         },
     ];
     let mut used = 4;
@@ -453,15 +475,17 @@ fn fs_call(fs_ep: u64, label: u64, words: &[u64]) -> Option<ipc::Received> {
 }
 
 fn fs_open(fs_ep: u64, name: &[u8]) -> Option<(u64, u64)> {
-    if name.is_empty() || name.len() > 12 {
+    // fs v2 (P2.1): names up to 255 bytes ride the IPC buffer, 8 bytes per
+    // message word; short 8.3 names keep the exact v1 packing.
+    if name.is_empty() || name.len() > fs::MAX_NAME_LEN {
         return None;
     }
-    let mut words = [0u64; 3];
+    let mut words = [0u64; 1 + fs::MAX_NAME_LEN.div_ceil(8)];
     words[0] = name.len() as u64;
     for (index, byte) in name.iter().enumerate() {
         words[1 + index / 8] |= u64::from(*byte) << (8 * (index % 8));
     }
-    let received = fs_call(fs_ep, fs::OPEN, &words)?;
+    let received = fs_call(fs_ep, fs::OPEN, &words[..1 + name.len().div_ceil(8)])?;
     Some((received.word(0), received.word(1)))
 }
 

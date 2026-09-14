@@ -127,6 +127,16 @@ pub(crate) fn resume(target: u64) -> Result<(), u64> {
         Ok(())
     })
 }
+
+/// Set a thread's scheduling priority. The ready queue re-evaluates priorities
+/// on every pop, so this takes effect at the next scheduling point whether the
+/// thread is running, ready, blocked or asleep.
+pub(crate) fn set_priority(target: u64, priority: u8) -> Result<(), u64> {
+    with_target(target, |scheduler, _, slot| {
+        scheduler.tasks[slot].priority = priority;
+        Ok(())
+    })
+}
 pub(crate) fn destroy(target: u64) -> Result<(), u64> {
     with_target(target, |scheduler, caller, slot| {
         if slot == caller {

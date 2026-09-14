@@ -5,17 +5,25 @@
 # RSTiny build integration (tools/build_app.py --lang python); this Makefile
 # produces the standalone ELF the loader validates.
 #
-# Same cross contract as projects/apps/minic: -mgeneral-regs-only (no FPU at
-# EL0, interpreter-app.md), -nostdlib, entry `_start` at 0x200000.
+# Same cross contract as projects/apps/minic: -nostdlib, entry `_start` at
+# 0x200000. FP=1 (default, docs/fpu.md) lets GCC emit FP/NEON — the kernel's
+# lazy per-task FPU context catches any -Os vectorisation — and enables
+# double-precision floats plus the math module (P2.2). `make FP=0` reverts to
+# the integer-only build with -mgeneral-regs-only, the pre-P2.2 default.
 
 include ../../third_party/micropython/py/mkenv.mk
 
 # Cross-compilation to AArch64 EL0.
+FP ?= 1
 CROSS_COMPILE = aarch64-linux-gnu-
 CROSS_CFLAGS = -nostdlib -nostartfiles -ffreestanding \
 	-fno-stack-protector -fno-unwind-tables -fno-pic \
-	-fno-asynchronous-unwind-tables -mno-outline-atomics \
-	-mgeneral-regs-only
+	-fno-asynchronous-unwind-tables -mno-outline-atomics
+ifeq ($(FP), 0)
+CROSS_CFLAGS += -mgeneral-regs-only
+else
+CROSS_CFLAGS += -DMICROPY_RSTINY_FLOAT=1
+endif
 CFLAGS += $(CROSS_CFLAGS) -Wall -Wextra -std=gnu99
 
 # Debug vs release (mirrors the rest of the tree).
@@ -52,6 +60,18 @@ SRC_C = \
 # SRC_C += $(BUILD)/_frozen_mpy.c
 
 SRC_QSTR += shared/readline/readline.c shared/runtime/pyexec.c
+
+# math module implementations (MICROPY_PY_MATH, FP=1): the vendored double
+# libm. thumb_vfp_sqrt.c is ARM32-only; aarch64 sqrt comes from sqrt.c.
+ifeq ($(FP), 1)
+SRC_LIBM = $(filter-out %thumb_vfp_sqrt.c,$(wildcard $(TOP)/lib/libm_dbl/*.c))
+SRC_QSTR += $(SRC_LIBM)
+OBJ += $(addprefix $(BUILD)/libm_dbl/, $(notdir $(SRC_LIBM:.c=.o)))
+endif
+
+$(BUILD)/libm_dbl/%.o: $(TOP)/lib/libm_dbl/%.c
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) -Ilibm_shim -c $< -o $@
 
 OBJ += $(PY_CORE_O)
 OBJ += $(addprefix $(BUILD)/, $(SRC_C:.c=.o))

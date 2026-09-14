@@ -1,11 +1,14 @@
 /*
  * MicroPython port for ARM RSTiny (interpreter-app.md 决策 E/P3).
  *
- * Integer-only configuration: the kernel puts EL0 in a domain with no FPU
- * context (CPACR_EL1 = 0), so any FP/SIMD instruction traps immediately.
- * MICROPY_FLOAT_IMPL_NONE therefore stays the default and float support is
- * deliberately left off. Enabling it would require kernel-side FP context
- * first, not a config change here.
+ * Float configuration (P2.2): the kernel keeps a lazy per-task FPU/SIMD
+ * context (docs/fpu.md, 528 B/task), so EL0 may execute FP/NEON instructions
+ * and traps only to save/restore state. Double precision matches the
+ * target's soft-float ABI (FP values in integer registers across calls) and
+ * needs no extra ABI work; MICROPY_PY_MATH comes with the vendored
+ * lib/libm_dbl implementations (see the port Makefile). Building with
+ * `FP=0` reverts to the integer-only configuration (no -mgeneral-regs-only
+ * escape from -Os vectorisation needed since the FPU context exists).
  *
  * The port is freestanding (no libc): malloc/realloc/free come from the
  * rstiny-alloc staticlib, string helpers from shared/libc/string0.c, and
@@ -29,9 +32,16 @@
 // Python source is read from the fs client into RAM and compiled there.
 #define MICROPY_ENABLE_EXTERNAL_IMPORT (0)
 
-// Integer mode (see header comment).
+// Float mode (P2.2): double precision on the kernel's lazy FPU context.
+// `FP=0` in the port Makefile flips these back to the integer-only build.
+#if MICROPY_RSTINY_FLOAT
+#define MICROPY_FLOAT_IMPL         (MICROPY_FLOAT_IMPL_DOUBLE)
+#define MICROPY_PY_BUILTINS_FLOAT  (1)
+#define MICROPY_PY_MATH            (1)
+#else
 #define MICROPY_FLOAT_IMPL         (MICROPY_FLOAT_IMPL_NONE)
 #define MICROPY_PY_BUILTINS_FLOAT  (0)
+#endif
 #define MICROPY_PY_BUILTINS_COMPLEX (0)
 
 // Full error text: ROM_LEVEL MINIMUM would default to TERSE reporting, whose
@@ -49,7 +59,10 @@
 #define MICROPY_ALLOC_PATH_MAX (256)
 
 // sys module: gives the REPL `exit()` (SystemExit) and sys.platform.
+// sys.argv carries the shell tokens verbatim (P2.3 convention): argv[0] is
+// the script path as given to `./python`, followed by the remaining tokens.
 #define MICROPY_PY_SYS (1)
+#define MICROPY_PY_SYS_ARGV (1)
 #define MICROPY_PY_SYS_PLATFORM "rstiny"
 #define MICROPY_HW_BOARD_NAME "rstiny"
 #define MICROPY_HW_MCU_NAME "cortex-a72"

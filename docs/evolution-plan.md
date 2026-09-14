@@ -335,7 +335,7 @@ P3 性能）见 [roadmap-next.md](roadmap-next.md)；本文其余阶段是长期
 
 ### 阶段 2：TCB/VSpace 分离、每线程内核栈、优先级调度
 
-状态：TCB/VSpace 分离、共享 CSpace/VSpace（线程组）、`TCB_SetSpace`/`TCB_SetIPCBuffer` 与独立内核栈/IPC buffer 已随 [独立 fault-handler 线程与线程模型](fault-handler.md) 落地并通过回归；本阶段余项只有优先级调度与 `SYS_TASK_*` shim。
+状态：TCB/VSpace 分离、共享 CSpace/VSpace（线程组）、`TCB_SetSpace`/`TCB_SetIPCBuffer` 与独立内核栈/IPC buffer 已随 [独立 fault-handler 线程与线程模型](fault-handler.md) 落地并通过回归。优先级调度已实施（2026-09 P1.1）：每任务 `priority`（默认 0 = 与原 FIFO 一致）、就绪队列出队取最高优先级、同级 FIFO 轮转，`TCB_SetPriority`（label 7）经 TCB cap 授权，见 [sel4-abi.md](sel4-abi.md)；`check_tasks.py` 新增高优先级抢占 + FIFO 对照用例，既有用例不回归。本阶段余项只有 `SYS_TASK_*` shim。
 
 目标：把"任务"拆成 TCB 与 VSpace，并让内核可以阻塞。
 
@@ -433,7 +433,9 @@ C0–C3 已实施：allocator 从自身 sub-Untyped 标准 retype+map 增长；�
 Shutdown/Sleep/Unmap/Protect/WriteMemory/ReadMemory）与理由见
 [capability-authority-untyped.md](capability-authority-untyped.md) §7（设计
 决策源 [sel4-philosophy.md](sel4-philosophy.md) §3）。与决策 E（移除 Runtime
-托管）合并推进；用户态定时器服务（Sleep 的完全用户态实现）仍属后续里程碑。
+托管）合并推进。Sleep 的裁决（2026-09 P1.2）：保留为受限自指原语（方案 B），
+作为对 seL4 的明示偏离记入 [sel4-abi.md](sel4-abi.md)；用户态 timer 服务
+（Sleep 的完全用户态实现，P1.2 方案 A）降为 stretch 里程碑。
 
 ## 10. 测试与验证计划
 

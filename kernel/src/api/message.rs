@@ -38,7 +38,7 @@ impl Completion {
 
 pub(super) fn request(context: &UserContext) -> Result<Request, u64> {
     let info = MessageInfo::from_word(context.message_info());
-    if info.length() > MAX_MESSAGE_WORDS || info.caps_unwrapped() != 0 {
+    if !info.valid() {
         return Err(TRUNCATED_MESSAGE);
     }
     let mut request = Request {

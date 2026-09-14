@@ -150,6 +150,11 @@ fn assemble(
         })?,
     };
     let info = MessageInfo::from_word(tag);
+    // The same wire check the object-call path runs: an over-long length or
+    // cap count must error explicitly, never overflow the IPC buffer.
+    if !info.valid() {
+        return Err(TRUNCATED_MESSAGE);
+    }
     let mut words = [0; MAX_MESSAGE_WORDS];
     words[..4].copy_from_slice(&registers);
     if info.length() > 4 {
@@ -469,6 +474,17 @@ fn wait_notification(
 }
 
 fn run(number: Syscall, context: &mut UserContext) -> Result<Disposition, u64> {
+    // The caller's outgoing descriptor is checked at the boundary, so a
+    // malformed tag fails its own sender here instead of failing (or
+    // overflowing on) a partner's delivery later — including a queued sender
+    // that would otherwise poison the wait queue for every receiver.
+    if matches!(
+        number,
+        Syscall::Send | Syscall::NBSend | Syscall::Call | Syscall::Reply | Syscall::ReplyRecv
+    ) && !MessageInfo::from_word(context.message_info()).valid()
+    {
+        return Err(TRUNCATED_MESSAGE);
+    }
     if matches!(number, Syscall::Reply | Syscall::ReplyRecv) {
         let replied = reply_phase(context)?;
         if number == Syscall::Reply {
@@ -483,6 +499,14 @@ fn run(number: Syscall, context: &mut UserContext) -> Result<Disposition, u64> {
         Syscall::Send | Syscall::NBSend | Syscall::Call => match kind {
             ObjectKind::Endpoint => {
                 if rights & RIGHTS_WRITE == 0 {
+                    return Err(PERMISSION_DENIED);
+                }
+                // A Call parks its sender on the reply relation until the
+                // receiver replies; without GrantReply that reply capability
+                // can never be formed and the sender would wait forever. Fail
+                // the Call at the boundary instead (docs/roadmap-next.md P0.2,
+                // the seL4-aligned reading of "Grant forms the reply cap").
+                if number == Syscall::Call && rights & RIGHTS_GRANT_REPLY == 0 {
                     return Err(PERMISSION_DENIED);
                 }
                 if number == Syscall::NBSend {

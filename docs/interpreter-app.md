@@ -127,7 +127,11 @@
   `char *argv[]` 交给 `port_main(argc, argv)`;无则 `argc = 1, argv = [name]`
   或空(依 rt0 约定)。
 - mysh:`execute` 把 `./cmd` 之后的 token 全部传入 `run_program`,经 loader
-  写入参数页;`./python app.py` ⇒ argv = [`python`, `app.py`]。
+  写入参数页。
+- **argv 约定(P2.3 钉死)**:argv 就是 `./cmd` 之后的 token 序列,**shell 不
+  前插程序名**——`./python app.py` ⇒ `argv = ["app.py"]`,`argv[0]` 即脚本
+  路径(解释器/程序自己知道它是谁)。这与 C 的 `argv[0]=程序名` 惯例是有意
+  偏离;`./minic one two` ⇒ `argc=2, argv=["one","two"]`(check_mysh 断言)。
 
 ### 决策 I:依赖能力授予(解释器按需拿 fs)
 

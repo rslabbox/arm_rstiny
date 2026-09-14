@@ -12,6 +12,15 @@ impl MessageInfo {
     pub const fn from_word(word: u64) -> Self {
         Self(word)
     }
+    /// Whether a raw wire word decodes to a legal descriptor: the length and
+    /// cap count fit the protocol maximums and no unwrap bit is set. Every
+    /// kernel path that consumes a caller-supplied tag validates it through
+    /// this one check, so object calls and endpoint IPC cannot drift.
+    pub const fn valid(self) -> bool {
+        self.length() <= MAX_MESSAGE_WORDS
+            && self.extra_caps() <= MAX_EXTRA_CAPS
+            && self.caps_unwrapped() == 0
+    }
     pub const fn word(self) -> u64 {
         self.0
     }
