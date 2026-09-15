@@ -292,7 +292,9 @@ fn main(info: &mut BootInfo) -> ! {
                         _ => {}
                     }
                 }
-                let _ = task.destroy();
+                if let Err(error) = task.destroy() {
+                    rstiny::debug_println!("[userboot] init destroy failed: {error:?}");
+                }
             }
             Err(error) => {
                 rstiny::debug_println!("[userboot] spawn failed: {:?}", error);

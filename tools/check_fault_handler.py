@@ -47,7 +47,8 @@ def run(qemu, kernel, printing):
                     if not chunk:
                         break
                     text += chunk.decode(errors='replace')
-                if text.count('console service ready') >= 3:
+                if (text.count('console service ready') >= 3
+                        and text.count('service started: console') >= 3):
                     break
                 assert 'panicked' not in text, 'a component panicked during the drill'
                 assert proc.poll() is None, f'system exited early:\n{text}'

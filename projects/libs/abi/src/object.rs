@@ -12,6 +12,11 @@ pub enum Invocation {
     TcbSetSpace = 10,
     TcbSuspend = 11,
     TcbResume = 12,
+    /// rstiny extension, outside the seL4 XML range (docs/thread-group.md
+    /// §2.2): the invoked TCB cap names a process — every member sharing the
+    /// target's CSpace is suspended, so a supervisor's teardown cannot leave
+    /// a sibling rooting the group's objects.
+    TcbSuspendGroup = 60,
     CNodeRevoke = 17,
     CNodeDelete = 18,
     CNodeCopy = 20,

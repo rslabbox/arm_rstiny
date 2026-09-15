@@ -229,13 +229,21 @@ D5（MicroPython framebuf、双客户端）仍不排期。与规划的主要偏�
   （95 字形，check_gpu.py 的 `load_font` 断言 ≥64 仍兼容）。另：QEMU
   `sendkey kp_add/kp_enter` 在 wm 键码表里的映射有偏差（注入 1+2= 得到
   "33"），桌面键盘路径未复查，留待 wm v2。
-- **新的未决（check_fault_handler，a3d922b 既有、与本节前述修复无关，
-  已用 stash 对照实验证实）**：服务 teardown 后的 respawn 路径存在
-  缺陷——block 退出后 init 按退避策略重启，重启周期里偶发两个任务
-  `user fault PC=0`（ESR=0x82000006 指令权限错误、FAR=0，疑似入口为 0
-  的加载失败，与"父水位线不回滚"的预算语义吻合），gpu-server 在重启
-  周期里从未输出任何日志即被 teardown，drill 永远到不了第三次
-  console ready。BOOT_TIMEOUT 已是 400 s 仍不够。这是 `make check`
-  当前的阻塞点（check_fault_handler 之前的 kernel/bootloader/userboot
-  检查全部通过，其后的检查因中止未跑到；check_gpu 的 release 两组合
-  可单独运行并通过）。
+- **已解决（2026-09-16）**：respawn 活锁（check_fault_handler 的阻塞点，
+  a3d922b 既有）。根因是**内核对象回收的两个缺口叠加**：
+  ①收集器的 mark 把**不可达 CNode 里的 cap** 也当根——loader 给每个子
+  CSpace 装了自引用 cap，整个被销毁的进程组（VSpace/CNode/页/TCB）从此
+  无人回收，而 revoke 已经把水位线回卷，物理内存被立刻复用；
+  ②`finalise_untyped` 删除派生 TCB 对象时**不清理调度器条目**，留下
+  SUSPENDED 僵尸线程；陈旧 IPC 状态把它唤醒后，它就在已清零/复用的
+  地址空间里执行（`user fault PC=0/0x18`，ESR 权限错误），并把新 init
+  的栈踩烂——userboot 视其为 init 故障，销毁重启，循环往复。
+  修复：①mark 改为从根（线程组 CSpace/VSpace + IRQ 绑定通知）做图遍历，
+  CNode 只有自身可达时其 cap 才算根；②finalise 收集被删 TCB 的 task id，
+  在 store 借还结束后逐个 `api::destroy` 清理调度器条目；
+  ③新增 `TcbSuspendGroup`（rstiny 扩展标签 60，对齐托管路径 R::Destroy
+  的组语义）：`Task::destroy` 销毁前挂起共享 CSpace 的全部成员，兄弟
+  线程（init 的 logger）不再以运行态扎根组对象，成员在任何 revoke 之前
+  全部停机。另修 check_fault_handler 的等待竞态（ready#3 与 started#3
+  相邻落地，循环等待条件需与断言一致）。注意 SUSPENDED 仍算扎根
+  （managed Suspend 的 repair 语义依赖对象存活），清理僵尸靠 ②。

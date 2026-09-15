@@ -45,6 +45,7 @@ capability 引用对象，并携带派生关系、权限及该 cap 的映射记�
 | TCB_SetIPCBuffer | 9 | ipcVA（0 = 清除）/ IPCBufferFrame（须已映射在该 VSpace 的 ipcVA） |
 | TCB_SetSpace | 10 | faultEP, cspaceData, vspaceData / CNode, VSpace |
 | TCB_Suspend / Resume | 11 / 12 | 无 |
+| TCB_SuspendGroup | 60（rstiny 扩展，seL4 范围之外） | 无；被调 TCB cap 即授权（WRITE）。挂起共享目标 CSpace 的全部成员（线程组 = 一个进程，docs/thread-group.md §2.2）。`Task::destroy` 的 teardown 前置步骤：兄弟线程若继续扎根，被销毁组的内存永远无法回收 |
 | CNode_Revoke / Delete | 17 / 18 | index, depth / 无 |
 | CNode_Copy | 20 | dstIndex, dstDepth, srcIndex, srcDepth, rights / 源 CNode |
 | CNode_Mint | 21 | Copy 参数加 capData / 源 CNode；目前只支持 capData=0 |

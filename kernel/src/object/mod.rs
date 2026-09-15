@@ -1024,12 +1024,10 @@ pub(crate) fn collect() {
         let thread_roots = api::thread_roots();
         let (tasks, changed) = with_store(|store| {
             let mut live = BTreeSet::new();
+            for id in thread_roots.iter().copied() {
+                live.insert(id);
+            }
             for (_, object) in store.objects.iter() {
-                if let Object::CNode(cnode) = object {
-                    for cap in cnode.slots.values() {
-                        live.insert(cap.object);
-                    }
-                }
                 // A bound IRQHandler keeps its Notification object alive even
                 // when no capability names it anymore (docs/irq.md §6); the
                 // binding dies with the handler or an explicit Clear.
@@ -1039,19 +1037,31 @@ pub(crate) fn collect() {
                     live.insert(notification);
                 }
             }
-            for id in thread_roots.iter().copied() {
-                live.insert(id);
-            }
+            // Walk reachability from the roots. A CNode contributes its caps
+            // only when the CNode itself is reachable: the loader installs a
+            // self cap into every child CSpace, so counting caps inside
+            // *unreachable* CNodes as roots would anchor a torn-down process
+            // forever (its objects could never be reclaimed after a revoke).
             let mut queue: Vec<ObjectId> = live.iter().copied().collect();
             while let Some(id) = queue.pop() {
-                if let Some(Object::VSpace(vspace)) = store.objects.get(id)
-                    && let Some(space) = vspace.space.as_ref()
-                {
-                    for frame in space.frame_refs() {
-                        if live.insert(frame.id()) {
-                            queue.push(frame.id());
+                match store.objects.get(id) {
+                    Some(Object::CNode(cnode)) => {
+                        for cap in cnode.slots.values() {
+                            if live.insert(cap.object) {
+                                queue.push(cap.object);
+                            }
                         }
                     }
+                    Some(Object::VSpace(vspace)) => {
+                        if let Some(space) = vspace.space.as_ref() {
+                            for frame in space.frame_refs() {
+                                if live.insert(frame.id()) {
+                                    queue.push(frame.id());
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
                 }
             }
             let dead: Vec<ObjectId> = store
@@ -1107,6 +1117,7 @@ pub(crate) fn collect() {
         for task in tasks {
             // The managed runtime handles self-termination after switching stacks.
             if Some(task) != crate::task::current_id() {
+                log::debug!("[gctrace] collected TCB of task {}", task);
                 let _ = api::destroy(task);
             }
         }

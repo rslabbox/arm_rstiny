@@ -56,6 +56,17 @@ let shared = vspace.is_some_and(|id| api::thread_roots().contains(&id));
 
 把 `Destroy` 定义为组级，是因为 `Runtime::Create` 返回的句柄语义上命名一个**进程**，而 `ThreadGroup::spawn_thread` 又在同一个进程里加线程。单线程销毁是少见路径，单独给一个标签，名字直白。
 
+**loader 路径同样组级（2026-09-16）**：`spawn_supervised` + `Task::destroy`
+（userboot→init、init→服务）不在 `managed` 集合里，但 `Task::destroy` 的
+句柄同样命名一个进程。新增内核扩展标签 `TcbSuspendGroup = 60`
+（docs/sel4-abi.md）：挂起共享目标 CSpace 的全部成员，`Task::destroy`
+把它作为 revoke 的前置步骤——成员在任何 revoke 之前全部停机，不会再以
+运行态扎根组对象。同批修复两处回收缺口（respawn 活锁的根因）：
+收集器 mark 只从可达 CNode 收 cap（子 CSpace 的自引用 cap 不再锚死整个
+进程）；`finalise_untyped` 删除派生 TCB 时逐个 `api::destroy` 清调度器
+条目——否则僵尸条目被陈旧 IPC 状态唤醒后会在已复用的地址空间里执行
+（`user fault PC=0/0x18`），把新进程的栈踩烂，重启风暴随之而来。
+
 ### 2.3 销毁顺序
 
 ```text

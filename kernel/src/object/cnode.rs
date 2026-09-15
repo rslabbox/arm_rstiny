@@ -41,13 +41,18 @@ fn unmap(store: &mut Store, cap: &Cap) -> Result<()> {
 /// Capabilities naming the children must already have been removed. Child
 /// Untyped regions are finalised depth-first, so nested service budgets tear
 /// down completely; endpoints and notifications cancel their waiters first.
-fn finalise_untyped(store: &mut Store, untyped: ObjectId) {
+fn finalise_untyped(store: &mut Store, untyped: ObjectId, tasks: &mut Vec<u64>) {
     for child in store.objects.children(untyped) {
         match store.objects.get(child) {
-            Some(Object::Untyped(_)) => finalise_untyped(store, child),
+            Some(Object::Untyped(_)) => finalise_untyped(store, child, tasks),
             Some(Object::Endpoint(_)) | Some(Object::Notification(_)) => {
                 api::suspend_blocked_on(child);
             }
+            // A destroyed TCB object must also clear the scheduler's task
+            // entry: removing the object alone leaves a zombie thread whose
+            // address space is gone, and a stale wakeup then resumes it into
+            // freed memory (the respawn livelock of 2026-09).
+            Some(Object::Tcb(task)) => tasks.push(*task),
             _ => {}
         }
         store.objects.remove(child);
@@ -96,14 +101,23 @@ pub(super) fn delete(cspace: ObjectId, slot: u64, revoke: bool) -> Result<()> {
             }
         }
     }
+    let mut finalised_tasks = Vec::new();
     with_store(|store| {
         for (space, slot, _) in &victims {
             store.remove_cap(*space, *slot);
         }
         if revoke && matches!(store.objects.get(target), Some(Object::Untyped(_))) {
-            finalise_untyped(store, target);
+            finalise_untyped(store, target, &mut finalised_tasks);
         }
     });
+    // Retire the threads whose TCB objects the finalise removed, after the
+    // store borrow ends: clearing the scheduler entry also releases the
+    // thread's own bindings (docs/thread-group.md §2.3).
+    for task in finalised_tasks {
+        if Some(task) != crate::task::current_id() {
+            let _ = api::destroy(task);
+        }
+    }
     super::request_collect();
     Ok(())
 }

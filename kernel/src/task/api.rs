@@ -78,7 +78,6 @@ pub(crate) fn status(target: u64) -> Result<u64, u64> {
 /// Every thread id sharing `target`'s CSpace — the thread group a process
 /// handle names (docs/thread-group.md §2.1), `target` included. Terminal
 /// members are listed too so a group destroy also empties their slots.
-#[cfg(feature = "managed-runtime")]
 pub(crate) fn group_members(target: u64) -> Result<alloc::vec::Vec<u64>, u64> {
     with_target(target, |scheduler, _, slot| {
         let Some(cspace) = scheduler.tasks[slot].cspace else {
@@ -103,6 +102,10 @@ pub(crate) fn suspend(target: u64) -> Result<(), u64> {
         // Queued entries are pruned by validation on the next touch.
         task.blocked = None;
         scheduler.queue.remove(slot);
+        // A suspended group member may have been the last root of a
+        // torn-down group; sweep at this boundary so reclaimed memory is
+        // visible before the supervisor reallocates it.
+        crate::object::request_collect();
         Ok(())
     })
 }

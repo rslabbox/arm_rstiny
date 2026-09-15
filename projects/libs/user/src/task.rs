@@ -32,7 +32,11 @@ impl Task {
             return Err(Error::InvalidArgument);
         };
         // Best effort: an already terminal task has nothing left to suspend.
-        let _ = self.operation(abi::Invocation::TcbSuspend);
+        // Group semantics: a loader group is one process, so every member —
+        // init's logger, say — stops before the revoke, or the survivors
+        // would keep the group's CSpace/VSpace rooted and their memory could
+        // never be reclaimed before the supervisor respawns into it.
+        let _ = self.operation(abi::Invocation::TcbSuspendGroup);
         // SAFETY: this handle uniquely owns the derivation subtree; the task
         // is stopped and nothing else references it.
         unsafe {

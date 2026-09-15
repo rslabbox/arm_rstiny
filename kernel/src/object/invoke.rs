@@ -327,6 +327,17 @@ fn tcb_invoke(target: u64, request: &Request) -> Result<Completion> {
                 api::suspend(target)?;
             }
         }
+        n if n == Invocation::TcbSuspendGroup as u64 => {
+            // rstiny extension (docs/thread-group.md §2.2): the handle names a
+            // process, so teardown suspends every member sharing the target's
+            // CSpace. A surviving sibling would keep the group's CSpace/VSpace
+            // rooted and its memory could never be reclaimed before the
+            // supervisor respawns into the rewound budget. Terminal members
+            // reject the suspend; that is fine — they are going away anyway.
+            for member in api::group_members(target)? {
+                let _ = api::suspend(member);
+            }
+        }
         n if n == Invocation::TcbResume as u64 => api::resume(target)?,
         n if n == Invocation::TcbSetPriority as u64 => {
             // seL4 `TCB_SetPriority` (label 7), simplified: the invoked TCB cap
