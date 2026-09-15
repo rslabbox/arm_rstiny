@@ -1,0 +1,17 @@
+[package]
+name = "gui"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "gui"
+path = "src/main.rs"
+test = false
+bench = false
+
+[dependencies]
+rstiny = { path = "../../libs/user" }
+rstiny-runtime = { path = "../../libs/runtime" }
+rstiny-server = { path = "../../libs/server" }
+rstiny-protocol = { path = "../../libs/protocol" }
+rstiny-gui = { path = "../../libs/gui" }

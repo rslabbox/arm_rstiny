@@ -166,19 +166,25 @@ def run(qemu,kernel):
             assert c.runtime('available') == before
             c.call(103,12,status=6)
 
-            # Retype allocation failure is atomic: no prefix of a batch leaks.
-            slot = 1000
+            # Retype allocation failure is atomic: no prefix of a batch
+            # leaks. Advance through the cnode until a batch fails, then
+            # verify the failing batch is atomic: identical label and no
+            # memory drift on the retry.
+            # Start above the kernel's boot-module frame caps (INIT_BOOT_
+            # MODULES + archive pages; the gpu.elf join pushed the archive
+            # past 512 pages, docs/gui-display.md §10).
+            slot = 2048
             while True:
                 label, _ = c.raw(32, 1, [7,0,0,0,slot,32], [2])
                 if label != 0:
-                    assert label == 10, label
-                    available = c.runtime('available')
-                    label, _ = c.raw(32, 1, [7,0,0,0,slot,32], [2])
-                    assert label == 10
-                    assert c.runtime('available') == available
-                    c.call(slot,46,status=6)
                     break
                 slot += 32
+            assert label == 10, label
+            available = c.runtime('available')
+            label, _ = c.raw(32, 1, [7,0,0,0,slot,32], [2])
+            assert label == 10
+            assert c.runtime('available') == available
+            c.call(slot,46,status=6)
             revoke(32)
             assert c.runtime('available') == before
         except Exception:

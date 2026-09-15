@@ -11,6 +11,9 @@ MANAGED ?= 0
 LOG ?= info
 KERNEL_LOAD_MIN ?= 0
 DISK ?= 1
+# GPU_TEST=1 builds the gpu-server D1 self-test hook (docs/gui-display.md §6),
+# mirroring BLK_TEST.
+GPU_TEST ?= 0
 TARGET := aarch64-unknown-none-softfloat
 HOST_TARGET ?= $(shell rustc -vV | sed -n 's/^host: //p')
 QEMU ?= qemu-system-aarch64
@@ -37,9 +40,11 @@ INIT_ELF := $(APP_DIR)/$(TARGET)/$(MODE)/init
 CONSOLE_ELF := $(APP_DIR)/$(TARGET)/$(MODE)/console
 BLOCK_ELF := $(APP_DIR)/$(TARGET)/$(MODE)/block-server
 FS_ELF := $(APP_DIR)/$(TARGET)/$(MODE)/fs-server
+GPU_ELF := $(APP_DIR)/$(TARGET)/$(MODE)/gpu-server
 APPMGR_ELF := $(APP_DIR)/$(TARGET)/$(MODE)/appmgr
 MYSH_ELF := $(APP_DIR)/$(TARGET)/$(MODE)/mysh
 HELLO_ELF := $(APP_DIR)/$(TARGET)/$(MODE)/hello
+GUI_ELF := $(APP_DIR)/$(TARGET)/$(MODE)/gui
 MINIC_ELF := $(APP_DIR)/$(TARGET)/$(MODE)/minic
 PYTHON_ELF := $(APP_DIR)/$(TARGET)/$(MODE)/python
 DISK_IMG := $(APP_DIR)/disk.img
@@ -60,10 +65,16 @@ endif
 # The restart acceptance (KILL_FS) exercises the fs -> appmgr chain. The
 # restart=never mysh leaf is excluded there: its live/dead state legitimately
 # differs before and after the crash, which would perturb the frame-budget
-# comparison (docs/disk-driver.md section 12).
+# comparison (docs/disk-driver.md section 12). The BOOT_TEST supervision
+# drill runs a console-only topology: it tests the console crash, the logger
+# rebuild and the level-1 init restart, none of which involve the data
+# services, whose absence keeps the drill's timing free of failure loops.
 INIT_CFG := configs/init.cfg
 ifdef KILL_FS
 INIT_CFG := configs/init-appmgr.cfg
+endif
+ifdef BOOT_TEST
+INIT_CFG := configs/init-drill.cfg
 endif
 
 # Application manifest baked into the disk. The default is empty (the shell
@@ -76,17 +87,23 @@ APPS_CFG ?= configs/APPS.CFG
 APPS_PY ?= configs/APP.PY
 
 # Fixed platform contract; no network backends. The VirtIO block device and
-# its FAT32 image back the userland disk stack (docs/disk-driver.md). The drive
-# options live in their own variable: commas inside $(if ...) split its
-# arguments, which would silently drop everything after the first one.
+# its FAT32 image back the userland disk stack (docs/disk-driver.md), the
+# VirtIO GPU + keyboard back the display stack (docs/gui-display.md §2).
+# Device ordinals follow command-line order: blk = virtio-mmio-0 (window
+# slot 31), gpu = virtio-mmio-1 (slot 30), keyboard = virtio-mmio-2 (slot 29).
+# The drive options live in their own variable: commas inside $(if ...) split
+# its arguments, which would silently drop everything after the first one.
 DISK_ARGS := -drive file=$(DISK_IMG),if=none,format=raw,id=hd0,readonly=on \
 	-device virtio-blk-device,drive=hd0
+GPU_ARGS := -device virtio-gpu-device,xres=640,yres=480 \
+	-device virtio-keyboard-device -device virtio-mouse-device
 QEMU_ARGS := -machine virt,gic-version=3,virtualization=off -cpu cortex-a72 \
 	-smp 1 -m 128M -display none -monitor none -serial stdio -nic none \
 	-global virtio-mmio.force-legacy=false \
 	$(if $(filter 1,$(DISK)),$(DISK_ARGS)) \
+	$(GPU_ARGS) \
 	-kernel $(BOOT_IMAGE)
-export LOG QEMU KERNEL_LOAD_MIN BOOT_TEST BLK_TEST
+export LOG QEMU KERNEL_LOAD_MIN BOOT_TEST BLK_TEST GPU_TEST
 
 .PHONY: all build platform userboot init console block-server fs-server appmgr mysh hello disk run run-kernel run-root run-userboot debug check fmt clean
 all: build
@@ -94,22 +111,23 @@ all: build
 platform:
 	python3 tools/build_platform.py $(PLATFORM_DIR) --qemu $(QEMU)
 
-build: userboot init console block-server fs-server appmgr mysh platform
+build: userboot init console block-server fs-server gpu-server appmgr mysh platform
 	PLATFORM_DIR=$(PLATFORM_DIR) cargo build $(CARGO_FLAGS) --target-dir $(BUILD_DIR)
 	rust-objcopy -O binary $(KERNEL_ELF) $(KERNEL_BIN)
 	for app in init console; do rust-objcopy --strip-all $(APP_DIR)/$(TARGET)/$(MODE)/$$app $(APP_DIR)/$$app.elf; done
 	rust-objcopy --strip-all $(BLOCK_ELF) $(APP_DIR)/block.elf
 	rust-objcopy --strip-all $(FS_ELF) $(APP_DIR)/fs.elf
+	rust-objcopy --strip-all $(GPU_ELF) $(APP_DIR)/gpu.elf
 	rust-objcopy --strip-all $(APPMGR_ELF) $(APP_DIR)/appmgr.elf
 	rust-objcopy --strip-all $(MYSH_ELF) $(APP_DIR)/mysh.elf
 	python3 tools/build_image.py $(KERNEL_ELF) $(USERBOOT_ELF) $(IMAGE_DIR) --platform $(PLATFORM_DIR) --mode $(MODE) \
 	  --module $(APP_DIR)/init.elf --module $(APP_DIR)/console.elf --module $(APP_DIR)/block.elf \
-	  --module $(APP_DIR)/fs.elf --module $(APP_DIR)/appmgr.elf --module $(APP_DIR)/mysh.elf --module init.cfg=$(INIT_CFG)
+	  --module $(APP_DIR)/fs.elf --module $(APP_DIR)/gpu.elf --module $(APP_DIR)/appmgr.elf --module $(APP_DIR)/mysh.elf --module init.cfg=$(INIT_CFG)
 
 userboot:
 	python3 tools/build_app.py userboot --mode $(MODE) $(if $(ROOT_IMAGE_BASE),--image-base $(ROOT_IMAGE_BASE))
 
-init console hello block-server fs-server appmgr mysh:
+init console hello block-server fs-server gpu-server appmgr mysh gui:
 	python3 tools/build_app.py $@ --mode $(MODE)
 
 # C applications (interpreter-app.md 决策 F): cross gcc + rstiny-alloc
@@ -125,10 +143,11 @@ python:
 	cp $(PYTHON_ELF) $(APP_DIR)/python.elf
 
 # The application disk: bare FAT32 with the app manifest and its ELFs.
-disk: hello minic python
+disk: hello gui minic python
 	rust-objcopy --strip-all $(HELLO_ELF) $(APP_DIR)/hello.elf
+	rust-objcopy --strip-all $(GUI_ELF) $(APP_DIR)/gui.elf
 	python3 tools/make_disk.py $(DISK_IMG) \
-	  --file hello=$(APP_DIR)/hello.elf --file minic=$(APP_DIR)/minic.elf \
+	  --file hello=$(APP_DIR)/hello.elf --file gui=$(APP_DIR)/gui.elf --file minic=$(APP_DIR)/minic.elf \
 	  --file python=$(APP_DIR)/python.elf --file APP.PY=$(APPS_PY) --file APPS.CFG=$(APPS_CFG)
 
 # `run` builds the application disk too, so the guest finds a virtio-blk
@@ -163,6 +182,7 @@ check:
 	python3 tools/check_python.py --qemu $(QEMU)
 	python3 tools/check_services.py --qemu $(QEMU)
 	python3 tools/check_restart.py --qemu $(QEMU)
+	python3 tools/check_gpu.py --qemu $(QEMU)
 
 fmt:
 	cargo fmt --all --check

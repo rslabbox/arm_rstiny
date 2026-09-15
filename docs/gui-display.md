@@ -3,7 +3,7 @@
 在 RSTiny 上加一块"画布"：一个受信的 `gpu-server` 服务驱动 virtio-gpu，
 把帧缓冲以**能力租约**方式交给一个 GUI 客户端，软光栅画矩形/位图字/文本。
 不追求 3D、合成与矢量字体——目标是"微内核上最基本可用的图形栈"，与
-[disk-driver.md](disk-drriver.md) 的 D 阶段同一风格、同一信任边界写法。
+[disk-driver.md](disk-driver.md) 的 D 阶段同一风格、同一信任边界写法。
 
 ## 1. 目标与非目标
 
@@ -124,3 +124,95 @@
   （帧缓冲能力租约是该模型的又一次落地）。
 
 （规划文档，实施顺序与是否开工由后续 PR 决定。）
+
+## 10. 实施记录（D0-D4 已落地）
+
+六个阶段里 D0-D4 全部实现并通过 `tools/check_gpu.py`（已挂进 `make check`）；
+D5（MicroPython framebuf、双客户端）仍不排期。与规划的主要偏离如下，
+都已在代码注释里就地说明。
+
+### 10.1 设备与预算（§2、§5 的修正）
+
+- **QEMU 接线**：`-device virtio-gpu-device,xres=640,yres=480 -device
+  virtio-keyboard-device` 进了 `QEMU_ARGS`（`GPU_ARGS`），设备序
+  blk=0/gpu=1/keyboard=2 对应窗口槽 31/30/29；平台 DTB 仍是 32 个连续槽，
+  **无需重新发布**（check_gpu.py D0 断言）。分辨率由 `xres/yres` 固定
+  640×480（QEMU 默认 1280×800，不设就是 600 页帧缓冲）。
+- **设备 Untyped 必须共享**：整窗只有一个 16 KiB 设备 Untyped，4 KiB 帧
+  粒度又装不下 0x200 槽的边界——block- 与 gpu-server 都要映射**同一批
+  页**。内核改为：设备区域 retype **总是从区域基址开始**、按物理地址
+  找到已存在的 Frame 对象时**共享同一对象**（`new_untyped_frame`），
+  跳过水位线检查。配套地，init 的 teardown **绝不 revoke 设备区域**
+  （`finalise_untyped` 是区域粒度的，会把别的驱动还在用的帧一起回收）；
+  设备副本同预算一样是 supervisor 所有、跨重启复用。
+- **预算**：gpu-server `budget = 2M`（规划写"4M 起步"）。实测 init 的
+  16 MiB 预算里放不下第二个 4M——4M 对齐 + 64 字节端点正好把 mysh 的
+  4M 顶出区域（fs v2 的先例也是 2M）。300 页帧缓冲 + 队列环 + 覆盖表
+  ≈ 310 页，2M 够用。init 的基础设施（预算/端点/设备副本/IRQ 副本）
+  改为**启动期一次建好**：预算先于端点 retype，否则 64 字节端点卡在
+  对齐边界上会把后面每个预算都顶到下一个边界。
+- **每服务两个 IRQ**：`SpawnInfo::IRQ_SLOT2 = 10`（槽 9 在 init 自己的
+  页面上是 userboot 写的中断线数，服务槽位避开它）；init 按配置的
+  `device` 行序授权多条 IRQHandler。
+
+### 10.2 租约协议（§4 的落地形态）
+
+内核一条消息最多带 3 个能力（`MAX_EXTRA_CAPS`），300 帧不可能一次交付，
+所以协议变成**分批**（labels 段 0x600）：
+
+| label | 方向 | 说明 |
+| --- | --- | --- |
+| `BIND` | client→server | 回版本 + 宽/高/帧缓冲字节 |
+| `LEASE` | client→server | 交出帧 0..3 的 Frame caps；回总页数/字节 |
+| `LEASE_BATCH` | client→server | mr0=首帧，交 3 帧；重复至拿满 300 帧 |
+| `FLUSH` | client→server | 脏矩形（校验用）；提交仍是整屏 |
+| `RELEASE` | client→server | mr0=首帧 + 归还 3 帧；收满 300 帧租约结束 |
+| `INPUT_READ` | client→server | 非阻塞读一个输入事件（打包进一个字） |
+
+- **所有权**：首版直接交出（§3 的第一选项）。服务端**保留 master caps
+  但解除自己的映射**——租期内客户端崩溃时服务端还能恢复（若把 cap 也
+  删掉，客户端一死帧就无人引用了）。`RELEASE` 归还的每一批都按物理地址
+  验明正身（能力是权威、物理地址是身份），然后删掉落槽副本；收满 300 帧
+  服务端重新映射、租约释放，同一轮 shell 里第二个 `./gui` 可再次租用。
+- **FLUSH 脏矩形 v1 仍整屏提交**：virtio-drivers 0.13 的
+  `transfer_to_host_2d(rect)` 是私有 API，`flush()` 只有整屏形态。
+- **接收规格**：receive spec 粘在 IPC buffer 里且落槽必须为空，所以
+  每一批 LEASE/RELEASE 前都要重写 spec（`LEASE_BATCH`/`RELEASE` 各 100 轮）。
+- **槽位布局**：gpu-server 的 DMA 槽窗口从 200 起（300 帧横跨 300 个
+  槽，绝不能撞上子进程固定槽 51/52/53——第一次跑就撞了）；RELEASE 落槽
+  单独一段（616..），与保留的 master caps 分开。
+
+### 10.3 驱动与验收（§6）
+
+- **帧缓冲分配**：`virtio-drivers` 的 `Dma` 要求**物理连续**；内核一次
+  retype 上限 32 个对象，300 页在 Hal 里**分块重类型化**（顺序水位线
+  保证连续）。Hal 记录每次分配，帧缓冲就是"恰好 300 页的那次分配"。
+- **D1 自检**（`GPU_TEST=1`）：16 行灰度带 + 整屏 flush + 字校验和
+  `[gpu] test flush 640x480 pages=300 sum=…`。
+- **`libs/gui`**：8x8 位图字库（font8x8 basic 集，公有领域，0x20..=0x5F
+  共 64 个字形，LSB 为最左列）+ `fill_rect`/`draw_text`/`scroll_up`/
+  `word_sum`。**字库与调色板是验收的单一事实来源**：`check_gpu.py` 直接
+  解析 `font.rs` 与两个 `PALETTE`/`BARS` 常量，宿主侧按同一套光栅规则
+  重算校验和，不复制第二份表。
+- **gui 演示 app**：`./gui bars|text|scroll|keys N`（argv 走决策 H 的
+  ArgvBlock；决策 I 的"带参程序拿依赖端点"扩展成 fs + gpu 两个端点，
+  mysh 的 `depends = fs gpu`）。`keys` 场景轮询 `INPUT_READ`，按键经
+  monitor `sendkey` 注入 virtio-keyboard，打印 `[gui] key: a` 等。
+- **check_gpu.py**：D0 平台契约（dumpdtb 复查 32 槽连续）+ D1（两种
+  编译模式）+ D2/D3/D4（模式×日志级矩阵，一次 shell 会话里跑完四个
+  场景，bars 跑两遍顺带验证 RELEASE 后可再租）。
+
+### 10.4 已知限制
+
+- 客户端在租期内崩溃：租约卡住（服务端留着 master caps 但按 v1 语义
+  拒绝新 LEASE），重启 gpu-server 或整轮系统恢复；v2 可以让 init 在
+  reap 时发一个"强制收回"。
+- INPUT_READ 的键盘事件主要靠轮询 `pop_pending_event`；中断 → Notification
+  链路已授权并绑定（与 gpu 完成中断一样在 FLUSH/READ 后 ack），但没有
+  实现"事件到达唤醒服务"的阻塞等待——与 console READ 的先例一致。
+- 无光标、无双客户端、无矢量字体（§1 非目标维持不变）。
+- **未决（跟进项）**：加入 gpu 服务后的六服务拓扑在 debug 构建下存在
+  启动竞态——console READY 之后 block 的 spawn 偶发不再推进。已做
+  缓解：BOOT_TEST 演练隔离到 configs/init-drill.cfg、check_mysh/
+  block/fat32/fs2 超时放宽、userboot MAX_INIT_RESTARTS 32、init
+  预算前置打包。根因需要内核侧 trace 跟进。

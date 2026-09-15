@@ -8,8 +8,10 @@ members = [
     "projects/apps/hello",
     "projects/apps/block-server",
     "projects/apps/fs-server",
+    "projects/apps/gpu-server",
     "projects/apps/appmgr",
     "projects/apps/mysh",
+    "projects/apps/gui",
     "projects/libs/abi",
     "projects/libs/alloc",
     "projects/libs/elf",
@@ -18,6 +20,7 @@ members = [
     "projects/libs/server",
     "projects/libs/initcfg",
     "projects/libs/user",
+    "projects/libs/gui",
     "projects/libs/runtime",
     "projects/libs/runtime-macros",
 ]

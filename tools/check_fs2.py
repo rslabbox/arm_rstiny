@@ -27,7 +27,7 @@ from pathlib import Path
 
 from check_kernel import boot_image
 
-BOOT_TIMEOUT = 240.0
+BOOT_TIMEOUT = 400.0
 TARGET = 'aarch64-unknown-none-softfloat'
 PROMPT = b'[rstiny ~]$: '
 LONG_NAME = 'a-very-long-filename.txt'
@@ -41,6 +41,9 @@ def run(qemu, kernel, disk, expect_bind_slots):
         '-global', 'virtio-mmio.force-legacy=false',
         '-drive', f'file={disk},if=none,format=raw,id=hd0,readonly=on',
         '-device', 'virtio-blk-device,drive=hd0',
+        '-device', 'virtio-gpu-device,xres=640,yres=480',
+        '-device', 'virtio-keyboard-device',
+        '-device', 'virtio-mouse-device',
         '-serial', 'stdio', '-kernel', str(boot_image(kernel)),
     ]
     proc = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE,

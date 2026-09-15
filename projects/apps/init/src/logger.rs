@@ -37,8 +37,13 @@ pub const MAX_LINE: usize = 12 * 8;
 /// logger resolves the same shared CSpace.
 pub fn run(argument: usize) -> ! {
     let console_ep = argument as u64;
+    let mut failures: u64 = 0;
     loop {
         let Ok(request) = ipc::recv(LOG_EP) else {
+            failures += 1;
+            if failures == 1 || failures % 1_000_000 == 0 {
+                debug_println!("[logger] recv failures={}", failures);
+            }
             continue;
         };
         let count = (request.word(0) as usize).min(MAX_LINE);

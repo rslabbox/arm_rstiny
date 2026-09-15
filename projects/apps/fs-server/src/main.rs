@@ -330,9 +330,7 @@ fn main(argument: Argument) -> ! {
                 // indistinguishable from the first and is refused: concurrent
                 // clients must mint their own badges (mysh: badge 1, its
                 // children: badge 2).
-                if received.badge == 0
-                    && clients.iter().flatten().any(|client| client.badge == 0)
-                {
+                if received.badge == 0 && clients.iter().flatten().any(|client| client.badge == 0) {
                     let _ = ipc::reply(status::ERROR, &[0]);
                     continue;
                 }

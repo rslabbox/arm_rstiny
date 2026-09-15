@@ -24,7 +24,8 @@ const CONSOLE: &str = "console";
 // init's CSpace layout, granted by userboot.
 const CONTROL_OBJ: u64 = 142; // init's supervision endpoint for its services
 const CONSOLE_EP_OWN: u64 = 50; // console service endpoint object cap
-const DEV_MASTER_BASE: u64 = 161; // device Untyped masters, +k per DEVICE_NAMES[k]
+const DEV_MASTER_BASE: u64 = 161;
+const DEV_COPY_BASE: u64 = 170; // + i*8 + k: per-service device Untyped copies // device Untyped masters, +k per DEVICE_NAMES[k]
 // Per-service init-side cap blocks. They must stay clear of the ROM Frame
 // window granted to init (200..200+512) and below the loader's own range.
 const SUB_UNTYPED_BASE: u64 = 5000; // + i*8: per-service budget slots
@@ -32,7 +33,11 @@ const SVC_EP_BASE: u64 = 5004; // + i*8: service main endpoint slots
 const IRQ_COPY_BASE: u64 = 5002; // + i*8: per-service device IRQHandler copies
 const THREAD_SLOT_BASE: u64 = 6000; // thread-group caps (16 per thread)
 const LOGGER_FAULT_SLOT: u64 = 144; // logger's badged fault-endpoint cap
-const DEV_COPY_BASE: u64 = 170; // + i*8 + k: per-service device Untyped copies
+/// Device *frames* carved once from the device masters and granted to the
+/// drivers as Frame caps (docs/gui-display.md §10): the UART region is one
+/// page, the VirtIO window is four (16 KiB). The drivers never retype device
+/// memory, so a driver restart cannot touch another driver's window.
+
 const CHILD_SCRATCH: usize = 0x07E0_0000; // loader scratch while spawning
 const ROM_VA: usize = 0x0200_0000;
 
@@ -44,8 +49,11 @@ const CHILD_DEV_BASE: u64 = 33;
 const CHILD_SELF_EP: u64 = 52;
 const CHILD_DEP_BASE: u64 = 53;
 const CHILD_IRQ: u64 = 56;
+const CHILD_IRQ2: u64 = 57;
 const MAX_DEVICES: usize = 4;
 const MAX_DEPS: usize = 3;
+/// Device IRQ handlers one service may drive (gpu-server: gpu + keyboard).
+const MAX_DEVICE_IRQS: usize = 2;
 
 const SERVICE_BADGE_BASE: u64 = 1; // console = 1; others follow config order
 const INTERNAL_BADGE_BASE: u64 = 0x8000; // group-internal threads (logger …)
@@ -54,10 +62,6 @@ const BACKOFF_SHIFT_CAP: u32 = 5;
 /// Supervision drill: init hands itself back to userboot with this exit code,
 /// exercising the group destroy and the level-1 restart (BOOT_TEST builds).
 const INIT_EXIT_DRILL_CODE: u64 = 7;
-
-/// Device names resolve by position to the masters userboot granted in
-/// ascending physical order (docs/disk-driver.md section 5.1).
-const DEVICE_NAMES: [&str; 2] = ["uart0", "virtio-mmio-0"];
 
 /// Service lifecycle states (docs/service-manager.md §12).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -82,15 +86,14 @@ struct ServiceState {
     budget_slot: u64,
     /// Per-service device Untyped copies (init-side, survive restarts).
     device_copies: [u64; MAX_DEVICES],
-    /// The service's device IRQ line: init-side master slot and per-service
-    /// copy slot (0 = this service drives no interrupt).
-    irq_master: u64,
-    irq_copy: u64,
+    /// The service's device IRQ lines: init-side master slots and per-service
+    /// copy slots (0 = no interrupt for that device). One master per device
+    /// the configuration names, in order (docs/gui-display.md §2).
+    irq_masters: [u64; MAX_DEVICE_IRQS],
+    irq_copies: [u64; MAX_DEVICE_IRQS],
     /// Restart timestamps inside the observation window (clock ms).
     restart_times: Vec<u64>,
     restarts: u32,
-    /// Per-service endpoints and budget created (survive restarts).
-    infra: bool,
 }
 
 /// Single-core bump allocator over a fixed BSS pool: config parsing needs
@@ -153,7 +156,7 @@ fn run(info: SpawnInfo) -> ! {
             fail_reason(&info, 16);
         }
         for device in &service.devices {
-            if !DEVICE_NAMES.contains(&device.as_str()) {
+            if device_master(device).is_none() {
                 fail_reason(&info, 17);
             }
         }
@@ -230,9 +233,19 @@ fn run(info: SpawnInfo) -> ! {
         // Resolve configured device names to per-service copy slots up front;
         // names were validated against DEVICE_NAMES above.
         let mut device_copies = [0u64; MAX_DEVICES];
-        for (k, name) in cfg.devices.iter().enumerate().take(MAX_DEVICES) {
+        for (k, _name) in cfg.devices.iter().enumerate().take(MAX_DEVICES) {
             device_copies[k] = DEV_COPY_BASE + index as u64 * 8 + k as u64;
-            let _ = name;
+        }
+        let mut irq_masters = [0u64; MAX_DEVICE_IRQS];
+        for (k, master) in service_irq_masters(cfg, irq_master_base, irq_line_count)
+            .into_iter()
+            .enumerate()
+        {
+            irq_masters[k] = master;
+        }
+        let mut irq_copies = [0u64; MAX_DEVICE_IRQS];
+        for (k, copy) in irq_copies.iter_mut().enumerate() {
+            *copy = IRQ_COPY_BASE + index as u64 * 8 + k as u64;
         }
         services.push(ServiceState {
             cfg: cfg.clone(),
@@ -241,12 +254,77 @@ fn run(info: SpawnInfo) -> ! {
             svc_ep_obj: SVC_EP_BASE + index as u64 * 8,
             budget_slot: SUB_UNTYPED_BASE + index as u64 * 8,
             device_copies,
-            irq_master: irq_master(&cfg, irq_master_base, irq_line_count),
-            irq_copy: IRQ_COPY_BASE + index as u64 * 8,
+            irq_masters,
+            irq_copies,
             restart_times: Vec::new(),
             restarts: 0,
-            infra: false,
         });
+    }
+
+    // All per-service infrastructure exists before anything runs and
+    // survives every restart (docs/service-manager.md §6). Budgets are
+    // carved *first*: large alignments (2 MiB, 4 MiB) must run back to back
+    // inside init's 16 MiB grant — a 64 byte endpoint landing on an
+    // alignment boundary between them pushes every later budget to the next
+    // boundary and out of the region (docs/gui-display.md §10).
+    for service in &services {
+        if let Err(error) = Untyped(CPtr(INIT_UNTYPED)).retype(
+            ObjectType::Untyped,
+            u64::from(service.cfg.budget_bits),
+            cnode.0,
+            service.budget_slot,
+            1,
+        ) {
+            rstiny::debug_println!(
+                "[init] budget {} ({} bits) failed: {:?}",
+                service.cfg.name,
+                service.cfg.budget_bits,
+                error
+            );
+            fail_reason(&info, 19);
+        }
+    }
+    for service in &services {
+        if let Err(error) = cnode.retype_endpoint(CPtr(INIT_UNTYPED), service.svc_ep_obj) {
+            rstiny::debug_println!("[init] ep {} failed: {error:?}", service.cfg.name);
+            fail_reason(&info, 19);
+        }
+        for (k, name) in service.cfg.devices.iter().enumerate().take(MAX_DEVICES) {
+            let Some(master) = device_master(name) else {
+                fail_reason(&info, 17);
+            };
+            if let Err(error) = cnode.copy(
+                service.device_copies[k],
+                CPtr(INIT_CNODE),
+                DEV_MASTER_BASE + master,
+                RIGHTS_ALL,
+            ) {
+                rstiny::debug_println!(
+                    "[init] devcopy {} ({name}) failed: {error:?}",
+                    service.cfg.name
+                );
+                fail_reason(&info, 19);
+            }
+        }
+        for k in 0..MAX_DEVICE_IRQS {
+            if service.irq_masters[k] != 0
+                && cnode
+                    .copy(
+                        service.irq_copies[k],
+                        CPtr(INIT_CNODE),
+                        service.irq_masters[k],
+                        RIGHTS_ALL,
+                    )
+                    .is_err()
+            {
+                rstiny::debug_println!(
+                    "[init] irqcopy {} failed: master={}",
+                    service.cfg.name,
+                    service.irq_masters[k]
+                );
+                fail_reason(&info, 19);
+            }
+        }
     }
 
     // Level-1 report: the service manager is configured and supervising.
@@ -272,70 +350,6 @@ fn run(info: SpawnInfo) -> ! {
             if services[index].status != Status::Waiting || !deps_ok {
                 continue;
             }
-            // Endpoints, budget and device copies survive restarts
-            // (supervisor-owned); the teardown revokes reset the watermark.
-            if !services[index].infra {
-                let (svc_ep_obj, budget_slot) =
-                    (services[index].svc_ep_obj, services[index].budget_slot);
-                if cnode
-                    .retype_endpoint(CPtr(INIT_UNTYPED), svc_ep_obj)
-                    .is_err()
-                    || Untyped(CPtr(INIT_UNTYPED))
-                        .retype(
-                            ObjectType::Untyped,
-                            u64::from(services[index].cfg.budget_bits),
-                            cnode.0,
-                            budget_slot,
-                            1,
-                        )
-                        .is_err()
-                {
-                    fail_reason(&info, 19);
-                }
-                // Per-service device copies: the master stays with init, the
-                // copy is revoked on teardown so the device region watermark
-                // resets even after a driver retyped MMIO frames from it.
-                for (k, name) in services[index]
-                    .cfg
-                    .devices
-                    .iter()
-                    .enumerate()
-                    .take(MAX_DEVICES)
-                {
-                    let Some(position) =
-                        DEVICE_NAMES.iter().position(|candidate| candidate == name)
-                    else {
-                        fail_reason(&info, 17);
-                    };
-                    if cnode
-                        .copy(
-                            services[index].device_copies[k],
-                            CPtr(INIT_CNODE),
-                            DEV_MASTER_BASE + position as u64,
-                            RIGHTS_ALL,
-                        )
-                        .is_err()
-                    {
-                        fail_reason(&info, 19);
-                    }
-                }
-                // Per-service IRQHandler copy, made once like the device
-                // copies; teardown clears the master's binding so the next
-                // incarnation re-binds from scratch (docs/irq.md §8).
-                if services[index].irq_master != 0
-                    && cnode
-                        .copy(
-                            services[index].irq_copy,
-                            CPtr(INIT_CNODE),
-                            services[index].irq_master,
-                            RIGHTS_ALL,
-                        )
-                        .is_err()
-                {
-                    fail_reason(&info, 19);
-                }
-                services[index].infra = true;
-            }
             spawn_service(&mut services, index, console_ep, rom);
         }
         if services.iter().all(|s| matches!(s.status, Status::Failed)) && !services.is_empty() {
@@ -343,6 +357,7 @@ fn run(info: SpawnInfo) -> ! {
         }
 
         let Ok(received) = ipc::recv(CONTROL_OBJ) else {
+            rstiny::debug_println!("[init][t] recv err");
             continue;
         };
         if received.badge >= INTERNAL_BADGE_BASE {
@@ -411,6 +426,7 @@ fn run(info: SpawnInfo) -> ! {
         match received.label {
             control::READY if received.badge == badge_for(index) => {
                 services[index].status = Status::Running;
+                rstiny::debug_println!("[init][t] ready from {}", services[index].cfg.name);
                 // READY arrived as a Call: answer it before anything else,
                 // or the service stays BlockedReply (§7.3).
                 let _ = ipc::reply(0, &[]);
@@ -551,41 +567,67 @@ fn virtio_slot(name: &str, line_count: u64) -> Option<u64> {
         .map(|device| line_count - 1 - device)
 }
 
-/// The init-side IRQHandler master slot serving `cfg`'s device, if any.
-fn irq_master(cfg: &rstiny_initcfg::ServiceCfg, master_base: u64, line_count: u64) -> u64 {
-    if master_base == 0 {
-        return 0;
+/// The device Untyped master a configured name resolves to. Device names
+/// resolve to the masters userboot granted in ascending physical order
+/// (docs/disk-driver.md section 5.1): master 0 is the PL011, master 1 the
+/// *whole* VirtIO MMIO window. `virtio-mmio-N` names the Nth VirtIO device
+/// inside that one window (docs/gui-display.md §2): every ordinal shares
+/// master 1, only the IRQ line differs.
+fn device_master(name: &str) -> Option<u64> {
+    match name {
+        "uart0" => Some(0),
+        other => other
+            .strip_prefix("virtio-mmio-")?
+            .parse::<u64>()
+            .ok()
+            .map(|_| 1),
     }
-    cfg.devices
+}
+
+/// The init-side IRQHandler master slots serving `cfg`'s devices, in
+/// configuration order: one line per named VirtIO device (docs/gui-display.md
+/// §2), up to [`MAX_DEVICE_IRQS`].
+fn service_irq_masters(
+    cfg: &rstiny_initcfg::ServiceCfg,
+    master_base: u64,
+    line_count: u64,
+) -> [u64; MAX_DEVICE_IRQS] {
+    let mut masters = [0u64; MAX_DEVICE_IRQS];
+    if master_base == 0 {
+        return masters;
+    }
+    for (k, slot) in cfg
+        .devices
         .iter()
-        .find_map(|name| virtio_slot(name, line_count).map(|slot| master_base + slot))
-        .unwrap_or(0)
+        .filter_map(|name| virtio_slot(name, line_count))
+        .take(MAX_DEVICE_IRQS)
+        .enumerate()
+    {
+        masters[k] = master_base + slot;
+    }
+    masters
 }
 
 /// STOP handshake (graceful) when the service is Running, then destroy and
 /// reclaim its derivation subtree and budget watermark.
 fn stop_and_reap(service: &mut ServiceState, _graceful_exit: bool) {
-    // Revoke the per-service device copies before the task teardown: a
-    // driver's MMIO frames derive from the device region, and only a revoke
-    // of that subtree resets the region watermark — a plain budget revoke
-    // would leak it and starve the next spawn (docs/disk-driver.md §6.4).
+    // The device Untyped copies are supervisor-owned and survive the
+    // teardown, like the budget: revoking the copy itself would finalise the
+    // *whole device region* — every other VirtIO driver's window frames with
+    // it (kernel `finalise_untyped` is region-granular, and block- and
+    // gpu-server share one window, docs/gui-display.md §2). Nothing here may
+    // revoke a device region.
     let cnode = CNode(CPtr(INIT_CNODE));
-    for &slot in &service.device_copies {
-        if slot != 0 {
-            // SAFETY: the terminated service no longer touches the device.
-            unsafe {
-                let _ = cnode.revoke(slot);
-            }
-        }
-    }
-    // Quiesce the service's IRQ line through the master: Clear drops the
+    // Quiesce the service's IRQ lines through the masters: Clear drops the
     // (possibly dead) notification binding and disables/deactivates the line
     // so a re-authorized driver starts deliverable (docs/irq.md §8).
-    if service.irq_master != 0 {
-        let _ = IrqHandler(CPtr(service.irq_master)).clear();
-        // SAFETY: the terminated service no longer touches the device.
-        unsafe {
-            let _ = cnode.revoke(service.irq_copy);
+    for k in 0..MAX_DEVICE_IRQS {
+        if service.irq_masters[k] != 0 {
+            let _ = IrqHandler(CPtr(service.irq_masters[k])).clear();
+            // SAFETY: the terminated service no longer touches the device.
+            unsafe {
+                let _ = cnode.revoke(service.irq_copies[k]);
+            }
         }
     }
     // A faulted or exited service is already halted; the STOP handshake
@@ -715,8 +757,13 @@ fn spawn_service(services: &mut Vec<ServiceState>, index: usize, console_ep: u64
             for (j, (slot, _)) in deps.iter().enumerate() {
                 extra[SpawnInfo::DEP_EP_BASE + j] = *slot;
             }
-            extra[SpawnInfo::IRQ_SLOT] = if service.irq_master != 0 {
+            extra[SpawnInfo::IRQ_SLOT] = if service.irq_masters[0] != 0 {
                 CHILD_IRQ
+            } else {
+                0
+            };
+            extra[SpawnInfo::IRQ_SLOT2] = if service.irq_masters[1] != 0 {
+                CHILD_IRQ2
             } else {
                 0
             };
@@ -782,23 +829,26 @@ fn spawn_service(services: &mut Vec<ServiceState>, index: usize, console_ep: u64
         };
         used += 1;
     }
-    // The device IRQ handler, if this service drives an interrupt
-    // (docs/irq.md §8): the child binds its own Notification to it.
-    if service.irq_master != 0 {
+    // The device IRQ handlers, for every device this service drives an
+    // interrupt for (docs/irq.md §8): the child binds its own Notifications.
+    for (k, &master) in service.irq_masters.iter().enumerate() {
+        if master == 0 {
+            continue;
+        }
         if used == caps.len() {
             services[index].status = Status::Failed;
             return;
         }
         caps[used] = ChildCap {
-            slot: CHILD_IRQ,
-            source: service.irq_copy,
+            slot: if k == 0 { CHILD_IRQ } else { CHILD_IRQ2 },
+            source: service.irq_copies[k],
             rights: RIGHTS_ALL,
             badge: 0,
         };
         used += 1;
     }
 
-    match unsafe {
+    let spawned = unsafe {
         // The service's allocations carve its own per-service sub-region, so
         // the teardown revoke (Task::destroy) is scoped to this service only.
         rstiny::elf::spawn_supervised(
@@ -814,7 +864,8 @@ fn spawn_service(services: &mut Vec<ServiceState>, index: usize, console_ep: u64
                     + index as u64 * rstiny::elf::LOADER_SLOT_STRIDE,
             },
         )
-    } {
+    };
+    match spawned {
         Ok(task) => {
             services[index].task = Some(task);
             services[index].status = Status::Starting;

@@ -32,9 +32,9 @@ const WINDOW_VA: usize = 0x0400_0000;
 const MMIO_PAGES: u64 = 4; // 16 KiB VirtIO MMIO window from the device Untyped
 const MMIO_VA: usize = WINDOW_VA;
 const DMA_VA: usize = WINDOW_VA + 0x8000; // DMA frames handed out by Hal
+const MMIO_PAGE: u64 = 40;
 const DMA_MAX_PAGES: usize = 16;
 const BUF_VA: usize = DMA_VA + DMA_MAX_PAGES * 0x1000;
-const MMIO_PAGE: u64 = 40;
 const TABLE_SLOT: u64 = 44;
 const DMA_SLOT: u64 = 45; // + i: DMA frames, handed out sequentially
 const BUF_SLOT: u64 = DMA_SLOT + DMA_MAX_PAGES as u64;
@@ -171,7 +171,9 @@ fn main(argument: Argument) -> ! {
     };
     let cnode = CNode(CPtr(INIT_CNODE));
     // Device registers: the whole window comes from the device Untyped, which
-    // the supervisor grants in full (device regions are never split).
+    // the supervisor grants in full (device regions are never split). The
+    // kernel resolves device retypes by physical address, so block- and
+    // gpu-server share the same window frames (docs/gui-display.md §10).
     if Untyped(CPtr(device_slot))
         .retype(ObjectType::SmallPage, 0, cnode.0, MMIO_PAGE, MMIO_PAGES)
         .is_err()

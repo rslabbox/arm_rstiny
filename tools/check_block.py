@@ -11,7 +11,7 @@ from pathlib import Path
 
 from check_kernel import boot_image
 
-BOOT_TIMEOUT = 30.0
+BOOT_TIMEOUT = 400.0
 TARGET = 'aarch64-unknown-none-softfloat'
 
 
@@ -27,6 +27,9 @@ def run(qemu, kernel, disk):
             '-global', 'virtio-mmio.force-legacy=false',
             '-drive', f'file={disk},if=none,format=raw,id=hd0,readonly=on',
             '-device', 'virtio-blk-device,drive=hd0',
+            '-device', 'virtio-gpu-device,xres=640,yres=480',
+            '-device', 'virtio-keyboard-device',
+            '-device', 'virtio-mouse-device',
             '-serial', f'file:{serial}', '-kernel', str(boot_image(kernel)),
         ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         try:

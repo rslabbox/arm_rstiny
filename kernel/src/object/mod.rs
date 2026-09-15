@@ -395,9 +395,38 @@ impl Store {
         Ok(FrameRef::new(id, virt, physical, device))
     }
     /// Allocate a page from an Untyped region and publish it as a frame object.
-    fn new_untyped_frame(&mut self, untyped: ObjectId, page_table: bool) -> Result<FrameRef> {
-        let (physical, offset) = self.untyped_allocate(untyped, PAGE_SIZE, PAGE_SIZE)?;
+    fn new_untyped_frame(
+        &mut self,
+        untyped: ObjectId,
+        page_table: bool,
+        index: u64,
+    ) -> Result<FrameRef> {
         let is_device = self.untyped(untyped)?.is_device();
+        let (physical, offset) = if is_device {
+            // Device regions have no usable per-cap watermark: several
+            // drivers share one region (the 16 KiB VirtIO MMIO window holds
+            // every device's 0x200 slot, and 4 KiB frames are coarser than
+            // that), so a retype always covers the region from its base, and
+            // a page another driver already holds yields a fresh cap to the
+            // *same* Frame object instead of failing on the shared watermark
+            // (docs/gui-display.md §2).
+            let region = self.untyped(untyped)?;
+            let base = region.physical();
+            let offset = (index as usize)
+                .checked_mul(PAGE_SIZE)
+                .ok_or(RANGE_ERROR)?;
+            let physical = base.checked_add(offset).ok_or(RANGE_ERROR)?;
+            if physical + PAGE_SIZE > base.checked_add(region.size()).ok_or(RANGE_ERROR)? {
+                return Err(RANGE_ERROR);
+            }
+            if let Some(id) = self.device_frame_at(physical) {
+                let frame = Frame::from_untyped(physical, true).map_err(|e| e as u64)?;
+                return Ok(FrameRef::new(id, frame.address(), physical, true));
+            }
+            (physical, offset)
+        } else {
+            self.untyped_allocate(untyped, PAGE_SIZE, PAGE_SIZE)?
+        };
         let frame = Frame::from_untyped(physical, is_device).map_err(|e| e as u64)?;
         let virt = frame.address();
         if !is_device {
@@ -424,10 +453,18 @@ impl Store {
             .ok_or(NO_MEMORY)?;
         Ok(FrameRef::new(id, virt, physical, is_device))
     }
+    /// The existing device Frame object covering `physical`, if a previous
+    /// retype already published it (device regions are shared by address).
+    fn device_frame_at(&self, physical: usize) -> Option<ObjectId> {
+        self.objects.iter().find_map(|(id, object)| match object {
+            Object::Frame(frame) if frame.is_device() && frame.physical() == physical => Some(id),
+            _ => None,
+        })
+    }
     /// `untyped == None` uses the kernel boot pool; `Some` carves user memory.
     fn new_frame(&mut self, untyped: Option<ObjectId>, page_table: bool) -> Result<FrameRef> {
         match untyped {
-            Some(untyped) => self.new_untyped_frame(untyped, page_table),
+            Some(untyped) => self.new_untyped_frame(untyped, page_table, 0),
             None => {
                 let frame = Frame::allocate().map_err(|e| e as u64)?;
                 self.insert_page(frame, page_table)

@@ -30,7 +30,10 @@ const FS_BUF_VA: usize = 0x0400_0000; // fs shared buffer, granted on BIND
 const SCRATCH_VA: usize = 0x07E0_0000; // loader alias while spawning a child
 const TABLE_SLOT: u64 = 44; // L3 covering FS_BUF_VA
 const FS_RECV_SLOT: u64 = 60; // landing slot for the fs BIND cap transfer
-const FS_SELF_SLOT: u64 = 54; // mysh's own badged fs client cap
+/// mysh's own badged fs client cap. Slots 53/54 hold the fs and gpu
+/// dependency endpoints the supervisor grants (docs/gui-display.md §6), so
+/// the mint target sits above them.
+const FS_SELF_SLOT: u64 = 58;
 const CHILD_BUDGET_SLOT: u64 = 90; // sub-Untyped carved for a child
 const CHILD_BUDGET_BITS: u64 = 20; // 1 MiB per child
 // Largest program the shell will load from disk; the C app (minic) links
@@ -44,6 +47,9 @@ const CHILD_BUDGET: u64 = 32;
 /// fs client endpoint, copied into the child's slot 53 on request only
 /// (interpreter-app.md 决策 I; arg-taking programs get it, plain runs do not).
 const CHILD_FS: u64 = 53;
+/// gpu-server client endpoint for arg-taking programs (docs/gui-display.md
+/// §6, D2): only children the shell gives it to can LEASE the framebuffer.
+const CHILD_GPU: u64 = 55;
 /// fs v2 client identities (P2.1): the server's binding table keys on the
 /// endpoint badge, so each concurrent client mints a distinct badge onto the
 /// unbadged dependency cap — the shell itself uses badge 1, every spawned
@@ -345,9 +351,10 @@ fn run_program(service: &Service, fs_ep: u64, stem: &str, args: &[&str]) {
         extra: {
             let mut extra = [0; SpawnInfo::EXTRA_LEN];
             extra[SpawnInfo::CONSOLE_EP] = CHILD_CONSOLE;
-            // fs dependency slot: granted only to arg-taking programs.
+            // Dependency slots: granted only to arg-taking programs (决策 I).
             if !args.is_empty() {
                 extra[SpawnInfo::DEP_EP_BASE] = CHILD_FS;
+                extra[SpawnInfo::DEP_EP_BASE + 1] = CHILD_GPU;
             }
             extra
         },
@@ -394,10 +401,23 @@ fn run_program(service: &Service, fs_ep: u64, stem: &str, args: &[&str]) {
             rights: RIGHTS_ALL,
             badge: FS_CHILD_BADGE,
         },
+        // gpu-server client endpoint, same grant policy: arg-taking programs
+        // only (docs/gui-display.md §6). Only granted when the shell itself
+        // has the gpu dependency, so topologies without the GPU service keep
+        // working unchanged.
+        ChildCap {
+            slot: CHILD_GPU,
+            source: service.extra[SpawnInfo::DEP_EP_BASE + 1],
+            rights: RIGHTS_ALL,
+            badge: 0,
+        },
     ];
     let mut used = 4;
     if !args.is_empty() {
         used = 5;
+        if service.extra[SpawnInfo::DEP_EP_BASE + 1] != 0 {
+            used = 6;
+        }
     }
     // SAFETY: SCRATCH_VA is an unmapped page this task reserves exclusively.
     match args.len() {

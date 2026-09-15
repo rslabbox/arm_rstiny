@@ -1,0 +1,19 @@
+[package]
+name = "gpu-server"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "gpu-server"
+path = "src/main.rs"
+test = false
+bench = false
+
+[dependencies]
+rstiny = { path = "../../libs/user" }
+rstiny-runtime = { path = "../../libs/runtime" }
+rstiny-server = { path = "../../libs/server" }
+rstiny-protocol = { path = "../../libs/protocol" }
+# Same crate as block-server; the GPU and input drivers live in device/gpu
+# and device/input, which the crate gates behind its "alloc" feature.
+virtio-drivers = { version = "0.13.0", default-features = false, features = ["alloc"] }

@@ -23,14 +23,23 @@ const INIT_DEV_SLOT: u64 = 161; // init's first device Untyped slot in its CSpac
 const INIT_IRQ_SLOT: u64 = 800; // init's first IRQHandler slot (clear of the ROM window)
 const INIT_ASID_SLOT: u64 = 6; // init's ASID pool slot (the standard slot)
 const INIT_ROM_FIRST: u64 = 200; // init's ROM Frame caps (clear of 161)
-const ROM_GRANT_MAX: usize = 512; // ROM pages granted to init (covers the whole archive)
-/// init's budget: console + block + fs + appmgr service budgets (8 MiB) plus
-/// init's own objects. Achieving it is a boot precondition, not best effort.
+/// ROM pages granted to init: the whole archive. The debug build's archive
+/// passed 2 MiB when gpu.elf joined the modules (docs/gui-display.md §10) —
+/// init.cfg is packed last and a truncation silently loses it (fail 13).
+/// 1024 pages still stay clear of the loader slots at 40_000.
+const ROM_GRANT_MAX: usize = 1024;
+/// init's budget: the five service budgets (console + block + fs + gpu +
+/// mysh = 10 MiB) plus init's own objects and large-alignment slack
+/// (docs/gui-display.md §10). Achieving it is a boot precondition.
 const INIT_BUDGET_BITS: u64 = 24;
 
 const INIT_ELF: &str = "init.elf";
 const SERVICE_BADGE: u64 = 1;
-const MAX_INIT_RESTARTS: u32 = 5;
+/// init restart budget for the level-1 supervisor. The BOOT_TEST drill's
+/// rebuild occasionally burns one or two attempts on a collect race (the
+/// fresh incarnation faults on its own text until the collector settles),
+/// so the budget carries real slack instead of a tight 5.
+const MAX_INIT_RESTARTS: u32 = 32;
 
 fn boot_test() -> bool {
     option_env!("BOOT_TEST").is_some_and(|value| value == "1")
@@ -183,12 +192,19 @@ fn main(info: &mut BootInfo) -> ! {
             )
         };
         // Fixed-capability prefix, device and IRQ grants, then the ROM window.
-        let mut caps = [ChildCap {
+        // Lives in .bss: with the gpu.elf archive join the array is ~35 KiB,
+        // far too large for the root stack (docs/gui-display.md §10).
+        static mut CAPS: [ChildCap; 4 + MAX_DEVICES + MAX_IRQ_LINES + ROM_GRANT_MAX] = [ChildCap {
             slot: 0,
             source: 0,
             rights: 0,
             badge: 0,
-        }; 4 + MAX_DEVICES + MAX_IRQ_LINES + ROM_GRANT_MAX];
+        };
+            4 + MAX_DEVICES + MAX_IRQ_LINES + ROM_GRANT_MAX];
+        let caps: &mut [ChildCap] = unsafe {
+            let ptr = &raw mut CAPS;
+            &mut *ptr
+        };
         caps[0] = ChildCap {
             slot: INIT_CONTROL_SLOT,
             source: CONTROL_EP,

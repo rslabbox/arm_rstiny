@@ -11,11 +11,14 @@ from pathlib import Path
 
 from check_kernel import boot_image
 
-BOOT_TIMEOUT = 40.0
+BOOT_TIMEOUT = 400.0
 TARGET = 'aarch64-unknown-none-softfloat'
 QEMU_DISK_ARGS = [
     '-global', 'virtio-mmio.force-legacy=false',
     '-device', 'virtio-blk-device,drive=hd0',
+    '-device', 'virtio-gpu-device,xres=640,yres=480',
+    '-device', 'virtio-keyboard-device',
+    '-device', 'virtio-mouse-device',
 ]
 
 

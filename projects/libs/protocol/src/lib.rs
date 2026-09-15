@@ -61,6 +61,13 @@ impl SpawnInfo {
     pub const DEP_EP_BASE: usize = 5;
     /// `extra[8]`: device IRQ handler slot (0 = none granted).
     pub const IRQ_SLOT: usize = 8;
+    /// `extra[10]`: second device IRQ handler slot (0 = none granted). A
+    /// multi-device service (gpu-server drives virtio-gpu *and*
+    /// virtio-keyboard, docs/gui-display.md §4) receives one handler per
+    /// device, in `devices` order. Slot 9 stays reserved: on *init's own*
+    /// parameter page userboot stores the platform IRQ-line count there
+    /// (docs/irq.md §8), so a service slot must not collide with that reading.
+    pub const IRQ_SLOT2: usize = 10;
     /// Length of the `extra` slot array.
     pub const EXTRA_LEN: usize = 12;
 }
@@ -204,6 +211,44 @@ pub mod fs {
     pub const DIR_ENTRIES_PER_PAGE: usize = 0x1000 / core::mem::size_of::<DirEntry>();
 }
 
+/// GPU service protocol on `gpu_ep` (docs/gui-display.md §4). One client at a
+/// time holds the full-screen framebuffer lease; pixels travel in the leased
+/// frames themselves, not through a shared buffer.
+///
+/// The wire format is fixed at 32 bits per pixel, little-endian `0xAARRGGBB`
+/// (virtio `B8G8R8A8UNORM`), row stride `width * 4`.
+pub mod gpu {
+    pub const BASE: u64 = 0x600;
+    pub const PROTOCOL_VERSION: u64 = 1;
+    /// Frame capabilities one message may carry (the kernel wire maximum).
+    pub const CAPS_PER_BATCH: usize = kernel_abi::MAX_EXTRA_CAPS;
+
+    /// mr0 = version. Reply: mr0 = served version, mr1 = width, mr2 = height,
+    /// mr3 = framebuffer bytes (`width * height * 4`).
+    pub const BIND: u64 = BASE + 0x00;
+    /// Reply: mr0 = status, mr1 = leased pages, mr2 = framebuffer bytes.
+    /// Grants [`CAPS_PER_BATCH`] Frame caps for framebuffer pages 0..3.
+    pub const LEASE: u64 = BASE + 0x01;
+    /// mr0 = first page (a multiple of [`CAPS_PER_BATCH`]). Reply: mr0 =
+    /// status, mr1 = first page. Grants the Frame caps for pages
+    /// `first..first + CAPS_PER_BATCH`. The client repeats until it holds all
+    /// `pages` reported by LEASE: one message cannot carry 300 caps.
+    pub const LEASE_BATCH: u64 = BASE + 0x02;
+    /// mr0 = x, mr1 = y, mr2 = w, mr3 = h (dirty rectangle). Reply: mr0 =
+    /// status. v1 submits the whole resource: the driver keeps the per-rect
+    /// transfer private (docs/gui-display.md, implementation record).
+    pub const FLUSH: u64 = BASE + 0x03;
+    /// mr0 = first page; grants the [`CAPS_PER_BATCH`] Frame caps back. The
+    /// client returns every page, batch by batch; once the server holds all
+    /// `pages` again the lease ends and it re-maps the framebuffer. Reply:
+    /// mr0 = status, mr1 = pages still missing.
+    pub const RELEASE: u64 = BASE + 0x04;
+    /// Non-blocking read of one input event (keyboard/mouse). Request: none.
+    /// Reply: mr0 = present (1 = event, 0 = queue empty), mr1 = event type,
+    /// mr2 = event code, mr3 = event value (evdev encoding).
+    pub const INPUT_READ: u64 = BASE + 0x05;
+}
+
 /// Declared protocol segments, for the disjointness test.
 pub const SEGMENTS: &[(&str, u64)] = &[
     ("console", console::BASE),
@@ -211,6 +256,7 @@ pub const SEGMENTS: &[(&str, u64)] = &[
     ("internal", internal::BASE),
     ("block", block::BASE),
     ("fs", fs::BASE),
+    ("gpu", gpu::BASE),
 ];
 
 /// Every defined label with the segment base it must fall inside.
@@ -238,6 +284,13 @@ pub const LABELS: &[(&str, u64, u64)] = &[
     ("fs::READ", fs::READ, fs::BASE),
     ("fs::CLOSE", fs::CLOSE, fs::BASE),
     ("fs::STAT", fs::STAT, fs::BASE),
+    ("fs::READDIR", fs::READDIR, fs::BASE),
+    ("gpu::BIND", gpu::BIND, gpu::BASE),
+    ("gpu::LEASE", gpu::LEASE, gpu::BASE),
+    ("gpu::LEASE_BATCH", gpu::LEASE_BATCH, gpu::BASE),
+    ("gpu::FLUSH", gpu::FLUSH, gpu::BASE),
+    ("gpu::RELEASE", gpu::RELEASE, gpu::BASE),
+    ("gpu::INPUT_READ", gpu::INPUT_READ, gpu::BASE),
 ];
 
 // Compile-time proof that the segments are disjoint: each base starts at or
@@ -247,8 +300,9 @@ const _: () = {
     assert!(control::BASE + SEGMENT_SIZE <= internal::BASE);
     assert!(internal::BASE + SEGMENT_SIZE <= block::BASE);
     assert!(block::BASE + SEGMENT_SIZE <= fs::BASE);
+    assert!(fs::BASE + SEGMENT_SIZE <= gpu::BASE);
     // The kernel Runtime extension owns its own segment at 0x1000.
-    assert!(fs::BASE + SEGMENT_SIZE <= 0x1000);
+    assert!(gpu::BASE + SEGMENT_SIZE <= 0x1000);
 };
 
 /// The loader's x0 start argument for supervised children: the parameter

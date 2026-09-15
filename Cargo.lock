@@ -166,6 +166,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "gpu-server"
+version = "0.1.0"
+dependencies = [
+ "rstiny",
+ "rstiny-protocol",
+ "rstiny-runtime",
+ "rstiny-server",
+ "virtio-drivers",
+]
+
+[[package]]
+name = "gui"
+version = "0.1.0"
+dependencies = [
+ "rstiny",
+ "rstiny-gui",
+ "rstiny-protocol",
+ "rstiny-runtime",
+ "rstiny-server",
+]
+
+[[package]]
 name = "hadris-common"
 version = "2.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -388,6 +410,10 @@ dependencies = [
 
 [[package]]
 name = "rstiny-elf"
+version = "0.1.0"
+
+[[package]]
+name = "rstiny-gui"
 version = "0.1.0"
 
 [[package]]

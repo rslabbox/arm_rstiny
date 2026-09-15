@@ -188,10 +188,14 @@ fn retype(cap: &Cap, request: &Request) -> Result<Completion> {
         if occupied {
             return Err(ALREADY_MAPPED);
         }
-        // Exact watermark simulation: alignment padding is accounted per object.
-        if !store
-            .untyped(cap.object)?
-            .fits(count as usize, object_bytes, object_align)
+        // Exact watermark simulation: alignment padding is accounted per
+        // object. Device regions skip it: they have no per-cap watermark,
+        // every retype covers the region from its base (see
+        // `Store::new_untyped_frame`).
+        if !store.untyped(cap.object)?.is_device()
+            && !store
+                .untyped(cap.object)?
+                .fits(count as usize, object_bytes, object_align)
         {
             return Err(NO_MEMORY);
         }
@@ -249,7 +253,7 @@ fn retype(cap: &Cap, request: &Request) -> Result<Completion> {
                     .new_vspace(Some(cap.object))
                     .expect("reserved capacity"),
                 n if n == ObjectType::SmallPage as u64 => store
-                    .new_untyped_frame(cap.object, false)
+                    .new_untyped_frame(cap.object, false, index)
                     .expect("reserved capacity")
                     .id(),
                 n if n == ObjectType::Endpoint as u64 || n == ObjectType::Notification as u64 => {
@@ -293,7 +297,7 @@ fn retype(cap: &Cap, request: &Request) -> Result<Completion> {
                         .expect("reserved capacity")
                 }
                 _ => store
-                    .new_untyped_frame(cap.object, true)
+                    .new_untyped_frame(cap.object, true, index)
                     .expect("reserved capacity")
                     .id(),
             };

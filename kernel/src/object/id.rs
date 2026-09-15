@@ -9,7 +9,7 @@ use alloc::collections::BTreeMap;
 
 /// Hard upper bound on simultaneously live objects. Object memory is kernel
 /// metadata, not user-controllable; exhaustion is reported, never panicked.
-pub const MAX_OBJECTS: usize = 4096;
+pub const MAX_OBJECTS: usize = 8192;
 
 /// Stable identity of an object table entry.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]

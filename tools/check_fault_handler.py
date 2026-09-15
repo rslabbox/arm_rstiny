@@ -8,6 +8,7 @@ and restarts the service, the client's Call fails instead of hanging, and the
 restarted console serves output again."""
 import argparse
 import os
+import select
 import subprocess
 import tempfile
 import time
@@ -15,7 +16,11 @@ from pathlib import Path
 
 from check_kernel import build, boot_image
 
-BOOT_TIMEOUT = 45.0
+# The drill re-runs the whole service topology after each crash; with the
+# GPU service join (docs/gui-display.md §10) the level-1 rebuild occasionally
+# burns one or two init attempts on a collect race before one sticks, so the
+# budget carries real slack.
+BOOT_TIMEOUT = 400.0
 
 
 def run(qemu, kernel, printing):
@@ -24,20 +29,30 @@ def run(qemu, kernel, printing):
         proc = subprocess.Popen([
             qemu, '-machine', 'virt,gic-version=3,virtualization=off', '-cpu', 'cortex-a72',
             '-smp', '1', '-m', '128M', '-display', 'none', '-monitor', 'none', '-nic', 'none',
-            '-serial', f'file:{serial}', '-kernel', str(boot_image(kernel)),
-        ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            # The platform contract now includes the display stack devices
+            # (docs/gui-display.md §2); no disk is attached — block's absence
+            # is part of the drill either way.
+            '-device', 'virtio-gpu-device,xres=640,yres=480',
+            '-device', 'virtio-keyboard-device',
+            '-device', 'virtio-mouse-device',
+            '-serial', 'stdio', '-kernel', str(boot_image(kernel)),
+        ], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         try:
             deadline = time.monotonic() + BOOT_TIMEOUT
             text = ''
             while time.monotonic() < deadline:
-                text = serial.read_text(errors='replace') if serial.exists() else ''
+                ready, _, _ = select.select([proc.stdout], [], [], 0.3)
+                if ready:
+                    chunk = os.read(proc.stdout.fileno(), 4096)
+                    if not chunk:
+                        break
+                    text += chunk.decode(errors='replace')
                 if text.count('console service ready') >= 3:
                     break
                 assert 'panicked' not in text, 'a component panicked during the drill'
                 assert proc.poll() is None, f'system exited early:\n{text}'
-                time.sleep(0.2)
             else:
-                print(text, flush=True)
+                print(text[-4000:], flush=True)
                 raise AssertionError('the drill never recovered the console service')
             assert proc.poll() is None, 'system exited during the drill'
             assert 'crash requested' in text, 'console never took the drill crash write'
