@@ -211,8 +211,31 @@ D5（MicroPython framebuf、双客户端）仍不排期。与规划的主要偏�
   链路已授权并绑定（与 gpu 完成中断一样在 FLUSH/READ 后 ack），但没有
   实现"事件到达唤醒服务"的阻塞等待——与 console READ 的先例一致。
 - 无光标、无双客户端、无矢量字体（§1 非目标维持不变）。
-- **未决（跟进项）**：加入 gpu 服务后的六服务拓扑在 debug 构建下存在
-  启动竞态——console READY 之后 block 的 spawn 偶发不再推进。已做
-  缓解：BOOT_TEST 演练隔离到 configs/init-drill.cfg、check_mysh/
-  block/fat32/fs2 超时放宽、userboot MAX_INIT_RESTARTS 32、init
-  预算前置打包。根因需要内核侧 trace 跟进。
+- **已解决（2026-09 晚于 a3d922b）**："六服务启动竞态"的根因不是内核、
+  也不是 QEMU 的 IRQ 层，而是 **`MmioTransport` 的 `Drop` 会把设备复位**
+  （virtio-drivers 0.13 `impl Drop` → `set_status(empty)`）。三个 probe
+  函数对窗口内每个槽位构造 transport、类型不匹配就地 `continue`——drop
+  即复位。时序：block-server 先初始化 blk 成功；gpu-server 的
+  `probe_inputs` 扫过 mouse/kbd 后继续扫 gpu 与 blk 槽，两个 transport
+  被 drop，**把已就绪的 gpu 和 blk 全部复位**；fs 挂载的 READ 提交进一个
+  status=0、vring=0 的空设备（QMP `x-query-virtio-status` 实证
+  `started=false`、`last_avail_idx=0`），完成中断自然永不触发，mysh→fs→
+  block 三级死锁。此前所有"竞态/GIC 路由失稳"的表象都是它的次生噪声
+  （复位设备的线被 UNROUTED 路径禁用等）。修复：probe 中类型不匹配的
+  transport 用 `core::mem::forget` 保活（它只包裸指针、无堆分配），
+  `probe`/`probe_gpu`/`probe_inputs` 三处同改。
+- wm 场景遗留（截图验收时发现）：字库原只覆盖 0x20..=0x5F，小写字母
+  全部渲染成 `?`——font.rs 已用 fontgen 工程重新生成 0x20..=0x7E
+  （95 字形，check_gpu.py 的 `load_font` 断言 ≥64 仍兼容）。另：QEMU
+  `sendkey kp_add/kp_enter` 在 wm 键码表里的映射有偏差（注入 1+2= 得到
+  "33"），桌面键盘路径未复查，留待 wm v2。
+- **新的未决（check_fault_handler，a3d922b 既有、与本节前述修复无关，
+  已用 stash 对照实验证实）**：服务 teardown 后的 respawn 路径存在
+  缺陷——block 退出后 init 按退避策略重启，重启周期里偶发两个任务
+  `user fault PC=0`（ESR=0x82000006 指令权限错误、FAR=0，疑似入口为 0
+  的加载失败，与"父水位线不回滚"的预算语义吻合），gpu-server 在重启
+  周期里从未输出任何日志即被 teardown，drill 永远到不了第三次
+  console ready。BOOT_TIMEOUT 已是 400 s 仍不够。这是 `make check`
+  当前的阻塞点（check_fault_handler 之前的 kernel/bootloader/userboot
+  检查全部通过，其后的检查因中止未跑到；check_gpu 的 release 两组合
+  可单独运行并通过）。

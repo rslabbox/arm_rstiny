@@ -442,6 +442,11 @@ fn probe(window: usize, window_size: usize) -> Option<VirtIOBlk<HalImpl, MmioTra
             continue;
         };
         if transport.device_type() != DeviceType::Block {
+            // MmioTransport's Drop resets the device, which would wipe a
+            // device another driver in the shared window has already
+            // initialised (the fs mount deadlocked exactly this way). Leave
+            // it as it is: the transport owns no allocation.
+            core::mem::forget(transport);
             continue;
         }
         return VirtIOBlk::new(transport).ok();

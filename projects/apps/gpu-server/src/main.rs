@@ -747,6 +747,10 @@ fn probe_gpu(
             continue;
         };
         if transport.device_type() != DeviceType::GPU {
+            // MmioTransport's Drop resets the device: forget it so a live
+            // device (block-server's, or our own after a re-probe) is left
+            // untouched. The transport owns no allocation.
+            core::mem::forget(transport);
             continue;
         }
         return VirtIOGpu::new(transport).ok();
@@ -772,6 +776,11 @@ fn probe_inputs(
             Err(_) => continue,
         };
         if transport.device_type() != DeviceType::Input {
+            // MmioTransport's Drop resets the device: forget it, or scanning
+            // past the inputs wipes the already-initialised GPU and the
+            // block-server's device (the six-service boot deadlock). The
+            // transport owns no allocation.
+            core::mem::forget(transport);
             continue;
         }
         if let Ok(device) = VirtIOInput::new(transport) {
