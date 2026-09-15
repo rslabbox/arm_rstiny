@@ -73,7 +73,7 @@ INIT_CFG := configs/init.cfg
 ifdef KILL_FS
 INIT_CFG := configs/init-appmgr.cfg
 endif
-ifdef BOOT_TEST
+ifeq ($(BOOT_TEST),1)
 INIT_CFG := configs/init-drill.cfg
 endif
 
@@ -121,8 +121,8 @@ build: userboot init console block-server fs-server gpu-server appmgr mysh platf
 	rust-objcopy --strip-all $(APPMGR_ELF) $(APP_DIR)/appmgr.elf
 	rust-objcopy --strip-all $(MYSH_ELF) $(APP_DIR)/mysh.elf
 	python3 tools/build_image.py $(KERNEL_ELF) $(USERBOOT_ELF) $(IMAGE_DIR) --platform $(PLATFORM_DIR) --mode $(MODE) \
-	  --module $(APP_DIR)/init.elf --module $(APP_DIR)/console.elf --module $(APP_DIR)/block.elf \
-	  --module $(APP_DIR)/fs.elf --module $(APP_DIR)/gpu.elf --module $(APP_DIR)/appmgr.elf --module $(APP_DIR)/mysh.elf --module init.cfg=$(INIT_CFG)
+	  --module init.cfg=$(INIT_CFG) --module $(APP_DIR)/init.elf --module $(APP_DIR)/console.elf --module $(APP_DIR)/block.elf \
+	  --module $(APP_DIR)/fs.elf --module $(APP_DIR)/gpu.elf --module $(APP_DIR)/appmgr.elf --module $(APP_DIR)/mysh.elf
 
 userboot:
 	python3 tools/build_app.py userboot --mode $(MODE) $(if $(ROOT_IMAGE_BASE),--image-base $(ROOT_IMAGE_BASE))

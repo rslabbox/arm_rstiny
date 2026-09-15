@@ -33,12 +33,18 @@ pub(crate) fn handle() -> Outcome {
         // re-delivery until the driver acknowledges, so an uncleared source
         // cannot re-enter the kernel within one driver pass.
         let woke = crate::api::signal_notification(notification, badge);
+        if id.to_u32() >= 76 {
+            log::warn!("[irqtrace] id={} nt={:?} woke={}", id.to_u32(), notification, woke);
+        }
         gic::priority_drop(active);
         return if woke {
             Outcome::Reschedule
         } else {
             Outcome::Continue
         };
+    }
+    if id.to_u32() >= 76 {
+        log::warn!("[irqtrace] id={} UNROUTED", id.to_u32());
     }
     // Unknown source: recycle the claim and disable the line.
     gic::priority_and_deactivate(active);

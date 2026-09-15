@@ -350,6 +350,7 @@ fn run(info: SpawnInfo) -> ! {
             if services[index].status != Status::Waiting || !deps_ok {
                 continue;
             }
+            rstiny::debug_println!("[init][trace] spawning idx={}", index);
             spawn_service(&mut services, index, console_ep, rom);
         }
         if services.iter().all(|s| matches!(s.status, Status::Failed)) && !services.is_empty() {
@@ -426,10 +427,11 @@ fn run(info: SpawnInfo) -> ! {
         match received.label {
             control::READY if received.badge == badge_for(index) => {
                 services[index].status = Status::Running;
-                rstiny::debug_println!("[init][t] ready from {}", services[index].cfg.name);
                 // READY arrived as a Call: answer it before anything else,
                 // or the service stays BlockedReply (§7.3).
                 let _ = ipc::reply(0, &[]);
+                // DIAGNOSTIC: does a bounded settle delay avoid the pass-2 stall?
+                let _ = rstiny::sleep(100);
                 if kill_fs && !drilled && services[index].cfg.name == "appmgr" {
                     drilled = true;
                     // Let the freshly loaded app announce itself first.

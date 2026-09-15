@@ -248,7 +248,7 @@ struct Lease {
 
 #[entry]
 fn main(argument: Argument) -> ! {
-    let Some(service) = Service::init(argument) else {
+    let Some(service) = parse_service(argument) else {
         loop {
             spin_loop();
         }
@@ -324,7 +324,7 @@ fn main(argument: Argument) -> ! {
         service.exit(2);
     }
     let gpu_irq = IrqHandler(CPtr(irq_slot));
-    let input_irq = IrqHandler(CPtr(irq2_slot));
+    let _input_irq = IrqHandler(CPtr(irq2_slot));
 
     // Probe every 0x200 slot in the granted window: only the slots QEMU
     // attached virtio-gpu / virtio-keyboard to identify themselves.
@@ -438,16 +438,20 @@ fn main(argument: Argument) -> ! {
     // INPUT_READ; the first one's line is bound to the input Notification,
     // the rest are polled (docs/gui-display.md §4).
     let mut inputs = probe_inputs(MMIO_VA, MMIO_PAGES as usize * 0x1000);
-    if let Some(first) = inputs.first_mut() {
-        let _ = first.ack_interrupt();
-        if input_irq.set_notification(CPtr(NT_INPUT_BADGED)).is_err() {
-            logln!(service, "[gpu] cannot bind the input interrupt");
-            service.exit(7);
-        }
-        logln!(service, "[gpu] {} input device(s) bound", inputs.len());
+    if !inputs.is_empty() {
+        // Poll-only: INPUT_READ drains every device's ring directly. (The
+        // interrupt binding for the keyboard line was removed: binding and
+        // acking a second line while the block IRQ path is live destabilized
+        // the GIC routing state on the 6-service topology.)
+        logln!(service, "[gpu] {} input device(s) polled", inputs.len());
     } else {
         logln!(service, "[gpu] no virtio-input device in the window");
     }
+
+    // Fully initialized: only now let the supervisor spawn the rest of the
+    // topology (fs, mysh).
+    let _ = ipc::call(service.control_ep, control::READY, &[]);
+    logln!(service, "[gpu] ready");
 
     let mut lease: Option<Lease> = None;
     loop {
@@ -653,7 +657,7 @@ fn main(argument: Argument) -> ! {
                 }
             }
             gpu::INPUT_READ => {
-                let event = read_input(inputs.as_mut_slice(), &input_irq);
+                let event = read_input(inputs.as_mut_slice());
                 let _ = ipc::reply(status::OK, &[event]);
             }
             control::STOP => {
@@ -706,27 +710,14 @@ fn word_sum(bytes: &[u8]) -> u32 {
 /// queues look empty, consume a pending interrupt (if any) and poll the
 /// first device once more. Returns the packed reply word: bit 63 = present,
 /// then type/code/value.
-fn read_input(
-    inputs: &mut [VirtIOInput<HalImpl, MmioTransport<'static>>],
-    irq: &IrqHandler,
-) -> u64 {
+fn read_input(inputs: &mut [VirtIOInput<HalImpl, MmioTransport<'static>>]) -> u64 {
     for _ in 0..4 {
         for input in inputs.iter_mut() {
             if let Some(event) = input.pop_pending_event() {
                 return pack_event(&event);
             }
         }
-        match ipc::nbrecv(NT_INPUT) {
-            Ok(Some(_)) => {
-                // An event line fired: clear the status, deactivate the line
-                // and re-poll (the events are already in the rings).
-                if let Some(first) = inputs.first_mut() {
-                    let _ = first.ack_interrupt();
-                }
-                let _ = irq.ack();
-            }
-            _ => return 0,
-        }
+        return 0;
     }
     0
 }
@@ -789,3 +780,26 @@ fn probe_inputs(
     }
     inputs
 }
+
+/// Parse the SpawnInfo page into a Service handle WITHOUT announcing READY
+/// (the READY call is deferred until the display and input init complete,
+/// docs/gui-display.md §10.4).
+fn parse_service(argument: usize) -> Option<Service> {
+    use rstiny_server::Service;
+    if argument == 0 || argument % rstiny_protocol::PAGE_SIZE as usize != 0 {
+        return None;
+    }
+    // SAFETY: the supervisor mapped this page read-only for the child; only
+    // this task reads it, for the task lifetime.
+    let info = unsafe { &*(argument as *const SpawnInfo) };
+    if info.magic != SpawnInfo::MAGIC || info.version != SpawnInfo::VERSION {
+        return None;
+    }
+    Some(Service {
+        control_ep: info.control_ep,
+        command_ep: info.command_ep,
+        console_ep: info.extra[SpawnInfo::CONSOLE_EP],
+        extra: info.extra,
+    })
+}
+
