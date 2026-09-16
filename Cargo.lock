@@ -54,6 +54,7 @@ name = "block-server"
 version = "0.1.0"
 dependencies = [
  "rstiny",
+ "rstiny-alloc",
  "rstiny-protocol",
  "rstiny-runtime",
  "rstiny-server",
@@ -160,6 +161,7 @@ dependencies = [
  "embedded-io",
  "hadris-fat",
  "rstiny",
+ "rstiny-alloc",
  "rstiny-protocol",
  "rstiny-runtime",
  "rstiny-server",
@@ -170,6 +172,7 @@ name = "gpu-server"
 version = "0.1.0"
 dependencies = [
  "rstiny",
+ "rstiny-alloc",
  "rstiny-protocol",
  "rstiny-runtime",
  "rstiny-server",
@@ -284,6 +287,7 @@ name = "init"
 version = "0.1.0"
 dependencies = [
  "rstiny",
+ "rstiny-alloc",
  "rstiny-initcfg",
  "rstiny-newc",
  "rstiny-protocol",

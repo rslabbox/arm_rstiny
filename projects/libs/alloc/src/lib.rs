@@ -361,6 +361,47 @@ unsafe fn alloc_block(need: usize) -> usize {
     block
 }
 
+// ---- Rust global allocator ------------------------------------------------
+
+/// Ready-made `GlobalAlloc` for Rust tasks (interpreter-app.md 决策 B): one
+/// allocator implementation shared by the C staticlib and every Rust binary.
+/// An application only writes
+/// `#[global_allocator] static HEAP: rstiny_alloc::Heap = rstiny_alloc::Heap;`.
+///
+/// Alignments above the 16-byte block granularity report failure (null), the
+/// `GlobalAlloc` contract's "return null" outcome; no shipped task allocates
+/// over-aligned types.
+pub struct Heap;
+
+unsafe impl core::alloc::GlobalAlloc for Heap {
+    unsafe fn alloc(&self, layout: core::alloc::Layout) -> *mut u8 {
+        if layout.align() > 16 {
+            return core::ptr::null_mut();
+        }
+        unsafe { alloc(layout.size()) }
+    }
+
+    unsafe fn dealloc(&self, pointer: *mut u8, _layout: core::alloc::Layout) {
+        unsafe { dealloc(pointer) }
+    }
+
+    unsafe fn realloc(
+        &self,
+        pointer: *mut u8,
+        layout: core::alloc::Layout,
+        new_size: usize,
+    ) -> *mut u8 {
+        if new_size == 0 {
+            unsafe { dealloc(pointer) };
+            return core::ptr::null_mut();
+        }
+        if layout.align() > 16 {
+            return core::ptr::null_mut();
+        }
+        unsafe { reallocate(pointer, new_size) }
+    }
+}
+
 // ---- public allocation API ------------------------------------------------
 
 /// Allocate `size` usable bytes, 16-byte aligned. Returns null on failure.

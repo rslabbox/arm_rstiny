@@ -60,34 +60,10 @@ const FS_CHILD_BADGE: u64 = 2;
 const PROMPT: &[u8] = b"[rstiny ~]$: ";
 const LINE_MAX: usize = 128;
 
-/// Task heap: rstiny-alloc's first-fit allocator (decision B), wrapped as the
-/// Rust global allocator so Vec/String share the same pool as C programs that
-/// link the staticlib. Grown pages are retyped from this task's own Untyped
-/// budget (slot 32) and mapped with standard object operations; freed blocks
-/// are reused (no bump-style leaks).
-struct Heap;
-unsafe impl alloc::alloc::GlobalAlloc for Heap {
-    unsafe fn alloc(&self, layout: alloc::alloc::Layout) -> *mut u8 {
-        unsafe { rstiny_alloc::alloc(layout.size()) }
-    }
-    unsafe fn dealloc(&self, pointer: *mut u8, _layout: alloc::alloc::Layout) {
-        unsafe { rstiny_alloc::dealloc(pointer) }
-    }
-    unsafe fn realloc(
-        &self,
-        pointer: *mut u8,
-        _layout: alloc::alloc::Layout,
-        size: usize,
-    ) -> *mut u8 {
-        if size == 0 {
-            unsafe { rstiny_alloc::dealloc(pointer) };
-            return core::ptr::null_mut();
-        }
-        unsafe { rstiny_alloc::reallocate(pointer, size) }
-    }
-}
+/// Task heap: rstiny-alloc (interpreter-app.md 决策 B) — the crate's shared
+/// `Heap`, wrapping the same first-fit allocator the C staticlib exports.
 #[global_allocator]
-static HEAP: Heap = Heap;
+static HEAP: rstiny_alloc::Heap = rstiny_alloc::Heap;
 
 #[entry]
 fn main(argument: Argument) -> ! {

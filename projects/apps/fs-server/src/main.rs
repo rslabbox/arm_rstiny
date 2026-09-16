@@ -47,30 +47,11 @@ struct Client {
     files: alloc::boxed::Box<[Option<FileEntry>; MAX_FILES]>,
 }
 
-/// Bump allocator over a fixed BSS pool: hadris-fat path names need owned
-/// strings, and nothing is freed before the supervisor tears the task down.
-const POOL_BYTES: usize = 64 * 1024;
-struct Bump;
-static mut POOL: [u64; POOL_BYTES / 8] = [0; POOL_BYTES / 8];
-static mut POOL_USED: usize = 0;
-unsafe impl alloc::alloc::GlobalAlloc for Bump {
-    unsafe fn alloc(&self, layout: alloc::alloc::Layout) -> *mut u8 {
-        // SAFETY: single-core user task; the cursor is only touched here.
-        unsafe {
-            let used = core::ptr::addr_of_mut!(POOL_USED);
-            let start = core::ptr::addr_of_mut!(POOL) as usize;
-            let offset = (*used).next_multiple_of(layout.align().max(8));
-            if offset + layout.size() > POOL_BYTES {
-                return core::ptr::null_mut();
-            }
-            *used = offset + layout.size();
-            (start + offset) as *mut u8
-        }
-    }
-    unsafe fn dealloc(&self, _pointer: *mut u8, _layout: alloc::alloc::Layout) {}
-}
+/// Task heap: rstiny-alloc (interpreter-app.md 决策 B) — the same first-fit
+/// allocator the C staticlib exports, shared by every Rust task. Frees are
+/// reused, and growth comes from this task's own Untyped budget.
 #[global_allocator]
-static ALLOCATOR: Bump = Bump;
+static HEAP: rstiny_alloc::Heap = rstiny_alloc::Heap;
 
 /// The block device seen through the shared buffer: reads travel over IPC and
 /// land in `CLIENT_BUF_VA`, then this adapter copies the requested window into

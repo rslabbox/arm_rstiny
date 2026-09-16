@@ -46,30 +46,11 @@ const IRQ_BADGE: u64 = 1;
 const SECTORS_PER_BUFFER: u64 = 8;
 const SLOT_STRIDE: u64 = 0x200;
 
-/// Bump allocator over a fixed BSS pool: `virtio-drivers` needs an allocator
-/// symbol; nothing is freed before the supervisor tears the service down.
-const POOL_BYTES: usize = 32 * 1024;
-struct Bump;
-static mut POOL: [u64; POOL_BYTES / 8] = [0; POOL_BYTES / 8];
-static mut POOL_USED: usize = 0;
-unsafe impl alloc::alloc::GlobalAlloc for Bump {
-    unsafe fn alloc(&self, layout: alloc::alloc::Layout) -> *mut u8 {
-        // SAFETY: single-core user task; the cursor is only touched here.
-        unsafe {
-            let used = core::ptr::addr_of_mut!(POOL_USED);
-            let start = core::ptr::addr_of_mut!(POOL) as usize;
-            let offset = (*used).next_multiple_of(layout.align().max(8));
-            if offset + layout.size() > POOL_BYTES {
-                return core::ptr::null_mut();
-            }
-            *used = offset + layout.size();
-            (start + offset) as *mut u8
-        }
-    }
-    unsafe fn dealloc(&self, _pointer: *mut u8, _layout: alloc::alloc::Layout) {}
-}
+/// Task heap: rstiny-alloc (interpreter-app.md 决策 B) — the same first-fit
+/// allocator the C staticlib exports, shared by every Rust task. Frees are
+/// reused, and growth comes from this task's own Untyped budget.
 #[global_allocator]
-static ALLOCATOR: Bump = Bump;
+static HEAP: rstiny_alloc::Heap = rstiny_alloc::Heap;
 
 /// Device-visible physical addresses: `dma_alloc` retypes and maps frames
 /// from the service budget; `share` resolves any task memory (driver heap,

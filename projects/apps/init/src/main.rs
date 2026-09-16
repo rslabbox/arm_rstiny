@@ -10,9 +10,7 @@ extern crate alloc;
 mod logger;
 
 use alloc::vec::Vec;
-use core::alloc::{GlobalAlloc, Layout};
 use core::fmt::Write as _;
-use core::ptr::addr_of_mut;
 use rstiny::elf::ChildCap;
 use rstiny::thread::ThreadGroup;
 use rstiny::{Error, Task, capability::*, ipc};
@@ -96,30 +94,11 @@ struct ServiceState {
     restarts: u32,
 }
 
-/// Single-core bump allocator over a fixed BSS pool: config parsing needs
-/// owned names, and nothing is freed before shutdown.
-const POOL_BYTES: usize = 64 * 1024;
-struct Bump;
-static mut POOL: [u64; POOL_BYTES / 8] = [0; POOL_BYTES / 8];
-static mut POOL_USED: usize = 0;
-unsafe impl GlobalAlloc for Bump {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        // SAFETY: single-core user task; the cursor is only touched here.
-        unsafe {
-            let used = addr_of_mut!(POOL_USED);
-            let start = addr_of_mut!(POOL) as usize;
-            let offset = (*used).next_multiple_of(layout.align().max(8));
-            if offset + layout.size() > POOL_BYTES {
-                return core::ptr::null_mut();
-            }
-            *used = offset + layout.size();
-            (start + offset) as *mut u8
-        }
-    }
-    unsafe fn dealloc(&self, _pointer: *mut u8, _layout: Layout) {}
-}
+/// Task heap: rstiny-alloc (interpreter-app.md 决策 B) — the shared dual-
+/// language allocator. Config parsing and service bookkeeping allocate from
+/// the bootstrap pool; growth retypes from init's own Untyped budget.
 #[global_allocator]
-static ALLOCATOR: Bump = Bump;
+static HEAP: rstiny_alloc::Heap = rstiny_alloc::Heap;
 
 /// Build-time supervision drill switch (Makefile BOOT_TEST=1).
 fn boot_test() -> bool {
