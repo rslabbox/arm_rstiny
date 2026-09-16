@@ -76,7 +76,7 @@ fn flush(base: usize) {
 
 #[entry]
 fn main(service: Service) -> ! {
-        let Some(untyped) = service
+    let Some(untyped) = service
         .extra
         .get(UART_UNTYPED_SLOT)
         .copied()

@@ -192,7 +192,7 @@ fn clock_ms() -> u64 {
 
 #[entry]
 fn main(service: Service) -> ! {
-        let Some(self_ep) = service
+    let Some(self_ep) = service
         .extra
         .get(SpawnInfo::SELF_EP)
         .copied()

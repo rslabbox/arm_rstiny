@@ -52,13 +52,16 @@ const BARS: [(u8, u8, u8); 8] = [
 
 #[entry]
 fn main(service: Service) -> ! {
-        let args = parse_argv(service.argument);
+    let args = parse_argv(service.argument);
     // Dependency endpoints are granted only to arg-taking programs (决策 I):
     // `./gui` bare would never be able to reach gpu-server, so treat an
     // omitted scene as a usage error instead of a silent default.
     if args.is_empty() {
         logln!(service, "[gui] usage: ./gui bars|text|scroll|wm|keys N");
-        logln!(service, "[gui] (the scene argument is what makes mysh grant the gpu endpoint)");
+        logln!(
+            service,
+            "[gui] (the scene argument is what makes mysh grant the gpu endpoint)"
+        );
         service.exit(2);
     }
     let scene = args.first().unwrap_or("bars");

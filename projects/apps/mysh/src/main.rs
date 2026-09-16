@@ -21,8 +21,8 @@ use rstiny::capability::{
 };
 use rstiny::elf::{ChildCap, LOADER_SLOT_BASE, Supervision};
 use rstiny::ipc::{self, ReceiveSpec};
-use rstiny_protocol::{Argument, SpawnInfo, console, control, fs, status};
 use rstiny_alloc::Heap;
+use rstiny_protocol::{Argument, SpawnInfo, console, control, fs, status};
 use rstiny_runtime::entry;
 use rstiny_server::{Service, logln};
 
@@ -68,7 +68,7 @@ static HEAP: Heap = Heap;
 
 #[entry]
 fn main(service: Service) -> ! {
-        let fs_ep = service.extra[SpawnInfo::DEP_EP_BASE];
+    let fs_ep = service.extra[SpawnInfo::DEP_EP_BASE];
     if fs_ep == 0 {
         logln!(service, "[mysh] no fs dependency");
         service.exit(2);

@@ -412,9 +412,7 @@ impl Store {
             // (docs/gui-display.md §2).
             let region = self.untyped(untyped)?;
             let base = region.physical();
-            let offset = (index as usize)
-                .checked_mul(PAGE_SIZE)
-                .ok_or(RANGE_ERROR)?;
+            let offset = (index as usize).checked_mul(PAGE_SIZE).ok_or(RANGE_ERROR)?;
             let physical = base.checked_add(offset).ok_or(RANGE_ERROR)?;
             if physical + PAGE_SIZE > base.checked_add(region.size()).ok_or(RANGE_ERROR)? {
                 return Err(RANGE_ERROR);

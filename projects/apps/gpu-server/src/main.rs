@@ -20,8 +20,8 @@ use rstiny::capability::{
     RIGHTS_READ, RIGHTS_WRITE, Untyped, VM_CACHEABLE, VM_EXECUTE_NEVER,
 };
 use rstiny::ipc::{self, ReceiveSpec};
-use rstiny_protocol::{Argument, SpawnInfo, control, gpu, status};
 use rstiny_alloc::Heap;
+use rstiny_protocol::{Argument, SpawnInfo, control, gpu, status};
 use rstiny_runtime::entry;
 use rstiny_server::{Service, logln};
 use virtio_drivers::{
@@ -766,5 +766,3 @@ fn probe_inputs(
     }
     inputs
 }
-
-

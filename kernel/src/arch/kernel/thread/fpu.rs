@@ -81,9 +81,8 @@ pub(crate) fn disable() {
 /// entry traps on its first FP/SIMD instruction and migrates (§`migrate`).
 pub(crate) fn activate(cur: *mut FpuContext, id: u64) {
     assert!(instructions::irq_masked());
-    let owned = with_fpu(|fpu| {
-        matches!(&fpu.owner, Some(owner) if owner.id == id && owner.ctx == cur)
-    });
+    let owned =
+        with_fpu(|fpu| matches!(&fpu.owner, Some(owner) if owner.id == id && owner.ctx == cur));
     if owned {
         enable();
     } else {

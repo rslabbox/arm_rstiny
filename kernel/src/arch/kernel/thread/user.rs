@@ -1,6 +1,6 @@
 //! A returning, IRQ-masked boundary around one interval of EL0 execution.
-use super::fpu::{self, FpuContext};
 use super::TrapFrame;
+use super::fpu::{self, FpuContext};
 use crate::arch::machine::instructions;
 use crate::memory;
 use aarch64_cpu::registers::{CNTKCTL_EL1, CPACR_EL1, TPIDRRO_EL0, Writeable};

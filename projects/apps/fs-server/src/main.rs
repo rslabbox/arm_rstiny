@@ -18,8 +18,8 @@ use rstiny::capability::{
     RIGHTS_WRITE, Untyped, VM_CACHEABLE, VM_EXECUTE_NEVER,
 };
 use rstiny::ipc;
-use rstiny_protocol::{SpawnInfo, block, control, fs, status};
 use rstiny_alloc::Heap;
+use rstiny_protocol::{SpawnInfo, block, control, fs, status};
 use rstiny_runtime::entry;
 use rstiny_server::{Service, logln};
 
@@ -138,7 +138,7 @@ fn name_from_words(received: &rstiny::ipc::Received) -> Option<Vec<u8>> {
 
 #[entry]
 fn main(service: Service) -> ! {
-        let Some(self_ep) = service
+    let Some(self_ep) = service
         .extra
         .get(SpawnInfo::SELF_EP)
         .copied()

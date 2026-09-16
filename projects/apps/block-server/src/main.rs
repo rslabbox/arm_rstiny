@@ -16,8 +16,8 @@ use rstiny::capability::{
     RIGHTS_READ, RIGHTS_WRITE, Untyped, VM_CACHEABLE, VM_EXECUTE_NEVER,
 };
 use rstiny::ipc;
-use rstiny_protocol::{SpawnInfo, block, control, status};
 use rstiny_alloc::Heap;
+use rstiny_protocol::{SpawnInfo, block, control, status};
 use rstiny_runtime::entry;
 use rstiny_server::{Service, logln};
 use virtio_drivers::{
@@ -124,7 +124,7 @@ unsafe impl Hal for HalImpl {
 
 #[entry]
 fn main(service: Service) -> ! {
-        // Dependency-order drill (BLOCK_TEST=fail): exit immediately so fs and
+    // Dependency-order drill (BLOCK_TEST=fail): exit immediately so fs and
     // appmgr must never start (docs/disk-driver.md section 12, D4).
     if option_env!("BLOCK_TEST").is_some_and(|value| value == "fail") {
         service.exit(1);

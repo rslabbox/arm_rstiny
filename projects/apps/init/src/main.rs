@@ -14,8 +14,8 @@ use core::fmt::Write as _;
 use rstiny::elf::ChildCap;
 use rstiny::thread::ThreadGroup;
 use rstiny::{Error, Task, capability::*, ipc};
-use rstiny_protocol::{Argument, SpawnInfo, control};
 use rstiny_alloc::Heap;
+use rstiny_protocol::{Argument, SpawnInfo, control};
 use rstiny_runtime::entry;
 
 const CONSOLE: &str = "console";
