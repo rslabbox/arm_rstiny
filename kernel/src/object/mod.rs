@@ -1117,7 +1117,6 @@ pub(crate) fn collect() {
         for task in tasks {
             // The managed runtime handles self-termination after switching stacks.
             if Some(task) != crate::task::current_id() {
-                log::debug!("[gctrace] collected TCB of task {}", task);
                 let _ = api::destroy(task);
             }
         }

@@ -350,7 +350,6 @@ fn run(info: SpawnInfo) -> ! {
             if services[index].status != Status::Waiting || !deps_ok {
                 continue;
             }
-            rstiny::debug_println!("[init][trace] spawning idx={}", index);
             spawn_service(&mut services, index, console_ep, rom);
         }
         if services.iter().all(|s| matches!(s.status, Status::Failed)) && !services.is_empty() {
@@ -427,10 +426,32 @@ fn run(info: SpawnInfo) -> ! {
         match received.label {
             control::READY if received.badge == badge_for(index) => {
                 services[index].status = Status::Running;
-                // READY arrived as a Call: answer it before anything else,
-                // or the service stays BlockedReply (§7.3).
+                let is_console = services[index].cfg.name == CONSOLE;
+                let drill = drill_enabled && is_console && services[index].restarts == 0;
+                if !drill_enabled {
+                    // The "service started" log precedes the reply: the woken
+                    // service cannot print until its READY call is answered,
+                    // so the boot log reads in causal order. Drill builds keep
+                    // the original sequence — their crash write rides the log
+                    // post *after* the reply (fault-handler.md §10).
+                    post_log(
+                        console_running,
+                        0,
+                        "[init] service started",
+                        &services[index].cfg.name,
+                    );
+                    if is_console {
+                        console_running = true;
+                    }
+                    let _ = ipc::reply(0, &[]);
+                    continue;
+                }
                 let _ = ipc::reply(0, &[]);
-                // DIAGNOSTIC: does a bounded settle delay avoid the pass-2 stall?
+                // Drill builds keep the original reply-then-log sequence (the
+                // crash write rides the log post) and the settle delay before
+                // it: without the delay the woken service races this thread's
+                // log post and the boot deadlocks before its first print
+                // (kernel follow-up: the reply wakeup vs concurrent-call race).
                 let _ = rstiny::sleep(100);
                 if kill_fs && !drilled && services[index].cfg.name == "appmgr" {
                     drilled = true;
@@ -457,9 +478,6 @@ fn run(info: SpawnInfo) -> ! {
                 // logger self-crash to exercise group-internal supervision
                 // (thread-group.md §4.3).
                 let mut flags = 0;
-                let drill = drill_enabled
-                    && services[index].cfg.name == CONSOLE
-                    && services[index].restarts == 0;
                 if drill {
                     flags |= logger::FLAG_CRASH_DRILL;
                 } else if drill_enabled
