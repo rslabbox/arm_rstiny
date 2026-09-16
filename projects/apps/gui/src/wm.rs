@@ -29,7 +29,10 @@ const EV_REL: u64 = 2;
 const REL_X: u64 = 0;
 const BTN_LEFT: u64 = 272; // 0x110
 const MOVE_STEP: i32 = 8;
-const MAX_POLLS: usize = 2000;
+/// Poll-loop bound. The scene also exits on Esc; the bound only keeps the
+/// loop a `for` and must comfortably exceed a whole desktop session - the
+/// 2000 it replaced burned off in seconds under real input rates.
+const MAX_POLLS: usize = 20_000_000;
 const POLL_MS: u64 = 20;
 
 /// One desktop window's geometry.
@@ -123,6 +126,7 @@ pub struct Wm {
     wins: [Win; 2],
     focus: usize,
     cursor: (i32, i32),
+    seen: usize,
     drag: Option<(usize, i32, i32)>,
     calc: Calc,
     edit: heapless::Buffer,
@@ -148,6 +152,7 @@ impl Wm {
             ],
             focus: CALC,
             cursor: (width / 2, height / 2),
+            seen: 0,
             drag: None,
             calc: Calc::default(),
             edit: heapless::Buffer::new(),
@@ -168,6 +173,10 @@ impl Wm {
         }
         let kind = (word >> 40) & 0xFFFF;
         let code = (word >> 24) & 0xFFFF;
+        if kind != 1 || self.seen < 8 {
+            logln!(service, "[gui] ev kind={kind} code={code} val={:x}", word & 0xFF_FFFF);
+            self.seen += 1;
+        }
         let raw = (word & 0xFF_FFFF) as i32;
         let value = (raw << 8) >> 8; // sign-extend 24 bits
 
