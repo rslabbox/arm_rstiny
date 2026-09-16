@@ -431,18 +431,21 @@ fn run(info: SpawnInfo) -> ! {
                 if !drill_enabled {
                     // The "service started" log precedes the reply: the woken
                     // service cannot print until its READY call is answered,
-                    // so the boot log reads in causal order. Drill builds keep
-                    // the original sequence — their crash write rides the log
-                    // post *after* the reply (fault-handler.md §10).
+                    // so the boot log reads in causal order. The console flag
+                    // flips first so the console's own READY logs through the
+                    // console service (the debug fallback is silent at
+                    // LOG=off). Drill builds keep the original sequence —
+                    // their crash write rides the log post *after* the reply
+                    // (fault-handler.md §10).
+                    if is_console {
+                        console_running = true;
+                    }
                     post_log(
                         console_running,
                         0,
                         "[init] service started",
                         &services[index].cfg.name,
                     );
-                    if is_console {
-                        console_running = true;
-                    }
                     let _ = ipc::reply(0, &[]);
                     continue;
                 }
