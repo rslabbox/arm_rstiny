@@ -380,17 +380,20 @@ fn draw_keys_scene(
     service.exit(5);
 }
 
-/// Linux keycode → printable character, for the keys the acceptance sends.
-/// The QWERTY rows are contiguous runs in Linux keycodes *except* the bottom
-/// row (z x c v b n m), which needs its own table.
+/// Linux keycode → printable character. The letter codes are NOT
+/// alphabetical (QWERTY!): Q..P = 16..25, A..L = 30..38, Z..M = 44..50,
+/// resolved through one layout table - arithmetic like `b'a' + code - 30`
+/// would turn H into F.
 fn key_char(code: u8) -> Option<char> {
-    match code {
-        2..=10 => Some((b'1' + code - 2) as char),
-        11 => Some('0'),
-        16..=25 => Some((b'q' + code - 16) as char),
-        30..=38 => Some((b'a' + code - 30) as char),
-        44..=50 => Some(b"zxcvbnm"[(code - 44) as usize] as char),
-        57 => Some(' '),
-        _ => None,
-    }
+    const LAYOUT: &str = "qwertyuiopasdfghjklzxcvbnm";
+    let index = match code {
+        2..=10 => return Some((b'1' + code - 2) as char),
+        11 => return Some('0'),
+        16..=25 => code - 16,
+        30..=38 => code - 30 + 10,
+        44..=50 => code - 44 + 19,
+        57 => return Some(' '),
+        _ => return None,
+    } as usize;
+    LAYOUT.chars().nth(index)
 }
