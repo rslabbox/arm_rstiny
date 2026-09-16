@@ -222,7 +222,12 @@ impl Wm {
             }
             return Effect::Redraw;
         }
-        // Keyboard.
+        // Keyboard. Only the press edge acts: without this filter every
+        // keypress arrives twice (press + release), doubling characters in
+        // the editor and duplicating calculator entries.
+        if value == 0 {
+            return Effect::None;
+        }
         match code {
             103 => return self.move_focused(0, -MOVE_STEP, service),
             105 => return self.move_focused(-MOVE_STEP, 0, service),
