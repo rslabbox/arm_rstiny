@@ -9,7 +9,6 @@
 
 extern crate alloc;
 
-use core::hint::spin_loop;
 use core::ptr::NonNull;
 
 use rstiny::capability::{
@@ -17,7 +16,7 @@ use rstiny::capability::{
     RIGHTS_READ, RIGHTS_WRITE, Untyped, VM_CACHEABLE, VM_EXECUTE_NEVER,
 };
 use rstiny::ipc;
-use rstiny_protocol::{Argument, SpawnInfo, block, control, status};
+use rstiny_protocol::{SpawnInfo, block, control, status};
 use rstiny_alloc::Heap;
 use rstiny_runtime::entry;
 use rstiny_server::{Service, logln};

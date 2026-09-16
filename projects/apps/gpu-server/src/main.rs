@@ -228,12 +228,7 @@ struct Lease {
 }
 
 #[entry]
-fn main(argument: Argument) -> ! {
-    let Some(service) = parse_service(argument) else {
-        loop {
-            spin_loop();
-        }
-    };
+fn main(service: Service) -> ! {
     let Some(self_ep) = service
         .extra
         .get(SpawnInfo::SELF_EP)
@@ -431,7 +426,8 @@ fn main(argument: Argument) -> ! {
 
     // Fully initialized: only now let the supervisor spawn the rest of the
     // topology (fs, mysh).
-    let _ = ipc::call(service.control_ep, control::READY, &[]);
+    // READY was announced on entry (standard semantics): clients that bind
+    // before this point block in IPC until the recv loop below serves them.
     logln!(service, "[gpu] ready");
 
     let mut lease: Option<Lease> = None;
@@ -771,26 +767,4 @@ fn probe_inputs(
     inputs
 }
 
-/// Parse the SpawnInfo page into a Service handle WITHOUT announcing READY
-/// (the READY call is deferred until the display and input init complete,
-/// docs/gui-display.md §10.4).
-fn parse_service(argument: usize) -> Option<Service> {
-    use rstiny_server::Service;
-    if argument == 0 || argument % rstiny_protocol::PAGE_SIZE as usize != 0 {
-        return None;
-    }
-    // SAFETY: the supervisor mapped this page read-only for the child; only
-    // this task reads it, for the task lifetime.
-    let info = unsafe { &*(argument as *const SpawnInfo) };
-    if info.magic != SpawnInfo::MAGIC || info.version != SpawnInfo::VERSION {
-        return None;
-    }
-    Some(Service {
-        argument,
-        control_ep: info.control_ep,
-        command_ep: info.command_ep,
-        console_ep: info.extra[SpawnInfo::CONSOLE_EP],
-        extra: info.extra,
-    })
-}
 

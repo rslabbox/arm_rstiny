@@ -49,7 +49,6 @@ elf = "gpu.elf"
 depends = ["console", "block"]
 devices = ["virtio-mmio-1", "virtio-mmio-2"]
 budget = "2M"
-ready = "explicit"
 notes = """
 gpu-server: the sixth service (docs/gui-display.md §3). It drives
 virtio-gpu *and* virtio-keyboard in one window: two device grants, two IRQ

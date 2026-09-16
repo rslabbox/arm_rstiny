@@ -10,7 +10,6 @@
 extern crate alloc;
 
 use alloc::vec::Vec;
-use core::hint::spin_loop;
 
 use embedded_io::{ErrorKind, Read as IoRead, Seek as IoSeek, SeekFrom};
 use hadris_fat::sync::{FatVolume, FatVolumeReadExt, FileEntry};
@@ -19,7 +18,7 @@ use rstiny::capability::{
     RIGHTS_WRITE, Untyped, VM_CACHEABLE, VM_EXECUTE_NEVER,
 };
 use rstiny::ipc;
-use rstiny_protocol::{Argument, SpawnInfo, block, control, fs, status};
+use rstiny_protocol::{SpawnInfo, block, control, fs, status};
 use rstiny_alloc::Heap;
 use rstiny_runtime::entry;
 use rstiny_server::{Service, logln};

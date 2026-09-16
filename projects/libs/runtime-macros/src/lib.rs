@@ -41,7 +41,6 @@ fn expand_with_stack(
     // raw (`Argument`), or already parsed by the runtime: the supervisor's
     // `Service` handle, or the validated `SpawnInfo` page. Parsing failures
     // park the task here instead of in every application's main.
-    let path_ident = |ty: &Type| matches!(ty, Type::Path(path) if path.path.is_ident("Service"));
     let last_segment = |ty: &Type| match ty {
         Type::Path(path) => path.path.segments.last().map(|s| s.ident.to_string()),
         _ => None,

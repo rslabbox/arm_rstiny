@@ -1,6 +1,6 @@
 #![no_std]
 #![no_main]
-use rstiny_protocol::{Argument, console, control};
+use rstiny_protocol::{console, control};
 use rstiny_runtime::entry;
 use rstiny_server::Service;
 
