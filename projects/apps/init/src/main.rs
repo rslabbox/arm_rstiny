@@ -428,6 +428,24 @@ fn run(info: SpawnInfo) -> ! {
                 services[index].status = Status::Running;
                 let is_console = services[index].cfg.name == CONSOLE;
                 let drill = drill_enabled && is_console && services[index].restarts == 0;
+                // KILL_FS crash drill (its own build flag, independent of the
+                // supervision drill): reply, let appmgr spawn and announce
+                // hello, then reap fs and watch dependents restart.
+                if kill_fs && !drilled && services[index].cfg.name == "appmgr" {
+                    drilled = true;
+                    let _ = ipc::reply(0, &[]);
+                    // Let the freshly loaded app announce itself first.
+                    let _ = rstiny::sleep(5_000);
+                    if let Some(fs_index) = services.iter().position(|s| s.cfg.name == "fs") {
+                        // The logger posts at every log level; the marker
+                        // must be visible with LOG=off too.
+                        post_log(console_running, 0, "[init] crash drill", "reaping fs");
+                        stop_and_reap(&mut services[fs_index], false);
+                        detach_dependents(&mut services, fs_index);
+                        apply_policy(&info, &mut services, fs_index, console_running, false, true);
+                        continue;
+                    }
+                }
                 if !drill_enabled {
                     // The "service started" log precedes the reply: the woken
                     // service cannot print until its READY call is answered,
@@ -456,20 +474,6 @@ fn run(info: SpawnInfo) -> ! {
                 // log post and the boot deadlocks before its first print
                 // (kernel follow-up: the reply wakeup vs concurrent-call race).
                 let _ = rstiny::sleep(100);
-                if kill_fs && !drilled && services[index].cfg.name == "appmgr" {
-                    drilled = true;
-                    // Let the freshly loaded app announce itself first.
-                    let _ = rstiny::sleep(5_000);
-                    if let Some(fs_index) = services.iter().position(|s| s.cfg.name == "fs") {
-                        // The logger posts at every log level; the marker
-                        // must be visible with LOG=off too.
-                        post_log(console_running, 0, "[init] crash drill", "reaping fs");
-                        stop_and_reap(&mut services[fs_index], false);
-                        detach_dependents(&mut services, fs_index);
-                        apply_policy(&info, &mut services, fs_index, console_running, false, true);
-                        continue;
-                    }
-                }
                 if services[index].cfg.name == CONSOLE {
                     console_running = true;
                 }
