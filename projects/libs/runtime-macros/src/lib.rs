@@ -37,10 +37,24 @@ fn expand_with_stack(
         if matches!(&*arg.ty, Type::Reference(reference) if reference.mutability.is_some()));
     let returns_never =
         matches!(&sig.output, ReturnType::Type(_, ty) if matches!(&**ty, Type::Never(_)));
-    // An ordinary supervised task may take the loader's x0 start argument.
+    // An ordinary supervised task may take the loader's x0 start argument
+    // raw (`Argument`), or already parsed by the runtime: the supervisor's
+    // `Service` handle, or the validated `SpawnInfo` page. Parsing failures
+    // park the task here instead of in every application's main.
+    let path_ident = |ty: &Type| matches!(ty, Type::Path(path) if path.path.is_ident("Service"));
+    let last_segment = |ty: &Type| match ty {
+        Type::Path(path) => path.path.segments.last().map(|s| s.ident.to_string()),
+        _ => None,
+    };
     let ordinary_argument = sig.inputs.len() == 1
         && matches!(&*sig.inputs.first().unwrap(), syn::FnArg::Typed(arg)
-            if matches!(&*arg.ty, Type::Path(path) if path.path.is_ident("Argument")));
+            if last_segment(&arg.ty).as_deref() == Some("Argument"));
+    let service_argument = sig.inputs.len() == 1
+        && matches!(&*sig.inputs.first().unwrap(), syn::FnArg::Typed(arg)
+            if last_segment(&arg.ty).as_deref() == Some("Service"));
+    let spawn_info_argument = sig.inputs.len() == 1
+        && matches!(&*sig.inputs.first().unwrap(), syn::FnArg::Typed(arg)
+            if last_segment(&arg.ty).as_deref() == Some("SpawnInfo"));
     if sig.constness.is_some()
         || sig.asyncness.is_some()
         || sig.unsafety.is_some()
@@ -50,16 +64,19 @@ fn expand_with_stack(
         || sig.generics.where_clause.is_some()
         || !(sig.inputs.is_empty()
             || (sig.inputs.len() == 1 && argument_valid)
-            || ordinary_argument)
+            || ordinary_argument
+            || service_argument
+            || spawn_info_argument)
         || !returns_never
     {
         return Err(syn::Error::new_spanned(
             sig,
-            "entry must be a safe, non-generic Rust function: fn() -> ! or fn(&mut BootInfo) -> !",
+            "entry must be a safe, non-generic Rust function: fn() -> !, fn(&mut BootInfo) -> !, \
+             fn(Service) -> !, fn(SpawnInfo) -> ! or fn(Argument) -> !",
         ));
     }
     let name = &sig.ident;
-    if sig.inputs.is_empty() || ordinary_argument {
+    if sig.inputs.is_empty() || ordinary_argument || service_argument || spawn_info_argument {
         if let Some(size) = stack_size {
             return Err(syn::Error::new_spanned(
                 size,
@@ -74,6 +91,24 @@ fn expand_with_stack(
         // supervisor's parameter page) as `argument: usize`.
         let call = if ordinary_argument {
             quote! { let main: fn(Argument) -> ! = #name; main(argument) }
+        } else if service_argument {
+            quote! {
+                let main: fn(::rstiny_server::Service) -> ! = #name;
+                match ::rstiny_server::Service::init(argument) {
+                    ::core::option::Option::Some(service) => main(service),
+                    // Invalid spawn info: the supervisor handed this task a
+                    // page that cannot be a SpawnInfo; park rather than run.
+                    ::core::option::Option::None => loop { ::core::hint::spin_loop() },
+                }
+            }
+        } else if spawn_info_argument {
+            quote! {
+                let main: fn(::rstiny_protocol::SpawnInfo) -> ! = #name;
+                match ::rstiny_server::parse_info(argument) {
+                    ::core::option::Option::Some(info) => main(info),
+                    ::core::option::Option::None => loop { ::core::hint::spin_loop() },
+                }
+            }
         } else {
             quote! { let main: fn() -> ! = #name; main() }
         };

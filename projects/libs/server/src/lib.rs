@@ -11,6 +11,9 @@ use rstiny_protocol::{SpawnInfo, console, control};
 /// Everything a service needs from its supervisor.
 #[derive(Clone, Copy)]
 pub struct Service {
+    /// The x0 start argument (the SpawnInfo page virtual address); argv and
+    /// other parameter-page content live past the SpawnInfo header.
+    pub argument: usize,
     pub control_ep: u64,
     pub command_ep: u64,
     pub console_ep: u64,
@@ -31,6 +34,7 @@ impl Service {
             return None;
         }
         let service = Self {
+            argument,
             control_ep: info.control_ep,
             command_ep: info.command_ep,
             console_ep: info.extra[SpawnInfo::CONSOLE_EP],

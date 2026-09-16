@@ -124,13 +124,8 @@ unsafe impl Hal for HalImpl {
 }
 
 #[entry]
-fn main(argument: Argument) -> ! {
-    let Some(service) = Service::init(argument) else {
-        loop {
-            spin_loop();
-        }
-    };
-    // Dependency-order drill (BLOCK_TEST=fail): exit immediately so fs and
+fn main(service: Service) -> ! {
+        // Dependency-order drill (BLOCK_TEST=fail): exit immediately so fs and
     // appmgr must never start (docs/disk-driver.md section 12, D4).
     if option_env!("BLOCK_TEST").is_some_and(|value| value == "fail") {
         service.exit(1);

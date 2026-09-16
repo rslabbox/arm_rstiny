@@ -75,13 +75,8 @@ fn flush(base: usize) {
 }
 
 #[entry]
-fn main(argument: Argument) -> ! {
-    let Some(service) = Service::init(argument) else {
-        loop {
-            core::hint::spin_loop();
-        }
-    };
-    let Some(untyped) = service
+fn main(service: Service) -> ! {
+        let Some(untyped) = service
         .extra
         .get(UART_UNTYPED_SLOT)
         .copied()

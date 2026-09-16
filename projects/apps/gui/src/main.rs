@@ -51,13 +51,8 @@ const BARS: [(u8, u8, u8); 8] = [
 ];
 
 #[entry]
-fn main(argument: Argument) -> ! {
-    let Some(service) = Service::init(argument) else {
-        loop {
-            spin_loop();
-        }
-    };
-    let args = parse_argv(argument);
+fn main(service: Service) -> ! {
+        let args = parse_argv(service.argument);
     // Dependency endpoints are granted only to arg-taking programs (决策 I):
     // `./gui` bare would never be able to reach gpu-server, so treat an
     // omitted scene as a usage error instead of a silent default.

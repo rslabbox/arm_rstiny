@@ -786,6 +786,7 @@ fn parse_service(argument: usize) -> Option<Service> {
         return None;
     }
     Some(Service {
+        argument,
         control_ep: info.control_ep,
         command_ep: info.command_ep,
         console_ep: info.extra[SpawnInfo::CONSOLE_EP],

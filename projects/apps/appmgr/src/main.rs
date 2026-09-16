@@ -191,13 +191,8 @@ fn clock_ms() -> u64 {
 }
 
 #[entry]
-fn main(argument: Argument) -> ! {
-    let Some(service) = Service::init(argument) else {
-        loop {
-            spin_loop();
-        }
-    };
-    let Some(self_ep) = service
+fn main(service: Service) -> ! {
+        let Some(self_ep) = service
         .extra
         .get(SpawnInfo::SELF_EP)
         .copied()

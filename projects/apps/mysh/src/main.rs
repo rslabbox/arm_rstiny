@@ -67,13 +67,8 @@ const LINE_MAX: usize = 128;
 static HEAP: Heap = Heap;
 
 #[entry]
-fn main(argument: Argument) -> ! {
-    let Some(service) = Service::init(argument) else {
-        loop {
-            spin_loop();
-        }
-    };
-    let fs_ep = service.extra[SpawnInfo::DEP_EP_BASE];
+fn main(service: Service) -> ! {
+        let fs_ep = service.extra[SpawnInfo::DEP_EP_BASE];
     if fs_ep == 0 {
         logln!(service, "[mysh] no fs dependency");
         service.exit(2);
