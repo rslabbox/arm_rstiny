@@ -85,6 +85,17 @@ pub(crate) fn handle_user_fault(frame: &TrapFrame, fault: &UserFault) -> Disposi
         fault.far,
         frame.elr
     );
+    // Post-mortem: the faulting task's frame-pointer chain (raw addresses -
+    // symbolize against the ELF) and the full task table.
+    if let Some(id) = crate::task::current_id() {
+        if let Ok(vspace) = api::vspace_of(id) {
+            crate::object::with_vspace(vspace, |space| {
+                crate::debugdump::user_backtrace(space, frame);
+                Ok(())
+            });
+        }
+    }
+    crate::task::api::debug_dump_tasks();
     if fault.far.is_some() {
         // seL4 VMFault message: restart IP, address, instruction flag, FSR.
         let instruction = u64::from(fault.esr >> 26 == 0x20);

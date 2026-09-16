@@ -256,6 +256,127 @@ pub(crate) fn read_memory(
     crate::object::edit_vspace(caller, |space| destination.write(space, buffer))
 }
 
+/// Fixed-buffer line writer for the panic-path dump: the logger may be
+/// unusable there, so output is formatted into a stack buffer and flushed to
+/// the polling UART. Backed by `core::fmt` — no heap.
+struct RawLine {
+    data: [u8; 256],
+    used: usize,
+}
+impl RawLine {
+    const fn new() -> Self {
+        Self {
+            data: [0; 256],
+            used: 0,
+        }
+    }
+    fn push_bytes(&mut self, bytes: &[u8]) {
+        for byte in bytes {
+            if self.used < self.data.len() {
+                self.data[self.used] = *byte;
+                self.used += 1;
+            }
+        }
+    }
+    fn flush(&mut self, emit: &mut dyn FnMut(&str)) {
+        // SAFETY: the buffer holds ASCII written just above.
+        emit(core::str::from_utf8(&self.data[..self.used]).unwrap_or(""));
+        self.used = 0;
+    }
+    fn clear(&mut self) {
+        self.used = 0;
+    }
+}
+impl core::fmt::Write for RawLine {
+    fn write_str(&mut self, text: &str) -> core::fmt::Result {
+        self.push_bytes(text.as_bytes());
+        Ok(())
+    }
+}
+impl core::fmt::Display for RawLine {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str(core::str::from_utf8(&self.data[..self.used]).unwrap_or(""))
+    }
+}
+
+/// Panic-path variant of [`debug_dump_tasks`]: the same table, formatted into
+/// fixed buffers and emitted through `emit` without touching the logger.
+pub(crate) fn dump_tasks_raw(emit: &mut dyn FnMut(&str)) {
+    use core::fmt::Write as _;
+    with_scheduler(|scheduler| {
+        let mut line = RawLine::new();
+        let live = scheduler.tasks.iter().filter(|task| task.id != 0).count();
+        let _ = write!(line, "task dump: {live} live");
+        log::error!("{line}");
+        line.clear();
+        line.flush(emit);
+        for (slot, task) in scheduler.tasks.iter().enumerate() {
+            if task.id == 0 {
+                continue;
+            }
+            let _ = write!(
+                line,
+                "  slot={slot} id={} state={} prio={} cspace={:?} vspace={:?}",
+                task.id, task.state, task.priority, task.cspace, task.vspace
+            );
+            if let Some(blocked) = task.blocked {
+                let _ = write!(
+                    line,
+                    " waiting ep={:?} badge={:#x}",
+                    blocked.ep, blocked.badge
+                );
+            }
+            line.flush(emit);
+        }
+    });
+}
+
+/// Post-mortem aid: one log line per live task with the fields a deadlock
+/// or stall investigation needs. Invoked on user faults (the faulting task
+/// is a symptom; the table is the context) and via GDB probes.
+pub(crate) fn debug_dump_tasks() {
+    use core::fmt::Write as _;
+    with_scheduler(|scheduler| {
+        let mut line = RawLine::new();
+        let live = scheduler.tasks.iter().filter(|task| task.id != 0).count();
+        let _ = write!(line, "task dump: {live} live");
+        log::error!("{line}");
+        line.clear();
+        for (slot, task) in scheduler.tasks.iter().enumerate() {
+            if task.id == 0 {
+                continue;
+            }
+            let state = match task.state {
+                TASK_CREATED => "created",
+                TASK_RUNNING => "running",
+                TASK_SUSPENDED => "suspended",
+                TASK_FAULTED => "faulted",
+                TASK_READY => "ready",
+                TASK_SLEEPING => "sleeping",
+                TASK_EXITED => "exited",
+                TASK_WAITING => "waiting",
+                TASK_BLOCKED_SEND => "blocked-send",
+                TASK_BLOCKED_RECV => "blocked-recv",
+                TASK_BLOCKED_REPLY => "blocked-reply",
+                TASK_BLOCKED_FAULT => "blocked-fault",
+                _ => "?",
+            };
+            let _ = write!(
+                line,
+                "  slot={slot} id={} {state} prio={} cspace={:?} vspace={:?} restart_pc={:#x}",
+                task.id, task.priority, task.cspace, task.vspace, task.restart_pc
+            );
+            if let Some(blocked) = task.blocked {
+                let _ = write!(line, " ep={:?} badge={:#x}", blocked.ep, blocked.badge);
+            }
+            line.data[line.used] = 0;
+            // SAFETY: bounded ASCII written just above.
+            let text = core::str::from_utf8(&line.data[..line.used]).unwrap_or("");
+            log::error!("{text}");
+            line.clear();
+        }
+    });
+}
 pub(crate) fn current_cspace() -> ObjectId {
     with_scheduler(|s| s.tasks[actor(s)].cspace.expect("current task CSpace"))
 }

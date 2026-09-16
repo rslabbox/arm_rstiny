@@ -1,4 +1,4 @@
-mod console;
+pub(crate) mod console;
 pub mod heap_allocator;
 pub mod logging;
 pub(crate) mod single_core;
@@ -53,5 +53,7 @@ fn panic(info: &PanicInfo) -> ! {
     if !PANICKING.swap(true, Ordering::Relaxed) {
         console::panic_print(info);
     }
+    // Post-mortem: frame chain and the task table, straight to the UART.
+    crate::debugdump::panic_dump();
     shutdown()
 }

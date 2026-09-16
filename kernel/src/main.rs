@@ -7,6 +7,7 @@ mod api;
 mod arch;
 mod boot;
 mod config;
+mod debugdump;
 mod interrupt;
 mod memory;
 mod object;

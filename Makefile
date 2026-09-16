@@ -128,7 +128,10 @@ platform:
 	python3 tools/build_platform.py $(PLATFORM_DIR) --qemu $(QEMU)
 
 build: userboot init console block-server fs-server gpu-server appmgr mysh platform
-	PLATFORM_DIR=$(PLATFORM_DIR) cargo build $(CARGO_FLAGS) --target-dir $(BUILD_DIR)
+	# Frame pointers for the kernel only: the panic-path backtrace walks the
+	# x29 chain, and user code must not pay for frames it cannot use.
+	PLATFORM_DIR=$(PLATFORM_DIR) RUSTFLAGS="-C force-frame-pointers=yes" \
+	  cargo build $(CARGO_FLAGS) --target-dir $(BUILD_DIR)
 	rust-objcopy -O binary $(KERNEL_ELF) $(KERNEL_BIN)
 	for app in init console; do rust-objcopy --strip-all $(APP_DIR)/$(TARGET)/$(MODE)/$$app $(APP_DIR)/$$app.elf; done
 	rust-objcopy --strip-all $(BLOCK_ELF) $(APP_DIR)/block.elf
