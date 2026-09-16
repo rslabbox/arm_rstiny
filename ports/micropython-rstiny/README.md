@@ -6,8 +6,11 @@ MicroPython for ARM RSTiny (docs/micropython-port.md, interpreter-app.md 决策 
 
 - This directory (`ports/micropython-rstiny/`) is the port: it compiles the
   upstream py core into a freestanding EL0 application (`python.elf`).
-- The upstream MicroPython source is **not committed** (it is large). Fetch it
-  with a fixed tag first:
+- The upstream MicroPython source is **not committed** (it is large). The
+  root Makefile fetches it automatically at the pinned tag the first time a
+  build needs it (`make python` / `make disk` / `make run` — see the
+  `MICROPYTHON_*` variables; override `MICROPYTHON_URL` for a mirror). The
+  manual equivalent:
 
   ```sh
   mkdir -p third_party

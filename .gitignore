@@ -2,7 +2,8 @@ target/
 test.img
 __pycache__/
 
-# Vendored upstream (Micropython v1.24.1 etc). Fetch per ports/micropython-rstiny/README.
+# Vendored upstream (Micropython v1.24.1 etc). Auto-fetched by the root
+# Makefile on first build; override MICROPYTHON_URL/VERSION for mirrors.
 third_party/
 
 # MicroPython port build artifacts

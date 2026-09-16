@@ -19,6 +19,15 @@ HOST_TARGET ?= $(shell rustc -vV | sed -n 's/^host: //p')
 QEMU ?= qemu-system-aarch64
 GDB_PORT ?= 1234
 
+# Vendored upstream sources are not committed (too large, see .gitignore);
+# fetch them automatically on first use. Override URL/version for mirrors.
+MICROPYTHON_VERSION ?= v1.24.1
+MICROPYTHON_URL ?= https://github.com/micropython/micropython.git
+MICROPYTHON_DIR := third_party/micropython
+# mkenv.mk is the first file py.mk includes: its presence means the tree is
+# usable, its absence triggers a (re)clone even after a partial checkout.
+MICROPYTHON_MARKER := $(MICROPYTHON_DIR)/py/mkenv.mk
+
 ifeq ($(filter $(MODE),debug release),)
 $(error MODE must be debug or release)
 endif
@@ -138,9 +147,18 @@ minic:
 
 # MicroPython interpreter (docs/micropython-port.md): the port Makefile
 # compiles the py core; build_app.py ensures rstiny-alloc and strips.
-python:
+python: $(MICROPYTHON_MARKER)
 	python3 tools/build_app.py python --mode $(MODE) --lang python
 	cp $(PYTHON_ELF) $(APP_DIR)/python.elf
+
+# Upstream MicroPython at a pinned tag (ports/micropython-rstiny/README.md).
+# Cloned on demand so a fresh checkout builds without a manual step. The
+# recipe only runs when the py core is unusable (marker absent), so a working
+# tree at any version is never touched; a partial/foreign directory is wiped.
+$(MICROPYTHON_MARKER):
+	@echo ">> fetching vendored micropython $(MICROPYTHON_VERSION) (first build only)"
+	@rm -rf $(MICROPYTHON_DIR)
+	@git clone --depth 1 --branch $(MICROPYTHON_VERSION) $(MICROPYTHON_URL) $(MICROPYTHON_DIR)
 
 # The application disk: bare FAT32 with the app manifest and its ELFs.
 disk: hello gui minic python
