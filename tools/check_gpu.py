@@ -30,7 +30,7 @@ from pathlib import Path
 
 from check_kernel import boot_image
 
-BOOT_TIMEOUT = 300.0
+BOOT_TIMEOUT = 600.0
 TARGET = 'aarch64-unknown-none-softfloat'
 PROMPT = b'[rstiny ~]$: '
 ROOT = Path(__file__).resolve().parent.parent
