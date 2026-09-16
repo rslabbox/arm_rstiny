@@ -118,7 +118,7 @@ QEMU_ARGS := -machine virt,gic-version=3,virtualization=off -cpu cortex-a72 \
 	-kernel $(BOOT_IMAGE)
 export LOG QEMU KERNEL_LOAD_MIN BOOT_TEST BLK_TEST GPU_TEST
 
-.PHONY: all build platform userboot init console block-server fs-server appmgr mysh hello disk run run-kernel run-root run-userboot debug check fmt clean
+.PHONY: all build platform userboot init console block-server fs-server appmgr mysh hello disk run run-kernel run-root run-userboot debug check manifest fmt clean
 all: build
 
 platform:
@@ -181,7 +181,11 @@ run run-kernel run-root run-userboot: $(RUN_DEPS)
 debug: $(RUN_DEPS)
 	$(QEMU) $(QEMU_ARGS) -gdb tcp::$(GDB_PORT) -S
 
+manifest:
+	python3 tools/build_manifest.py --generate
+
 check:
+	python3 tools/build_manifest.py --check
 	cargo test -p bootloader --no-default-features --test images --target $(HOST_TARGET)
 	cargo test -p kernel-abi -p rstiny-runtime-macros -p rstiny-elf -p rstiny-newc -p rstiny-protocol --target $(HOST_TARGET)
 	python3 -m unittest discover -s tools -p 'test_*.py'
@@ -205,6 +209,9 @@ check:
 	python3 tools/check_services.py --qemu $(QEMU)
 	python3 tools/check_restart.py --qemu $(QEMU)
 	python3 tools/check_gpu.py --qemu $(QEMU)
+	python3 tools/build_manifest.py --check
+	python3 tools/build_manifest.py --check-elfs --mode release
+	python3 tools/build_manifest.py --check-elfs --mode debug
 
 fmt:
 	cargo fmt --all --check

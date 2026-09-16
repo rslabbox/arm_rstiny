@@ -1,0 +1,120 @@
+# system.toml — build-time system manifest (single source of truth).
+#
+# tools/build_manifest.py validates this file and generates the runtime
+# configs from it:
+#
+#   make manifest            regenerate configs/init*.cfg and configs/APPS*.CFG
+#   python3 tools/build_manifest.py --check   # configs are up to date?
+#
+# Do not edit the generated `*.cfg` files by hand; edit this file instead.
+# Per-task behavior flags (build-time metadata, enforced where checkable):
+#   heap  — the task links rstiny-alloc (default true). heap = false tasks
+#           must not reference the allocator (checked against the built ELF).
+#   ready — "entry" (default): the task announces READY on entry, before
+#           main runs. "explicit": the task announces later, after its own
+#           initialization (gpu-server: after display and input setup).
+
+[system]
+# init's own Untyped budget granted by userboot; profile service budgets
+# must sum below it (init keeps a margin for its own allocations).
+init_budget = "16M"
+
+[defaults]
+restart = "on-failure"
+max_restarts = 5
+window_ms = 60000
+backoff_ms = 100
+heap = true
+ready = "entry"
+
+[services.console]
+elf = "console.elf"
+devices = ["uart0"]
+restart = "always"
+heap = false
+
+[services.block]
+elf = "block.elf"
+depends = ["console"]
+devices = ["virtio-mmio-0"]
+budget = "1M"
+
+[services.fs]
+elf = "fs.elf"
+depends = ["block", "gpu"]
+budget = "2M"
+
+[services.gpu]
+elf = "gpu.elf"
+depends = ["console", "block"]
+devices = ["virtio-mmio-1", "virtio-mmio-2"]
+budget = "2M"
+ready = "explicit"
+notes = """
+gpu-server: the sixth service (docs/gui-display.md §3). It drives
+virtio-gpu *and* virtio-keyboard in one window: two device grants, two IRQ
+handlers (init authorizes one per device, in order). 2M = 512 pages covers
+the 300-page 1.2 MiB framebuffer plus queue rings and the covering table;
+a second 4M budget would not fit init's own grant next to mysh's."""
+
+[services.mysh]
+elf = "mysh.elf"
+depends = ["fs", "gpu"]
+restart = "never"
+budget = "4M"
+notes = """
+mysh: interactive shell. Prompts on the console and runs commands
+(`ls`, `cat <file>`, `./hello`, `help`, `exit`); `./hello` loads hello
+from the disk. The appmgr service is not part of the default topology —
+the shell runs apps on demand; the D3/D5 acceptances use the appmgr
+profile. The budget now also covers the shell's own heap growth (C0: the
+allocator retypes from this task's budget) plus the 1 MiB per-child
+sub-Untyped and disk app images up to 512 KiB (debug builds). The gpu
+dependency only feeds the `./gui` capability grant: the shell never talks
+to it itself."""
+
+[services.appmgr]
+elf = "appmgr.elf"
+depends = ["fs"]
+budget = "4M"
+notes = "The budget also covers appmgr's own heap growth (C0: the allocator retypes from this task's budget): it reads app images up to 512 KiB into memory."
+
+# --- profiles: which services make up each boot image --------------------
+
+[profiles.production]
+output = "init.cfg"
+services = ["console", "block", "fs", "gpu", "mysh"]
+
+[profiles.drill]
+output = "init-drill.cfg"
+services = ["console"]
+notes = """
+Minimal topology for the BOOT_TEST supervision drill
+(tools/check_fault_handler.py): the drill exercises the console crash,
+the logger rebuild and the level-1 init restart. The data services
+(block/fs/gpu/mysh) do not participate; excluding them keeps the drill's
+restart cycles free of their no-device failure loops."""
+
+[profiles.appmgr]
+output = "init-appmgr.cfg"
+services = ["console", "block", "fs", "appmgr"]
+
+[profiles.appmgr.overrides.fs]
+depends = ["block"]
+
+# --- disk application manifests (read by appmgr) --------------------------
+
+[apps.hello]
+elf = "hello"
+restart = "on-failure"
+max_restarts = 3
+budget = "1M"
+heap = false
+
+[profiles.apps_default]
+output = "APPS.CFG"
+apps = []
+
+[profiles.apps_hello]
+output = "APPS-hello.CFG"
+apps = ["hello"]

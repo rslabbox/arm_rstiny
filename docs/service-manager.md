@@ -69,7 +69,17 @@ userboot 保留为 monitor（决策 1）：它不参与服务管理，但在 ini
 做：
 
 - 持有 untyped 预算（子 untyped）、设备 untyped、ROM Frame cap、自身 TCB。
-- 启动时读取 archive 里的 `init.cfg`（决策 2：文本配置）。
+- 启动时读取 archive 里的 `init.cfg`（决策 2：文本配置）。`init.cfg` 等五个
+  运行时清单（`init.cfg`/`init-drill.cfg`/`init-appmgr.cfg`/`APPS.CFG`/
+  `APPS-hello.CFG`）**由构建期系统清单 `configs/system.toml` 生成**
+  （`make manifest`，工具 `tools/build_manifest.py`）：服务定义、依赖、
+  设备、预算、重启策略与每任务行为标志（`heap`：是否链接 rstiny-alloc；
+  `ready`：entry 即宣告 / explicit 延迟宣告，如 gpu-server）都在清单里
+  声明。构建期校验：依赖闭包存在且无环、依赖 ≤3 / 设备 ≤4 / virtio 设备
+  ≤2（IRQ 授权数）、各 profile 预算总和 ≤ init 的 16 MiB、budget 编码
+  合法；`heap = false` 的任务在 `make check` 里对照已构建 ELF 检查确实
+  未引用 rstiny-alloc。生成的 `*.cfg` 不要手改，改 `system.toml` 后
+  `make manifest`。
 - 按依赖拓扑顺序启动服务。对每个服务：
   1. 从 ROM 读 ELF，用 ELF loader 建独立 VSpace/CSpace/TCB；
   2. 从自己的 untyped 切出一块**子 untyped** 作为该服务预算（决策 4）；
