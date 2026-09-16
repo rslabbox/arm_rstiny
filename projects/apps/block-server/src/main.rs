@@ -18,6 +18,7 @@ use rstiny::capability::{
 };
 use rstiny::ipc;
 use rstiny_protocol::{Argument, SpawnInfo, block, control, status};
+use rstiny_alloc::Heap;
 use rstiny_runtime::entry;
 use rstiny_server::{Service, logln};
 use virtio_drivers::{
@@ -50,7 +51,7 @@ const SLOT_STRIDE: u64 = 0x200;
 /// allocator the C staticlib exports, shared by every Rust task. Frees are
 /// reused, and growth comes from this task's own Untyped budget.
 #[global_allocator]
-static HEAP: rstiny_alloc::Heap = rstiny_alloc::Heap;
+static HEAP: Heap = Heap;
 
 /// Device-visible physical addresses: `dma_alloc` retypes and maps frames
 /// from the service budget; `share` resolves any task memory (driver heap,

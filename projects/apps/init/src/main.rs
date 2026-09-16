@@ -15,6 +15,7 @@ use rstiny::elf::ChildCap;
 use rstiny::thread::ThreadGroup;
 use rstiny::{Error, Task, capability::*, ipc};
 use rstiny_protocol::{Argument, SpawnInfo, control};
+use rstiny_alloc::Heap;
 use rstiny_runtime::entry;
 
 const CONSOLE: &str = "console";
@@ -98,7 +99,7 @@ struct ServiceState {
 /// language allocator. Config parsing and service bookkeeping allocate from
 /// the bootstrap pool; growth retypes from init's own Untyped budget.
 #[global_allocator]
-static HEAP: rstiny_alloc::Heap = rstiny_alloc::Heap;
+static HEAP: Heap = Heap;
 
 /// Build-time supervision drill switch (Makefile BOOT_TEST=1).
 fn boot_test() -> bool {

@@ -21,6 +21,7 @@ use rstiny::capability::{
 };
 use rstiny::ipc::{self, ReceiveSpec};
 use rstiny_protocol::{Argument, SpawnInfo, control, gpu, status};
+use rstiny_alloc::Heap;
 use rstiny_runtime::entry;
 use rstiny_server::{Service, logln};
 use virtio_drivers::{
@@ -84,7 +85,7 @@ const PALETTE: [(u8, u8, u8); 16] = [
 /// allocator the C staticlib exports, shared by every Rust task. Frees are
 /// reused, and growth comes from this task's own Untyped budget.
 #[global_allocator]
-static HEAP: rstiny_alloc::Heap = rstiny_alloc::Heap;
+static HEAP: Heap = Heap;
 
 /// The framebuffer's place in the service's CSpace: the Hal records every
 /// allocation, and the one as large as the framebuffer *is* the framebuffer

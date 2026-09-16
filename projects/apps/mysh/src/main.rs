@@ -22,6 +22,7 @@ use rstiny::capability::{
 use rstiny::elf::{ChildCap, LOADER_SLOT_BASE, Supervision};
 use rstiny::ipc::{self, ReceiveSpec};
 use rstiny_protocol::{Argument, SpawnInfo, console, control, fs, status};
+use rstiny_alloc::Heap;
 use rstiny_runtime::entry;
 use rstiny_server::{Service, logln};
 
@@ -63,7 +64,7 @@ const LINE_MAX: usize = 128;
 /// Task heap: rstiny-alloc (interpreter-app.md 决策 B) — the crate's shared
 /// `Heap`, wrapping the same first-fit allocator the C staticlib exports.
 #[global_allocator]
-static HEAP: rstiny_alloc::Heap = rstiny_alloc::Heap;
+static HEAP: Heap = Heap;
 
 #[entry]
 fn main(argument: Argument) -> ! {

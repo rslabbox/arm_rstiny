@@ -20,6 +20,7 @@ use rstiny::capability::{
 };
 use rstiny::ipc;
 use rstiny_protocol::{Argument, SpawnInfo, block, control, fs, status};
+use rstiny_alloc::Heap;
 use rstiny_runtime::entry;
 use rstiny_server::{Service, logln};
 
@@ -51,7 +52,7 @@ struct Client {
 /// allocator the C staticlib exports, shared by every Rust task. Frees are
 /// reused, and growth comes from this task's own Untyped budget.
 #[global_allocator]
-static HEAP: rstiny_alloc::Heap = rstiny_alloc::Heap;
+static HEAP: Heap = Heap;
 
 /// The block device seen through the shared buffer: reads travel over IPC and
 /// land in `CLIENT_BUF_VA`, then this adapter copies the requested window into

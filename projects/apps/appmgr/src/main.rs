@@ -34,30 +34,11 @@ const MAX_APPS: usize = 4;
 const ELF_MAX: usize = 256 * 1024;
 const BACKOFF_SHIFT_CAP: u32 = 5;
 
-/// Bump allocator: app ELFs and manifest strings live here; freed only when
-/// the supervisor tears the task down.
-const POOL_BYTES: usize = 512 * 1024;
-struct Bump;
-static mut POOL: [u64; POOL_BYTES / 8] = [0; POOL_BYTES / 8];
-static mut POOL_USED: usize = 0;
-unsafe impl alloc::alloc::GlobalAlloc for Bump {
-    unsafe fn alloc(&self, layout: alloc::alloc::Layout) -> *mut u8 {
-        // SAFETY: single-core user task; the cursor is only touched here.
-        unsafe {
-            let used = core::ptr::addr_of_mut!(POOL_USED);
-            let start = core::ptr::addr_of_mut!(POOL) as usize;
-            let offset = (*used).next_multiple_of(layout.align().max(8));
-            if offset + layout.size() > POOL_BYTES {
-                return core::ptr::null_mut();
-            }
-            *used = offset + layout.size();
-            (start + offset) as *mut u8
-        }
-    }
-    unsafe fn dealloc(&self, _pointer: *mut u8, _layout: alloc::alloc::Layout) {}
-}
+/// Task heap: rstiny-alloc (interpreter-app.md 决策 B) — the shared dual-
+/// language allocator; freed blocks are reused and growth comes from this
+/// task's own Untyped budget.
 #[global_allocator]
-static ALLOCATOR: Bump = Bump;
+static HEAP: rstiny_alloc::Heap = rstiny_alloc::Heap;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum AppState {
