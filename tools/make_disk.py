@@ -71,9 +71,33 @@ def cycle_fat(image, fields, short_name='hello'):
     image.write(struct.pack('<I', first))
 
 
+def build_ext4(output, size_mb, files):
+    """A journal-less ext4 image (mke2fs + debugfs from e2fsprogs).
+
+    No journal: fs-server mounts ext4 read-only, so a cleanly-built image
+    needs no replay, and the QEMU drive is `readonly=on` anyway. 4 KiB
+    blocks; 256-byte inodes; conservative feature set (no metadata_csum)
+    keeps lwext4's reader on the well-trodden path.
+    """
+    for tool in ('mke2fs', 'debugfs'):
+        if shutil.which(tool) is None:
+            raise SystemExit(f'{tool} is required (install e2fsprogs)')
+    blocks = size_mb * 1024 * 1024 // 4096
+    with output.open('wb') as handle:
+        handle.truncate(size_mb * 1024 * 1024)
+    subprocess.run(['mke2fs', '-q', '-F', '-t', 'ext4',
+                    '-O', '^has_journal,^metadata_csum,^metadata_csum_seed',
+                    '-b', '4096', '-I', '256', str(output), str(blocks)],
+                   check=True, stdout=subprocess.DEVNULL)
+    for name, path in files:
+        subprocess.run(['debugfs', '-w', '-R', f'write {path} {name}', str(output)],
+                       check=True, stdout=subprocess.DEVNULL)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('output', type=Path)
+    parser.add_argument('--fs-type', choices=('fat32', 'ext4'), default='fat32')
     parser.add_argument('--size-mb', type=int, default=64)
     parser.add_argument('--file', action='append', default=[],
                         help='NAME=PATH short-name pairs copied into the root directory')
@@ -91,6 +115,12 @@ def main():
         files.append((name, Path(path)))
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
+    if args.fs_type == 'ext4':
+        if args.corrupt_bpb or args.cycle_fat or args.truncate:
+            raise SystemExit('the corruption switches are FAT-specific')
+        build_ext4(args.output, args.size_mb, files)
+        print(f'disk image: {args.output} ({args.output.stat().st_size} bytes, ext4)')
+        return
     # 64 MiB at 512 B sectors with one sector per cluster stays above the
     # 65525-cluster minimum that mkfs.fat enforces for FAT32. The file is
     # pre-sized so mkfs.fat discovers the geometry from it.

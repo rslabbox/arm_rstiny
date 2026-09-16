@@ -98,6 +98,9 @@ APPS_CFG ?= configs/APPS.CFG
 # Default MicroPython script on the disk (`./python app` reads it; the
 # python acceptance overrides this with its own APP.PY, see check_python.py).
 APPS_PY ?= configs/APP.PY
+# Root filesystem format: fat32 (default) or ext4 (read-only through lwext4,
+# docs/disk-driver.md). `make disk FS_TYPE=ext4` builds the ext4 image.
+FS_TYPE ?= fat32
 
 # Fixed platform contract; no network backends. The VirtIO block device and
 # its FAT32 image back the userland disk stack (docs/disk-driver.md), the
@@ -168,7 +171,7 @@ $(MICROPYTHON_MARKER):
 disk: hello gui minic python
 	rust-objcopy --strip-all $(HELLO_ELF) $(APP_DIR)/hello.elf
 	rust-objcopy --strip-all $(GUI_ELF) $(APP_DIR)/gui.elf
-	python3 tools/make_disk.py $(DISK_IMG) \
+	python3 tools/make_disk.py $(DISK_IMG) --fs-type $(FS_TYPE) \
 	  --file hello=$(APP_DIR)/hello.elf --file gui=$(APP_DIR)/gui.elf --file minic=$(APP_DIR)/minic.elf \
 	  --file python=$(APP_DIR)/python.elf --file APP.PY=$(APPS_PY) --file APPS.CFG=$(APPS_CFG)
 
@@ -202,6 +205,7 @@ check:
 	python3 tools/check_relocation.py --qemu $(QEMU)
 	python3 tools/check_block.py --qemu $(QEMU)
 	python3 tools/check_fat32.py --qemu $(QEMU)
+	python3 tools/check_ext4.py --qemu $(QEMU)
 	python3 tools/check_fs2.py --qemu $(QEMU)
 	python3 tools/check_appmgr.py --qemu $(QEMU)
 	python3 tools/check_mysh.py --qemu $(QEMU)

@@ -15,5 +15,6 @@ rstiny = { path = "../../libs/user" }
 rstiny-runtime = { path = "../../libs/runtime" }
 rstiny-server = { path = "../../libs/server" }
 rstiny-protocol = { path = "../../libs/protocol" }
+lwext4_rust = { version = "0.2.0", default-features = false }
 hadris-fat = { version = "2.4.0", default-features = false, features = ["read", "sync", "alloc", "lfn"] }
 embedded-io = { version = "0.7", default-features = false }

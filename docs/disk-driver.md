@@ -353,3 +353,24 @@ badge 语义：badge 0（匿名）允许**一个**绑定槽——即 v1 的单 c
 | 设备 Untyped | 64K 窗口（预估） | 实测 16K（32×0x200），size_bits=14 |
 | 内核新增调用 | 无 | `ArmVspaceTranslate`（DMA VA→PA 自翻译） |
 | SpawnInfo | extra[0..3] | extra[0..7] 全占用（self ep/依赖数/依赖 ep 槽） |
+
+## 16. ext4 支持（2026-09-16，只读）
+
+fs-server 抽象出 `FileSystem` trait（lookup/read_at/read_dir），磁盘格式成为
+可插拔后端：
+
+- **FAT32**：`hadris-fat`（原实现，读 + LFN，大小写不敏感匹配）。
+- **ext4 只读**：`lwext4_rust` 0.2.0（Starry-OS fork，GPL-2.0，vendored C via
+  musl-gcc + bindgen；`BlockDevice` trait 512 字节块，接同一个 block IPC）。
+  约束：镜像须 `mke2fs -O ^has_journal`（干净、无回放）且 `metadata_csum`
+  关闭；只读消费者，lwext4 挂载期的 superblock 写入被 block 接口吸收丢弃。
+
+- **探测**：fs-server 启动读 0..4 扇区——偏移 82 的 `FAT32` BPB 标识 → fat；
+  偏移 0x438 的 magic `0xEF53` → ext4；都不是 → 有界失败走重启策略。
+- **镜像工具**：`make disk FS_TYPE=ext4`（`tools/make_disk.py` 调 mke2fs +
+  debugfs 灌文件；e2fsprogs 为构建依赖）。
+- **验收**：`tools/check_ext4.py`（debug/release × LOG=off/info）：挂载、
+  hello 前 4 KiB 校验和与宿主一致、损坏 magic 的有界失败。FAT 全部验收
+  在重构后回归通过。
+- **写支持**：不在本期。ext4 写（日志回放、分配器）建议届时评估 lwext4 的
+  写路径 + 可写 block 协议（WRITE 操作 + 可写盘）。

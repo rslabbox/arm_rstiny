@@ -8,7 +8,6 @@
 extern crate alloc;
 
 use alloc::vec::Vec;
-use core::hint::spin_loop;
 
 use rstiny::Task;
 use rstiny::capability::{
@@ -18,7 +17,7 @@ use rstiny::capability::{
 use rstiny::elf::{ChildCap, LOADER_SLOT_BASE, LOADER_SLOT_STRIDE, Supervision};
 use rstiny::ipc;
 use rstiny_initcfg::Restart;
-use rstiny_protocol::{Argument, SpawnInfo, control, fs, status};
+use rstiny_protocol::{SpawnInfo, control, fs, status};
 use rstiny_runtime::entry;
 use rstiny_server::{Service, logln};
 

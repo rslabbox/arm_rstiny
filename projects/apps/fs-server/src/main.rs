@@ -9,10 +9,11 @@
 
 extern crate alloc;
 
-use alloc::vec::Vec;
+use alloc::{boxed::Box, vec::Vec};
 
 use embedded_io::{ErrorKind, Read as IoRead, Seek as IoSeek, SeekFrom};
 use hadris_fat::sync::{FatVolume, FatVolumeReadExt, FileEntry};
+use lwext4_rust::{DummyHal, Ext4Error, Ext4Filesystem, Ext4Result, FileAttr, FsConfig, InodeType};
 use rstiny::capability::{
     CNode, CPtr, INIT_CNODE, INIT_UNTYPED, INIT_VSPACE, ObjectType, Page, PageTable, RIGHTS_READ,
     RIGHTS_WRITE, Untyped, VM_CACHEABLE, VM_EXECUTE_NEVER,
@@ -44,7 +45,7 @@ const SECTORS_PER_READ: u64 = 8;
 struct Client {
     badge: u64,
     share_va: usize,
-    files: alloc::boxed::Box<[Option<FileEntry>; MAX_FILES]>,
+    files: alloc::boxed::Box<[Option<OpenFile>; MAX_FILES]>,
 }
 
 /// Task heap: rstiny-alloc (interpreter-app.md 决策 B) — the same first-fit
@@ -118,6 +119,193 @@ impl IoSeek for BlockDevice {
             }
             None => Err(ErrorKind::InvalidInput),
         }
+    }
+}
+
+/// The filesystem backends share one fs v2 protocol; the trait is the seam
+/// between the wire protocol and the on-disk format. FAT32 rides hadris-fat;
+/// ext4 is read-only through lwext4 (journal-less, cleanly-unmounted images).
+enum OpenFile {
+    Fat(FileEntry),
+    Ext4 { ino: u32, size: u64 },
+}
+impl OpenFile {
+    fn size(&self) -> u64 {
+        match self {
+            OpenFile::Fat(entry) => entry.len(),
+            OpenFile::Ext4 { size, .. } => *size,
+        }
+    }
+    fn is_dir(&self) -> bool {
+        match self {
+            OpenFile::Fat(entry) => entry.is_directory(),
+            OpenFile::Ext4 { .. } => false,
+        }
+    }
+}
+
+trait FileSystem {
+    /// Resolve a root-directory file name; directories are not openable.
+    fn lookup(&mut self, name: &[u8]) -> Option<OpenFile>;
+    /// Read up to `buf.len()` bytes at `offset`.
+    fn read_at(
+        &mut self,
+        file: &mut OpenFile,
+        offset: u64,
+        buf: &mut [u8],
+    ) -> Result<usize, ErrorKind>;
+    /// Every root-directory entry as (name, size, is-dir); the caller applies
+    /// the wire-format filters (name length, pagination).
+    fn read_dir(&mut self) -> Vec<(alloc::string::String, u64, bool)>;
+}
+
+struct FatFs {
+    volume: FatVolume<BlockDevice>,
+}
+impl FileSystem for FatFs {
+    fn lookup(&mut self, name: &[u8]) -> Option<OpenFile> {
+        let dir = self.volume.root_dir();
+        for entry in dir.entries() {
+            let Ok(entry) = entry else { continue };
+            // FAT names are case-insensitive: `hello` matches a short name
+            // stored as `HELLO` (and vice versa). `entry.name()` yields the
+            // long name when the directory carries an LFN record (P2.1).
+            if entry.name().as_bytes().eq_ignore_ascii_case(name)
+                && entry.as_entry().is_some_and(|file| file.is_file())
+            {
+                return Some(OpenFile::Fat(entry.as_entry()?.clone()));
+            }
+        }
+        None
+    }
+    fn read_at(
+        &mut self,
+        file: &mut OpenFile,
+        offset: u64,
+        buf: &mut [u8],
+    ) -> Result<usize, ErrorKind> {
+        let OpenFile::Fat(entry) = file else {
+            return Err(ErrorKind::InvalidInput);
+        };
+        let mut reader = self.volume.read_file(entry).map_err(|_| ErrorKind::Other)?;
+        reader.seek(SeekFrom::Start(offset)).map_err(|_| ErrorKind::Other)?;
+        reader.read(buf).map_err(|_| ErrorKind::Other)
+    }
+    fn read_dir(&mut self) -> Vec<(alloc::string::String, u64, bool)> {
+        let dir = self.volume.root_dir();
+        let mut entries = Vec::new();
+        for entry in dir.entries() {
+            let Ok(entry) = entry else { continue };
+            let Some(file) = entry.as_entry() else { continue };
+            entries.push((
+                alloc::string::String::from_utf8_lossy(entry.name().as_bytes()).into_owned(),
+                file.len(),
+                file.is_directory(),
+            ));
+        }
+        entries
+    }
+}
+
+/// ext4 through lwext4, read-only: the image must be journal-less (built with
+/// `mke2fs -O ^has_journal`) and cleanly unmounted, so mounting and serving
+/// never write. Root is inode 2; all block reads travel the same block IPC
+/// the FAT backend uses.
+struct Ext4Fs {
+    fs: Ext4Filesystem<DummyHal, BlockDevice>,
+}
+impl FileSystem for Ext4Fs {
+    fn lookup(&mut self, name: &[u8]) -> Option<OpenFile> {
+        // ext4 names are case-sensitive UTF-8 (unlike the FAT backend's
+        // case-insensitive match).
+        let Ok(text) = core::str::from_utf8(name) else {
+            return None;
+        };
+        let mut found = self.fs.lookup(2, text).ok()?;
+        let ino = found.entry().ino();
+        let mut attr = FileAttr::default();
+        self.fs.get_attr(ino, &mut attr).ok()?;
+        if attr.node_type == InodeType::Directory {
+            return None; // fs v2 opens regular files only
+        }
+        Some(OpenFile::Ext4 {
+            ino,
+            size: attr.size,
+        })
+    }
+    fn read_at(
+        &mut self,
+        file: &mut OpenFile,
+        offset: u64,
+        buf: &mut [u8],
+    ) -> Result<usize, ErrorKind> {
+        let OpenFile::Ext4 { ino, .. } = file else {
+            return Err(ErrorKind::InvalidInput);
+        };
+        self.fs.read_at(*ino, buf, offset).map_err(|_| ErrorKind::Other)
+    }
+    fn read_dir(&mut self) -> Vec<(alloc::string::String, u64, bool)> {
+        let mut entries = Vec::new();
+        let Ok(mut reader) = self.fs.read_dir(2, 0) else {
+            return entries;
+        };
+        while let Some(entry) = reader.current() {
+            let name = alloc::string::String::from_utf8_lossy(entry.name()).into_owned();
+            let ino = entry.ino();
+            let is_dir = entry.inode_type() == InodeType::Directory;
+            let mut attr = FileAttr::default();
+            let _ = self.fs.get_attr(ino, &mut attr);
+            entries.push((name, attr.size, is_dir));
+            if reader.step().is_err() {
+                break;
+            }
+        }
+        entries
+    }
+}
+
+/// The same device behind the lwext4 block interface: reads copy out of the
+/// block service's shared buffer; writes are refused (the acceptance images
+/// are read-only and the QEMU drive is `readonly=on`).
+impl lwext4_rust::BlockDevice for BlockDevice {
+    fn read_blocks(&mut self, block_id: u64, buf: &mut [u8]) -> Ext4Result<usize> {
+        let sectors = (buf.len().div_ceil(SECTOR_SIZE as usize)) as u64;
+        let mut copied = 0usize;
+        while copied < buf.len() {
+            let lba = block_id + copied as u64 / SECTOR_SIZE;
+            let count = (sectors - copied as u64 / SECTOR_SIZE as usize as u64).min(SECTORS_PER_READ)
+                .min((self.disk_bytes - lba * SECTOR_SIZE) / SECTOR_SIZE);
+            if count == 0 {
+                break;
+            }
+            if self.fetch(lba, count).is_err() {
+                return Err(Ext4Error::new(-5, None));
+            }
+            // SAFETY: CLIENT_BUF_VA is exclusively mapped and the block
+            // service only writes it while this task is blocked in the call.
+            let source = unsafe {
+                core::slice::from_raw_parts(
+                    (CLIENT_BUF_VA + (lba * SECTOR_SIZE - lba * SECTOR_SIZE) as usize) as *const u8,
+                    (count * SECTOR_SIZE) as usize,
+                )
+            };
+            let take = (count * SECTOR_SIZE) as usize;
+            buf[copied..copied + take].copy_from_slice(&source[..take]);
+            copied += take;
+        }
+        Ok(copied)
+    }
+
+    // lwext4's mount writes superblock state (mount count, fs state). The
+    // disk is read-only, so the write is accepted and discarded: the read-only
+    // consumer never depends on it, and the acceptance images are built
+    // cleanly (no journal to replay). Reads never depend on these writes.
+    fn write_blocks(&mut self, _block_id: u64, buf: &[u8]) -> Ext4Result<usize> {
+        Ok(buf.len())
+    }
+
+    fn num_blocks(&self) -> Ext4Result<u64> {
+        Ok(self.disk_bytes / SECTOR_SIZE)
     }
 }
 
@@ -241,35 +429,67 @@ fn main(service: Service) -> ! {
             service.exit(3);
         }
     }
-    let device = BlockDevice {
+    let mut device = BlockDevice {
         ep: block_ep,
         position: 0,
         disk_bytes: capacity * SECTOR_SIZE,
     };
-    let Ok(volume) = FatVolume::open(device) else {
-        logln!(service, "[fs] mount failed");
+    // Superblock probe: sector 0 carries either the FAT32 BPB ("FAT32" at
+    // offset 82) or the ext4 superblock (magic 0x53EF at offset 0x438).
+    // SAFETY: CLIENT_BUF_VA is exclusively mapped and only read here.
+    // Four sectors: the ext4 superblock lives at bytes 1024..2048.
+    if device.fetch(0, 4).is_err() {
+        logln!(service, "[fs] cannot read the superblock");
+        service.exit(6);
+    }
+    // SAFETY: as above; the window holds the four fetched sectors.
+    let probe = unsafe { core::slice::from_raw_parts(CLIENT_BUF_VA as *const u8, 2048) };
+    let ext_magic = u16::from_le_bytes([probe[0x438], probe[0x439]]);
+    logln!(service, "[fs] probe ext_magic={:#06x} b82={:02x?}", ext_magic, &probe[82..90]);
+    let kind = if &probe[82..90] == b"FAT32   " {
+        "fat32"
+    } else if ext_magic == 0xEF53 {
+        "ext4"
+    } else {
+        logln!(service, "[fs] unknown filesystem superblock");
         service.exit(6);
     };
+    let mut filesystem: Box<dyn FileSystem> = match kind {
+        "fat32" => match FatVolume::open(device) {
+            Ok(volume) => Box::new(FatFs { volume }),
+            Err(_) => {
+                logln!(service, "[fs] mount failed");
+                service.exit(6);
+            }
+        },
+        _ => {
+            logln!(service, "[fs] ext4: constructing");
+            match Ext4Filesystem::new(device, FsConfig::default()) {
+                Ok(fs) => {
+                    logln!(service, "[fs] ext4: constructed");
+                    Box::new(Ext4Fs { fs })
+                }
+                Err(error) => {
+                    logln!(service, "[fs] ext4 mount failed: code={}", error.code);
+                    service.exit(6);
+                }
+            }
+        }
+    };
+    logln!(service, "[fs] superblock: {kind}");
     logln!(service, "[fs] mounted, {} sectors", capacity);
 
     // Acceptance hook (FAT_TEST=1): open hello, read its first sector and
     // log size plus checksum for the check script to compare with the image.
     if option_env!("FAT_TEST").is_some_and(|value| value == "1") {
-        match lookup(&volume, b"hello") {
-            Some(entry) => {
-                let mut reader = match volume.read_file(&entry) {
-                    Ok(reader) => reader,
-                    Err(_) => {
-                        logln!(service, "[fs] test open failed");
-                        service.exit(7);
-                    }
-                };
+        match filesystem.lookup(b"hello") {
+            Some(mut file) => {
                 // 4 KiB crosses cluster boundaries, so a looping FAT chain
                 // surfaces as a read error instead of a first-cluster success.
                 let mut buffer = [0u8; 4096];
-                let read = reader.read(&mut buffer).unwrap_or(0);
+                let read = filesystem.read_at(&mut file, 0, &mut buffer).unwrap_or(0);
                 let sum: u32 = buffer[..read].iter().copied().map(u32::from).sum();
-                logln!(service, "[fs] test size={}", entry.len());
+                logln!(service, "[fs] test size={}", file.size());
                 logln!(service, "[fs] test read={read} sum={sum:#x}");
             }
             None => {
@@ -336,7 +556,7 @@ fn main(service: Service) -> ! {
                     let _ = ipc::reply(status::ERROR, &[0]);
                     continue;
                 };
-                let Some(entry) = lookup(&volume, &name) else {
+                let Some(mut file) = filesystem.lookup(&name) else {
                     let _ = ipc::reply(status::ERROR, &[0]);
                     continue;
                 };
@@ -344,8 +564,8 @@ fn main(service: Service) -> ! {
                     let _ = ipc::reply(status::ERROR, &[0]);
                     continue;
                 };
-                let size = entry.len();
-                client.files[slot] = Some(entry);
+                let size = file.size();
+                client.files[slot] = Some(file);
                 let _ = ipc::reply(status::OK, &[slot as u64, size]);
             }
             fs::READ => {
@@ -357,7 +577,7 @@ fn main(service: Service) -> ! {
                 let file_id = received.word(0) as usize;
                 let offset = received.word(1);
                 let length = received.word(2) as usize;
-                let Some(Some(entry)) = client.files.get_mut(file_id) else {
+                let Some(Some(file)) = client.files.get_mut(file_id) else {
                     let _ = ipc::reply(status::ERROR, &[0]);
                     continue;
                 };
@@ -365,19 +585,11 @@ fn main(service: Service) -> ! {
                     let _ = ipc::reply(status::ERROR, &[0]);
                     continue;
                 }
-                let Ok(mut reader) = volume.read_file(entry) else {
-                    let _ = ipc::reply(status::ERROR, &[0]);
-                    continue;
-                };
-                if reader.seek(SeekFrom::Start(offset)).is_err() {
-                    let _ = ipc::reply(status::ERROR, &[0]);
-                    continue;
-                }
                 // SAFETY: the caller's shared page is exclusively mapped here
                 // and the client reads it only after this reply arrives.
                 let buffer =
                     unsafe { core::slice::from_raw_parts_mut(share_va as *mut u8, length) };
-                match reader.read(buffer) {
+                match filesystem.read_at(file, offset, buffer) {
                     Ok(read) => {
                         let _ = ipc::reply(status::OK, &[read as u64]);
                     }
@@ -402,9 +614,9 @@ fn main(service: Service) -> ! {
                     let _ = ipc::reply(status::ERROR, &[0]);
                     continue;
                 };
-                match lookup(&volume, &name) {
-                    Some(entry) => {
-                        let _ = ipc::reply(status::OK, &[entry.len(), entry.is_directory() as u64]);
+                match filesystem.lookup(&name) {
+                    Some(file) => {
+                        let _ = ipc::reply(status::OK, &[file.size(), file.is_dir() as u64]);
                     }
                     None => {
                         let _ = ipc::reply(status::ERROR, &[0]);
@@ -426,20 +638,9 @@ fn main(service: Service) -> ! {
                 let mut written = 0usize;
                 let mut index = 0usize;
                 let mut more = false;
-                let dir = volume.root_dir();
-                for entry in dir.entries() {
-                    let Ok(entry) = entry else { continue };
-                    let Some(file) = entry.as_entry() else {
-                        continue;
-                    };
-                    let name = entry.name();
+                for (name, size, is_dir) in &filesystem.read_dir() {
                     let bytes = name.as_bytes();
-                    if bytes.is_empty()
-                        || bytes.len() > 12
-                        || bytes == b"."
-                        || bytes == b".."
-                        || !(file.is_file() || file.is_directory())
-                    {
+                    if bytes.is_empty() || bytes.len() > 12 || bytes == b"." || bytes == b".." {
                         continue;
                     }
                     if index < start {
@@ -452,8 +653,8 @@ fn main(service: Service) -> ! {
                     }
                     let mut record = fs::DirEntry {
                         name: [0; 12],
-                        size: file.len() as u32,
-                        is_dir: file.is_directory() as u32,
+                        size: *size as u32,
+                        is_dir: *is_dir as u32,
                     };
                     record.name[..bytes.len()].copy_from_slice(bytes);
                     records[written] = record;
@@ -483,21 +684,6 @@ fn main(service: Service) -> ! {
     }
 }
 
-fn lookup(volume: &FatVolume<BlockDevice>, name: &[u8]) -> Option<FileEntry> {
-    let dir = volume.root_dir();
-    for entry in dir.entries() {
-        let Ok(entry) = entry else { continue };
-        // FAT names are case-insensitive: `hello` matches a short name stored
-        // as `HELLO` (and vice versa). `entry.name()` yields the long name
-        // when the directory carries an LFN record (P2.1).
-        if entry.name().as_bytes().eq_ignore_ascii_case(name)
-            && entry.as_entry().is_some_and(|file| file.is_file())
-        {
-            return Some(entry.as_entry()?.clone());
-        }
-    }
-    None
-}
 
 fn client_by_badge_mut(clients: &mut [Option<Client>], badge: u64) -> Option<&mut Client> {
     clients

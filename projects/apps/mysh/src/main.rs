@@ -12,7 +12,6 @@
 extern crate alloc;
 
 use alloc::vec::Vec;
-use core::hint::spin_loop;
 
 use rstiny::Error;
 use rstiny::capability::{
@@ -22,7 +21,7 @@ use rstiny::capability::{
 use rstiny::elf::{ChildCap, LOADER_SLOT_BASE, Supervision};
 use rstiny::ipc::{self, ReceiveSpec};
 use rstiny_alloc::Heap;
-use rstiny_protocol::{Argument, SpawnInfo, console, control, fs, status};
+use rstiny_protocol::{SpawnInfo, console, control, fs, status};
 use rstiny_runtime::entry;
 use rstiny_server::{Service, logln};
 

@@ -12,7 +12,6 @@
 
 extern crate alloc;
 
-use core::hint::spin_loop;
 use core::ptr::NonNull;
 
 use rstiny::capability::{
@@ -21,7 +20,7 @@ use rstiny::capability::{
 };
 use rstiny::ipc::{self, ReceiveSpec};
 use rstiny_alloc::Heap;
-use rstiny_protocol::{Argument, SpawnInfo, control, gpu, status};
+use rstiny_protocol::{SpawnInfo, control, gpu, status};
 use rstiny_runtime::entry;
 use rstiny_server::{Service, logln};
 use virtio_drivers::{
