@@ -8,7 +8,6 @@
 
 use crate::key_char;
 use rstiny::ipc;
-use rstiny::poweroff;
 use rstiny_gui::{Canvas, draw_button, draw_cursor, draw_window, rgb};
 use rstiny_protocol::{gpu, status};
 use rstiny_server::{Service, logln};
@@ -51,11 +50,8 @@ impl Win {
             && cy >= self.y
             && cy < self.y + rstiny_gui::TITLE_H as i32
     }
-    fn clamp(&mut self, screen_w: i32, screen_h: i32) {
-        self.x = self.x.clamp(0, screen_w - 32);
-        self.y = self.y.clamp(0, screen_h - 32);
-    }
 }
+
 
 /// Calculator state: left-to-right evaluation with `=`.
 #[derive(Default)]
@@ -115,7 +111,6 @@ impl Calc {
 pub enum Effect {
     None,
     Redraw,
-    Exit,
 }
 
 /// The whole desktop state.
@@ -124,7 +119,6 @@ pub struct Wm {
     wins: [Win; 2],
     focus: usize,
     cursor: (i32, i32),
-    seen: usize,
     drag: Option<(usize, i32, i32)>,
     calc: Calc,
     edit: heapless::Buffer,
@@ -151,7 +145,6 @@ impl Wm {
             ],
             focus: CALC,
             cursor: (width / 2, height / 2),
-            seen: 0,
             drag: None,
             calc: Calc::default(),
             edit: heapless::Buffer::new(),
@@ -159,10 +152,6 @@ impl Wm {
         }
     }
 
-    fn clamp_cursor(&mut self, w: i32, h: i32) {
-        self.cursor.0 = self.cursor.0.clamp(0, w - 1);
-        self.cursor.1 = self.cursor.1.clamp(0, h - 1);
-    }
 
     /// Process one packed INPUT_READ event. Returns the effect on the
     /// framebuffer and logs state changes through the console.
@@ -172,10 +161,6 @@ impl Wm {
         }
         let kind = (word >> 40) & 0xFFFF;
         let code = (word >> 24) & 0xFFFF;
-        if kind != 1 || self.seen < 8 {
-            logln!(service, "[gui] ev kind={kind} code={code} val={:x}", word & 0xFF_FFFF);
-            self.seen += 1;
-        }
         let raw = (word & 0xFF_FFFF) as i32;
         let value = (raw << 8) >> 8; // sign-extend 24 bits
 
@@ -496,7 +481,6 @@ pub fn run(service: &Service, canvas: &mut Canvas, gpu_ep: u64, width: usize, he
         }
         let _ = rstiny::sleep(POLL_MS);
         let mut dirty = false;
-        let mut exit = false;
         for _ in 0..32 {
             let reply = ipc::call(gpu_ep, gpu::INPUT_READ, &[])
                 .ok()
@@ -507,12 +491,8 @@ pub fn run(service: &Service, canvas: &mut Canvas, gpu_ep: u64, width: usize, he
             }
             match wm.handle(reply.word(0), service) {
                 Effect::Redraw => dirty = true,
-                Effect::Exit => exit = true,
                 Effect::None => {}
             }
-        }
-        if exit {
-            break;
         }
         if dirty {
             wm.render(canvas);

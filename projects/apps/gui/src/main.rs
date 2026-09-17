@@ -12,8 +12,6 @@
 //! - `scroll` text lines then two terminal scrolls (D3);
 //! - `keys N` wait for N key presses and log them (D4).
 
-use core::hint::spin_loop;
-
 use rstiny::capability::{
     CNode, CPtr, INIT_CNODE, INIT_UNTYPED, INIT_VSPACE, ObjectType, Page, PageTable, RIGHTS_READ,
     RIGHTS_WRITE, Untyped, VM_CACHEABLE, VM_EXECUTE_NEVER,
@@ -23,7 +21,7 @@ mod panel;
 mod wm;
 
 use rstiny_gui::{Canvas, rgb, word_sum};
-use rstiny_protocol::{Argument, ArgvBlock, SpawnInfo, gpu, status};
+use rstiny_protocol::{ArgvBlock, SpawnInfo, gpu, status};
 use rstiny_runtime::entry;
 use rstiny_server::{Service, logln};
 
