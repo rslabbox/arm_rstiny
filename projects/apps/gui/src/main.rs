@@ -19,6 +19,7 @@ use rstiny::capability::{
     RIGHTS_WRITE, Untyped, VM_CACHEABLE, VM_EXECUTE_NEVER,
 };
 use rstiny::ipc::{self, ReceiveSpec};
+mod panel;
 mod wm;
 
 use rstiny_gui::{Canvas, rgb, word_sum};

@@ -8,6 +8,7 @@
 
 use crate::key_char;
 use rstiny::ipc;
+use rstiny::poweroff;
 use rstiny_gui::{Canvas, draw_button, draw_cursor, draw_window, rgb};
 use rstiny_protocol::{gpu, status};
 use rstiny_server::{Service, logln};
@@ -119,6 +120,7 @@ pub enum Effect {
 
 /// The whole desktop state.
 pub struct Wm {
+    width: i32,
     wins: [Win; 2],
     focus: usize,
     cursor: (i32, i32),
@@ -132,6 +134,7 @@ pub struct Wm {
 impl Wm {
     pub fn new(width: i32, height: i32) -> Self {
         Wm {
+            width,
             wins: [
                 Win {
                     x: 40,
@@ -203,6 +206,15 @@ impl Wm {
         }
         if code == BTN_LEFT {
             if value == 1 {
+                // The panel owns the top strip: the shutdown button powers
+                // the machine off, and bar clicks never reach the windows.
+                if crate::panel::hits_shutdown(self.width, self.cursor.0, self.cursor.1) {
+                    logln!(service, "[gui] shutdown requested");
+                    rstiny::poweroff();
+                }
+                if self.cursor.1 < crate::panel::BAR_H {
+                    return Effect::Redraw;
+                }
                 // Press: focus whatever is under the cursor, drag by the
                 // title bar.
                 for (order, index) in [self.focus, 1 - self.focus].into_iter().enumerate() {
@@ -323,6 +335,7 @@ impl Wm {
                 self.render_edit(canvas, win.x as usize, win.y as usize);
             }
         }
+        crate::panel::render(canvas);
         draw_cursor(
             canvas,
             self.cursor.0.max(0) as usize,
