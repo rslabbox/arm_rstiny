@@ -89,7 +89,7 @@ pub(crate) fn handle_user_fault(frame: &TrapFrame, fault: &UserFault) -> Disposi
     // symbolize against the ELF) and the full task table.
     if let Some(id) = crate::task::current_id() {
         if let Ok(vspace) = api::vspace_of(id) {
-            crate::object::with_vspace(vspace, |space| {
+            let _ = crate::object::with_vspace(vspace, |space| {
                 crate::debugdump::user_backtrace(space, frame);
                 Ok(())
             });

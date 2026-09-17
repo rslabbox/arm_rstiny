@@ -3,7 +3,6 @@
 
 use rstiny::capability::*;
 use rstiny::ipc;
-use rstiny::{Task};
 use rstiny_protocol::{control, SpawnInfo};
 
 use crate::state::*;

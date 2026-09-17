@@ -6,9 +6,6 @@ extern crate alloc;
 use core::fmt::Write as _;
 use alloc::vec::Vec;
 use rstiny::{ipc, Task};
-use rstiny::capability::*;
-use rstiny_initcfg::ServiceCfg;
-use rstiny_protocol::SpawnInfo;
 
 pub const CONSOLE: &str = "console";
 

@@ -14,10 +14,8 @@ mod state;
 
 use alloc::vec::Vec;
 use core::fmt::Write as _;
-use rstiny::elf::ChildCap;
 use rstiny::thread::ThreadGroup;
-use rstiny::{Error, Task, capability::*, ipc};
-use rstiny_alloc::Heap;
+use rstiny::{Task, capability::*, ipc};
 use rstiny_protocol::{Argument, SpawnInfo, control};
 #[allow(unused_imports)]
 use state::*;
@@ -450,13 +448,6 @@ fn run(info: SpawnInfo) -> ! {
             }
         }
     }
-}
-
-/// Restart every service that depends on the terminated one, so the rebuilt
-/// dependency re-BINDs from scratch (shared buffers and file handles die with
-/// the crashed service).
-fn clock_ms() -> u64 {
-    rstiny::clock_milliseconds().unwrap_or(0)
 }
 
 /// Post a log line to the client thread: an asynchronous `NBSend`, best

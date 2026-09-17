@@ -4,7 +4,7 @@
 
 use alloc::vec::Vec;
 use rstiny::capability::*;
-use rstiny::elf::{ChildCap, LOADER_SLOT_BASE, Supervision};
+use rstiny::elf::ChildCap;
 use rstiny::{Error};
 use rstiny_protocol::{SpawnInfo};
 

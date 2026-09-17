@@ -5,11 +5,7 @@
 //! Frame pointers are forced for the aarch64 target in `.cargo/config.toml`;
 //! without them the kernel chain stops after one frame.
 
-use crate::{
-    memory::{AddressSpace, UserPtr},
-    task::api,
-    utils::console,
-};
+use crate::{memory::AddressSpace, utils::console};
 
 /// Emergency raw output: no logger, no lock, no level filter.
 fn print_str(text: &str) {

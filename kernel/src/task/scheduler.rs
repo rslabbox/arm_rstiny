@@ -25,7 +25,6 @@ pub(crate) mod api;
 pub(crate) enum Disposition {
     Resume,
     Sleep(u64),
-    Wait(u64),
     Exit(u64),
     Fault(u64),
     Block,
@@ -312,10 +311,7 @@ impl Scheduler {
                 self.tasks[index].deadline = deadline;
                 self.tasks[index].state = TASK_SLEEPING;
             }
-            Disposition::Wait(target) => {
-                self.tasks[index].wait_for = target;
-                self.tasks[index].state = TASK_WAITING;
-            }
+
             Disposition::Exit(code) => self.finish(index, false, code),
             Disposition::Fault(code) => self.finish(index, true, code),
         }
