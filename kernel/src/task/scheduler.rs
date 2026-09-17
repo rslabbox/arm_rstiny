@@ -28,6 +28,11 @@ pub(crate) enum Disposition {
     Exit(u64),
     Fault(u64),
     Block,
+    /// Managed `Runtime::Wait` parks a task on its completion slot. Only
+    /// managed builds construct it; production compiles the caller out, so
+    /// the construction warning is expectedly cfg-gated away.
+    #[cfg_attr(not(feature = "managed-runtime"), allow(dead_code))]
+    Wait(u64),
 }
 
 /// A pending reply relationship. A receiver holds at most one; `Reply`
@@ -314,6 +319,10 @@ impl Scheduler {
 
             Disposition::Exit(code) => self.finish(index, false, code),
             Disposition::Fault(code) => self.finish(index, true, code),
+            Disposition::Wait(target) => {
+                self.tasks[index].wait_for = target;
+                self.tasks[index].state = TASK_WAITING;
+            }
         }
     }
     pub(super) fn install_root(
