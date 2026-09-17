@@ -29,10 +29,6 @@ const EV_REL: u64 = 2;
 const REL_X: u64 = 0;
 const BTN_LEFT: u64 = 272; // 0x110
 const MOVE_STEP: i32 = 8;
-/// Poll-loop bound. The scene also exits on Esc; the bound only keeps the
-/// loop a `for` and must comfortably exceed a whole desktop session - the
-/// 2000 it replaced burned off in seconds under real input rates.
-const MAX_POLLS: usize = 20_000_000;
 const POLL_MS: u64 = 20;
 
 /// One desktop window's geometry.
@@ -473,13 +469,15 @@ fn u32_to_str(mut value: u32, out: &mut [u8]) -> &str {
 }
 
 /// Run the wm scene: composite, poll INPUT_READ, route events, flush. Logs
-/// state transitions through the console; exits on Esc or after MAX_POLLS.
+/// state transitions through the console; runs until Esc.
 pub fn run(service: &Service, canvas: &mut Canvas, gpu_ep: u64, width: usize, height: usize) {
     let mut wm = Wm::new(width as i32, height as i32);
     wm.render(canvas);
     let _ = ipc::call(gpu_ep, gpu::FLUSH, &[0, 0, width as u64, height as u64]);
     logln!(service, "[gui] wm ready: calculator + editor");
-    for _ in 0..MAX_POLLS {
+    // The desktop runs until Esc: termination relies on the exit request,
+    // not a poll budget (the bound forced the desktop to quit mid-session).
+    loop {
         if wm.exit_requested() {
             break;
         }
