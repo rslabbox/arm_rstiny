@@ -21,7 +21,9 @@ GDB_PORT ?= 1234
 # How QEMU presents the guest display (docs/gui-display.md): `none` keeps the
 # boot headless (serial logs only); `gtk` or `sdl` open a window on the
 # virtio-gpu framebuffer with live keyboard/mouse input for `./gui wm`.
-DISPLAY ?= none
+# Not named DISPLAY: that is the X11 session variable, and env DISPLAY=:0
+# would otherwise leak in as `-display :0` on every desktop machine.
+QEMU_DISPLAY ?= none
 
 # Vendored upstream sources are not committed (too large, see .gitignore);
 # fetch them automatically on first use. Override URL/version for mirrors.
@@ -114,7 +116,7 @@ DISK_ARGS := -drive file=$(DISK_IMG),if=none,format=raw,id=hd0,readonly=on \
 GPU_ARGS := -device virtio-gpu-device,xres=640,yres=480 \
 	-device virtio-keyboard-device -device virtio-mouse-device
 QEMU_ARGS := -machine virt,gic-version=3,virtualization=off -cpu cortex-a72 \
-	-smp 1 -m 128M -display $(DISPLAY) -monitor none -serial stdio -nic none \
+	-smp 1 -m 128M -display $(QEMU_DISPLAY) -monitor none -serial stdio -nic none \
 	-global virtio-mmio.force-legacy=false \
 	$(if $(filter 1,$(DISK)),$(DISK_ARGS)) \
 	$(GPU_ARGS) \
